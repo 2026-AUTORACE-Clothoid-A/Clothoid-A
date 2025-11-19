@@ -14,7 +14,7 @@ if [[ -e /dev/ttyACM1 && -e /dev/ttyUSB0 ]]; then
         -e DISPLAY="$DISPLAY" \
         -e LOCAL_USER_ID="$(id -u)" \
         -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-        -v ~/Clothoid-A/wego_ws:/home/user/catkin_ws \
+        -v ~/Clothoid-A:/home/user/Clothoid-A \
         junspring/2025-autorace-clothoid-a:latest bash
 else
 
@@ -26,6 +26,6 @@ else
         -e DISPLAY="$DISPLAY" \
         -e LOCAL_USER_ID="$(id -u)" \
         -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-        -v ~/Clothoid-A/wego_ws:/home/user/catkin_ws \
+        -v ~/Clothoid-A:/home/user/Clothoid-A \
         junspring/2025-autorace-clothoid-a:latest bash
 fi

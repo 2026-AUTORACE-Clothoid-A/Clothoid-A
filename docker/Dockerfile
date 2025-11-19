@@ -47,12 +47,9 @@ RUN echo user ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/user \
 # Setup environment
 RUN echo "source /opt/ros/noetic/setup.bash" >> /etc/bash.bashrc
 
-RUN mkdir -p /home/user/catkin_ws/src
-RUN chown -R 1001:1001 /home/user/catkin_ws
-WORKDIR /home/user/catkin_ws
-
-RUN mkdir -p /home/user/webot_ws/src
-RUN chown -R 1001:1001 /home/user/webot_ws
+RUN mkdir -p /home/user/Clothoid-A
+RUN chown -R 1001:1001 /home/user/Clothoid-A
+WORKDIR /home/user/Clothoid-A/catkin_ws
 
 # Entrypoint
 COPY scripts/entrypoint.sh /usr/local/bin/entrypoint.sh
