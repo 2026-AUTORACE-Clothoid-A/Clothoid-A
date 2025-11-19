@@ -105,6 +105,10 @@ class CameraReceiver:
         self.drive_info = AckermannDriveStamped()
         self.parking_flag = False
         self.start_time = time.time()
+        
+        # 2025
+        self.hsv_img = None
+        self.canny_img = None
 
     '''
     def restore_speed_stop(self):
@@ -174,13 +178,13 @@ class CameraReceiver:
 
         lower_white = np.array([l_h, l_s, l_v])
         upper_white = np.array([u_h, u_s, u_v])
-        hsv_img = cv2.inRange(hsv, lower_white, upper_white)
+        self.hsv_img = cv2.inRange(hsv, lower_white, upper_white)
         ###############################
 
         # Canny ########################
         low_canny_thresh = cv2.getTrackbarPos('Lower Thresh', 'Canny')
         high_canny_thresh = cv2.getTrackbarPos('Upper Thresh', 'Canny')
-        canny_img = cv2.Canny(blur, low_canny_thresh, high_canny_thresh)
+        self.canny_img = cv2.Canny(blur, low_canny_thresh, high_canny_thresh)
         ###############################
 
         '''
@@ -200,11 +204,11 @@ class CameraReceiver:
         ###############################
         '''
 
-        sum_img = cv2.bitwise_or(canny_img, hsv_img)
+        sum_img = cv2.bitwise_or(self.canny_img, self.hsv_img)
         
         # No Canny
         #warp_img, M, Minv = warp_image(self.image, warp_src, warp_dst, (warp_img_w, warp_img_h))
-        #leftx_base, rightx_base, hsv_img, processed_img = image_processing(warp_img)
+        #leftx_base, rightx_base, self.hsv_img, processed_img = image_processing(warp_img)
 
         # Canny
         warp_img, M, Minv = warp_image(sum_img, warp_src, warp_dst, (warp_img_w, warp_img_h))
@@ -238,9 +242,9 @@ class CameraReceiver:
         #else:
             #prev_lane = lane_flag
 
-        #cv2.imshow("HSV", hsv_img)
+        #cv2.imshow("HSV", self.hsv_img)
         #cv2.imshow("tracker", tracker_img)
-        #cv2.imshow("Canny", canny_img)
+        #cv2.imshow("Canny", self.canny_img)
         #cv2.imshow("sum_img", sum_img)
 
         #cv2.imshow("warp", warp_img)
@@ -249,6 +253,23 @@ class CameraReceiver:
         #cv2.imshow("Yellow", yellow_img)
 
         #cv2.waitKey(1)
+    
+    def process(self):
+        try:
+            cv2.imshow("HSV", self.hsv_img)
+            #cv2.imshow("tracker", tracker_img)
+            cv2.imshow("Canny", self.canny_img)
+            #cv2.imshow("sum_img", sum_img)
+
+            #cv2.imshow("warp", warp_img)
+            #cv2.imshow("result", lane_img)
+            #cv2.imshow("Thresh", thresh_img)
+            #cv2.imshow("Yellow", yellow_img)
+
+            cv2.waitKey(1)
+            
+        except:
+            pass
         
         
 def warp_image(img, src, dst, size):
@@ -442,7 +463,12 @@ def draw_lane(image, warp_img, Minv, left_fit, right_fit, avex, avey):
 def run():
     rospy.init_node("ld_pub")
     cam = CameraReceiver()
-    rospy.spin()
+    
+    rate = rospy.Rate(30)
+    
+    while not rospy.is_shutdown():
+        cam.process()
+        rate.sleep()
 
 
 if __name__ == "__main__":
