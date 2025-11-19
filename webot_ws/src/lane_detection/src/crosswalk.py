@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from concurrent.futures import process
 import rospy
 import cv2
 import numpy as np
@@ -31,16 +32,16 @@ def nothing(x):
     pass
 
 cv2.namedWindow('thresh')
-cv2.createTrackbar('Lower Thresh', 'thresh', 65, 255, nothing) 
+cv2.createTrackbar('Lower Thresh', 'thresh', 130, 255, nothing) 
 cv2.createTrackbar('Upper Thresh', 'thresh', 255, 255, nothing) 
 
 cv2.namedWindow('HSV')
 cv2.createTrackbar('Lower H', 'HSV', 0, 180, nothing) 
+cv2.createTrackbar('Upper H', 'HSV', 180, 180, nothing) #180
 cv2.createTrackbar('Lower S', 'HSV', 0, 255, nothing)
-cv2.createTrackbar('Lower V', 'HSV', 0, 255, nothing)
-cv2.createTrackbar('Upper H', 'HSV', 180, 180, nothing) 
-cv2.createTrackbar('Upper S', 'HSV', 140, 255, nothing) 
-cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing) 
+cv2.createTrackbar('Upper S', 'HSV', 60, 255, nothing) #140
+cv2.createTrackbar('Lower V', 'HSV', 150, 255, nothing)
+cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing) #255
 
 warp_src = np.array([
     [x_h, Height//2 + y_h], # 좌상단
@@ -70,6 +71,9 @@ class CameraReceiver:
         self.parking_msg = Bool()
         self.stop_publishing = False 
         self.lane_flag = -1
+
+        self.threshold = None
+        self.hsv_img = None
         
     def flag_callback(self, data):
         self.lane_flag = data.data
@@ -95,7 +99,7 @@ class CameraReceiver:
     def callback(self, data):
         image = self.bridge.imgmsg_to_cv2(data, "bgr8")
         warp_img, M, Minv = warp_image(image, warp_src, warp_dst, (warp_img_w, warp_img_h))
-        hsv_img, threshold, result = image_processing(warp_img)
+        self.hsv_img, self.threshold, result = image_processing(warp_img)
         contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         counter = 0
@@ -128,15 +132,24 @@ class CameraReceiver:
                     #self.parking_msg.data = True
                     #self.parking_pub.publish(self.parking_msg)
                    
-                    threading.Timer(6.5, self.curv_timer).start() # 3초 후 교차로에서 정지
+                    threading.Timer(6.5, self.curv_timer).start() # 6.5초 후 교차로에서 정지
                     #threading.Timer(15, self.reset_stop_publishing).start() # 15초 후 코드 재실행 가능
                     
-        #cv2.imshow("warp", warp_img)
-        #cv2.imshow("HSV", hsv_img)
-        #cv2.imshow("thresh", threshold)
-        #cv2.imshow("result_CROSS", result)
-        #cv2.waitKey(1)
+        # #cv2.imshow("warp", warp_img)
+        # cv2.imshow("HSV", hsv_img)
+        # cv2.imshow("thresh", threshold)
+        # #cv2.imshow("result_CROSS", result)
+        # cv2.waitKey(1)
 
+    def process(self):
+        try:
+            #cv2.imshow("warp", warp_img)
+            cv2.imshow("HSV", self.hsv_img)
+            cv2.imshow("thresh", self.threshold)
+            #cv2.imshow("result_CROSS", result)
+            cv2.waitKey(1)
+        except:
+            pass
 
 def warp_image(img, src, dst, size):
     M = cv2.getPerspectiveTransform(src, dst)
@@ -175,7 +188,12 @@ def image_processing(img):
 def run():
     rospy.init_node("crosswalk_pub")
     cam = CameraReceiver()
-    rospy.spin()
+    
+    rate = rospy.Rate(30)
+    
+    while not rospy.is_shutdown():
+        cam.process()
+        rate.sleep()
 
 
 if __name__ == "__main__":

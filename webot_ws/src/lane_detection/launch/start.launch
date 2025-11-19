@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <launch>
 	<!-- node name="control" pkg="lane_detection" type="control.py" / -->
-	
+	<!-- rosrun image_undistort_pkg image_undistort_pkg_node / -->
 	<node name="image_undistort" pkg="image_undistort_pkg" type="image_undistort_pkg_node" />
 	
 	<!-- AR_TRACK_ALVAR node -->
