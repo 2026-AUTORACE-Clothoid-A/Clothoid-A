@@ -216,7 +216,7 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
 
     // 두 벽 사이 중앙에서 얼마나 벗어났는지 근사
     // d_left == d_right 이면 중앙 → cross_track_error = 0
-    double cross_track_error = 0.5 * std::abs(d_right - d_left);
+    double cross_track_error = 0.5 * (d_left - d_right);
     // 부호 방향이 반대로 느껴지면 d_left - d_right로 바꿔보면 됨
 
     // 벽 방향 벡터
