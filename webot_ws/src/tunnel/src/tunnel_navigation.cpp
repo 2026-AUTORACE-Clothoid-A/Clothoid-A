@@ -216,7 +216,7 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
 
     // 두 벽 사이 중앙에서 얼마나 벗어났는지 근사
     // d_left == d_right 이면 중앙 → cross_track_error = 0
-    double cross_track_error = 0.5 * (d_right - d_left);
+    double cross_track_error = 0.5 * std::abs(d_right - d_left);
     // 부호 방향이 반대로 느껴지면 d_left - d_right로 바꿔보면 됨
 
     // 벽 방향 벡터
@@ -256,6 +256,8 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
     double cross_track_steering = std::atan2(stanley_k_gain_ * cross_track_error, speed + 0.1);
 
     double steering_angle = heading_error + cross_track_steering;
+    ROS_INFO_STREAM("Tunnel heading_error: " << heading_error * 180.0 / M_PI   << " [deg]");
+    ROS_INFO_STREAM("Tunnel cross_track_steering: " << cross_track_steering * 180.0 / M_PI   << " [deg]");
 
     // 조향각 제한
     if (steering_angle >  max_steer_rad_) steering_angle =  max_steer_rad_;
