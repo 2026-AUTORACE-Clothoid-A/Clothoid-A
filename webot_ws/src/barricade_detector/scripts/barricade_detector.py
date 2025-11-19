@@ -107,10 +107,7 @@ def lidar_callback(scan_data, control_pub):
     if detected:
         rospy.loginfo("barricade detected! Stopping.")
         ackermann_msg.drive.speed = 0.0
-    else:
-        rospy.loginfo("No barricade detected! Speed set to 10.")
-        ackermann_msg.drive.speed = 10.0
-    control_pub.publish(ackermann_msg)
+        control_pub.publish(ackermann_msg)
 
 def main():
     rospy.init_node("barricade_detector", anonymous=True)
