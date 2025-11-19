@@ -73,7 +73,8 @@ public:
             cv::findContours(redmask, red_contours, red_hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
 
             bool red_detected = false;
-
+            bool blue_detected = false;
+            
             for (size_t i = 0; i < red_contours.size(); i++) {
                 if (cv::contourArea(red_contours[i]) > 1500) {
                     red_detected = true;
@@ -96,8 +97,6 @@ public:
                 std::vector<std::vector<cv::Point>> blue_contours;
                 std::vector<cv::Vec4i> blue_hierarchy;
                 cv::findContours(bluemask, blue_contours, blue_hierarchy, cv::RETR_TREE, cv::CHAIN_APPROX_SIMPLE);
-
-                bool blue_detected = false;
 
                 for (size_t i = 0; i < blue_contours.size(); i++) {
                     if (cv::contourArea(blue_contours[i]) > 1500) {
@@ -170,7 +169,7 @@ int main(int argc, char** argv) {
     ros::Rate loop_rate(30);
 
     while (ros::ok()) {
-        if (node.getRedDetect() || (ros::Time::now() - node.last_detect_time).toSec() <= PUBLISH_TIMEOUT) {
+        if (node.getDetect() || (ros::Time::now() - node.last_detect_time).toSec() <= PUBLISH_TIMEOUT) {
             // 모터 속도 발행
             node.pub.publish(node.getAckermannDriveMsg());
         }
