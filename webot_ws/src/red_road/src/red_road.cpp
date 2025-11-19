@@ -6,11 +6,11 @@
 #include <ackermann_msgs/AckermannDriveStamped.h>
 
 // 상수 선언
-const double NORMAL_SPEED = 0.5;           // 일반 주행 속도
+const double NORMAL_SPEED = 1.0;           // 일반 주행 속도
 const double RED_ROAD_SPEED = 0.3;         // 빨간 도로 감지 시 속도
 const double BLUE_ROAD_SPEED = 0.5;         // 파란 도로 감지 시 속도
 const double STOP_SPEED = 0.0;             // 정지 속도
-const double DETECT_TIMEOUT = 1.0;         // 감지 타임아웃 시간 (초)
+const double DETECT_TIMEOUT = 0.8;         // 감지 타임아웃 시간 (초)
 const double PUBLISH_TIMEOUT = 0.5;        // 발행 타임아웃 시간 (초)
 
 
@@ -74,7 +74,7 @@ public:
 
             bool red_detected = false;
             bool blue_detected = false;
-            
+
             for (size_t i = 0; i < red_contours.size(); i++) {
                 if (cv::contourArea(red_contours[i]) > 1500) {
                     red_detected = true;
