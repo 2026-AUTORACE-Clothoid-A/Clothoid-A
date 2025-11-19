@@ -53,3 +53,4 @@ CATKIN_IGNORE
 
 # Clothoid-A
 .vscode/
+bag/
