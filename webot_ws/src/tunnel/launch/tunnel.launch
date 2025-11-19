@@ -1,4 +1,6 @@
 <launch>
+    <node type="rviz" name="rviz" pkg="rviz" args="-d $(find tunnel)/config/tunnel.rviz" />
+
     <node pkg="tunnel"
             type="tunnel_navigation_node"
             name="tunnel_navigation_node"
