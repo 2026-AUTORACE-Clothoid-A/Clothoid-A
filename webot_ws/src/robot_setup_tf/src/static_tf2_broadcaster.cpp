@@ -35,7 +35,7 @@ int main(int argc, char **argv)
   ros::NodeHandle nh;
 
   // 센서들에 대한 고정 변환 등록
-  publishStaticTF("base_link", "laser", -0.125, 0.0, 0.25, 0, 0, PI);
+  publishStaticTF("base_link", "laser", -0.15, 0.0, 0.20, 0, 0, PI);
   // publishStaticTF("base_link", "camera", 0.3, 0.0, -0.01, -PI/2, 0, -PI/2);
   // publishStaticTF("base_link", "imu", 0.0, 0.0, 0.0, 0, 0, 0);
   // publishStaticTF("base_link", "base_lidar", 0.0, 0.0, 0.0, 0, 0, 0);
