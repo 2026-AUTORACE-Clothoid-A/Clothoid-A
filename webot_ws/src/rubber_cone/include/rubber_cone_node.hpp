@@ -9,6 +9,10 @@
 
 #include <Eigen/Core>
 #include <vector>
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <set>
 
 class RubberConeNode
 {
@@ -43,7 +47,7 @@ private:
     double speed_;                         // 주행 속도
     double vehicle_length_;                // 차량 휠베이스 근사
     double lfd_;                           // look-ahead distance
-    double angle_from_left_first_cone_;     // 첫 콘 탐색 각도(해당 각도 이상만 허용) [deg]
+    double angle_from_left_first_cone_;    // 첫 콘 탐색 각도 [deg] (옆 방향 기준)
     double dist_from_left_first_cone_;     // 왼쪽 첫 콘까지 허용 거리
     double dist_from_right_first_cone_;    // 오른쪽 첫 콘까지 허용 거리
     double dist_between_cones_;            // 라인 상 인접 콘 간 거리
@@ -117,13 +121,13 @@ private:
     void publishControl(double steering);
 
     void fillPathMsg(const std::vector<Eigen::Vector2d>& pts,
-        const std::string& frame_id,
-        nav_msgs::Path& msg) const;
+                     const std::string& frame_id,
+                     nav_msgs::Path& msg) const;
 
-    // center_line → nav_msgs::Path 퍼블리시
+    // center_line / 경계 → nav_msgs::Path 퍼블리시
     void publishCenterlinePath(const std::vector<Eigen::Vector2d>& center_line);
     void publishBoundaryPaths(const std::vector<Eigen::Vector2d>& left_line,
-        const std::vector<Eigen::Vector2d>& right_line);
+                              const std::vector<Eigen::Vector2d>& right_line);
 };
 
 #endif // RUBBER_CONE_NODE_HPP

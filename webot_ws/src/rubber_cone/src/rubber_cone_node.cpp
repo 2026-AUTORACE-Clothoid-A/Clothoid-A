@@ -1,15 +1,369 @@
 #include "rubber_cone_node.hpp"
 
-#include <algorithm>
-#include <cmath>
-#include <limits>
-
-// 스플라인 헤더 (사용자가 제공한 tk::spline)
+// 스플라인 헤더
 #include "spline.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
+
+// ====== Delaunay + MST 헬퍼들 (로컬 anonymous namespace) ======
+namespace {
+
+struct DTPoint
+{
+    double x;
+    double y;
+};
+
+struct DTTri
+{
+    int a, b, c;
+};
+
+// robust orient2d + ccw
+inline double orient2d_filt(const DTPoint& a, const DTPoint& b, const DTPoint& c)
+{
+    double det = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+    double absa = std::fabs(b.x - a.x) + std::fabs(b.y - a.y);
+    double absb = std::fabs(c.x - a.x) + std::fabs(c.y - a.y);
+    double err  = (absa * absb) * std::numeric_limits<double>::epsilon() * 4.0;
+    if (std::fabs(det) > err)
+        return det;
+
+    long double adx = (long double)b.x - (long double)a.x;
+    long double ady = (long double)b.y - (long double)a.y;
+    long double bdx = (long double)c.x - (long double)a.x;
+    long double bdy = (long double)c.y - (long double)a.y;
+    long double detl = adx * bdy - ady * bdx;
+    return (double)detl;
+}
+
+inline bool ccw(const DTPoint& a, const DTPoint& b, const DTPoint& c)
+{
+    return orient2d_filt(a, b, c) > 0.0;
+}
+
+// incircle_filt
+inline double incircle_filt(const DTPoint& a, const DTPoint& b, const DTPoint& c, const DTPoint& d)
+{
+    double adx = a.x - d.x, ady = a.y - d.y;
+    double bdx = b.x - d.x, bdy = b.y - d.y;
+    double cdx = c.x - d.x, cdy = c.y - d.y;
+    double ad = adx * adx + ady * ady;
+    double bd = bdx * bdx + bdy * bdy;
+    double cd = cdx * cdx + cdy * cdy;
+
+    double det =
+        adx * (bdy * cd - bd * cdy)
+      - ady * (bdx * cd - bd * cdx)
+      + ad  * (bdx * cdy - bdy * cdx);
+
+    double mags = (std::fabs(adx) + std::fabs(ady)) *
+                  (std::fabs(bdx) + std::fabs(bdy)) *
+                  (std::fabs(cdx) + std::fabs(cdy));
+    double err = mags * std::numeric_limits<double>::epsilon() * 16.0;
+    if (std::fabs(det) > err)
+        return det;
+
+    long double AX = a.x, AY = a.y;
+    long double BX = b.x, BY = b.y;
+    long double CX = c.x, CY = c.y;
+    long double DX = d.x, DY = d.y;
+
+    long double adxl = AX - DX, adyl = AY - DY;
+    long double bdxl = BX - DX, bdyl = BY - DY;
+    long double cdxl = CX - DX, cdyl = CY - DY;
+
+    long double adl = adxl * adxl + adyl * adyl;
+    long double bdl = bdxl * bdxl + bdyl * bdyl;
+    long double cdl = cdxl * cdxl + cdyl * cdyl;
+
+    long double detl =
+        adxl * (bdyl * cdl - bdl * cdyl)
+      - adyl * (bdxl * cdl - bdl * cdxl)
+      + adl  * (bdxl * cdyl - bdyl * cdxl);
+
+    return (double)detl;
+}
+
+// Bowyer–Watson Delaunay
+std::vector<DTTri> bowyerWatson(const std::vector<DTPoint>& pts)
+{
+    std::vector<DTPoint> P = pts;
+    const int n0 = (int)P.size();
+    if (n0 < 3)
+        return {}; // 삼각분할 불가
+
+    DTPoint lo{+1e300, +1e300}, hi{-1e300, -1e300};
+    for (const auto& p : P)
+    {
+        lo.x = std::min(lo.x, p.x);
+        lo.y = std::min(lo.y, p.y);
+        hi.x = std::max(hi.x, p.x);
+        hi.y = std::max(hi.y, p.y);
+    }
+
+    DTPoint c{ (lo.x + hi.x) * 0.5, (lo.y + hi.y) * 0.5 };
+    double d = std::max(hi.x - lo.x, hi.y - lo.y) * 1000.0 + 1.0;
+
+    // super-triangle
+    P.push_back({c.x - 2.0 * d, c.y - d});
+    P.push_back({c.x + 2.0 * d, c.y - d});
+    P.push_back({c.x,           c.y + 2.0 * d});
+    int s1 = n0;
+    int s2 = n0 + 1;
+    int s3 = n0 + 2;
+
+    std::vector<DTTri> T;
+    T.push_back({s1, s2, s3});
+
+    for (int ip = 0; ip < n0; ++ip)
+    {
+        const DTPoint& p = P[ip];
+
+        std::vector<int> bad;
+        bad.reserve(T.size());
+        for (int t = 0; t < (int)T.size(); ++t)
+        {
+            auto& tr = T[t];
+            if (!ccw(P[tr.a], P[tr.b], P[tr.c]))
+                std::swap(tr.b, tr.c);
+
+            if (incircle_filt(P[tr.a], P[tr.b], P[tr.c], p) > 0.0)
+                bad.push_back(t);
+        }
+
+        struct Edge { int u, v; };
+        std::vector<Edge> poly;
+
+        auto addE = [&](int u, int v)
+        {
+            for (auto it = poly.begin(); it != poly.end(); ++it)
+            {
+                if (it->u == v && it->v == u)
+                {
+                    poly.erase(it);
+                    return;
+                }
+            }
+            poly.push_back({u, v});
+        };
+
+        std::vector<char> del(T.size(), 0);
+        for (int id : bad)
+        {
+            del[id] = 1;
+            auto tr = T[id];
+            addE(tr.a, tr.b);
+            addE(tr.b, tr.c);
+            addE(tr.c, tr.a);
+        }
+
+        std::vector<DTTri> keep;
+        keep.reserve(T.size());
+        for (int i = 0; i < (int)T.size(); ++i)
+        {
+            if (!del[i])
+                keep.push_back(T[i]);
+        }
+        T.swap(keep);
+
+        for (const auto& e : poly)
+        {
+            DTTri nt{e.u, e.v, ip};
+            if (!ccw(P[nt.a], P[nt.b], P[nt.c]))
+                std::swap(nt.b, nt.c);
+            T.push_back(nt);
+        }
+    }
+
+    std::vector<DTTri> out;
+    out.reserve(T.size());
+    for (auto tr : T)
+    {
+        if (tr.a >= n0 || tr.b >= n0 || tr.c >= n0)
+            continue;
+        if (!ccw(P[tr.a], P[tr.b], P[tr.c]))
+            std::swap(tr.b, tr.c);
+        out.push_back(tr);
+    }
+
+    return out;
+}
+
+struct EdgeKey
+{
+    int u, v;
+    bool operator<(const EdgeKey& o) const
+    {
+        if (u != o.u) return u < o.u;
+        return v < o.v;
+    }
+};
+
+// ===== MST 기반 센터라인 정렬 =====
+struct DSU
+{
+    std::vector<int> p;
+    std::vector<int> r;
+
+    explicit DSU(int n) : p(n), r(n, 0)
+    {
+        for (int i = 0; i < n; ++i) p[i] = i;
+    }
+
+    int find(int x)
+    {
+        if (p[x] == x) return x;
+        return p[x] = find(p[x]);
+    }
+
+    bool unite(int a, int b)
+    {
+        a = find(a);
+        b = find(b);
+        if (a == b) return false;
+        if (r[a] < r[b]) std::swap(a, b);
+        p[b] = a;
+        if (r[a] == r[b]) ++r[a];
+        return true;
+    }
+};
+
+void dfsFarthest(int u,
+                 int parent,
+                 double acc,
+                 const std::vector<std::vector<int>>& adj,
+                 const std::vector<Eigen::Vector2d>& pts,
+                 int& best_node,
+                 double& best_dist)
+{
+    if (acc > best_dist)
+    {
+        best_dist = acc;
+        best_node = u;
+    }
+    for (int v : adj[u])
+    {
+        if (v == parent) continue;
+        double w = (pts[v] - pts[u]).norm();
+        dfsFarthest(v, u, acc + w, adj, pts, best_node, best_dist);
+    }
+}
+
+void dfsDiameter(int u,
+                 int parent_u,
+                 double acc,
+                 const std::vector<std::vector<int>>& adj,
+                 const std::vector<Eigen::Vector2d>& pts,
+                 std::vector<int>& parent,
+                 int& best_node,
+                 double& best_dist)
+{
+    parent[u] = parent_u;
+    if (acc > best_dist)
+    {
+        best_dist = acc;
+        best_node = u;
+    }
+    for (int v : adj[u])
+    {
+        if (v == parent_u) continue;
+        double w = (pts[v] - pts[u]).norm();
+        dfsDiameter(v, u, acc + w, adj, pts, parent, best_node, best_dist);
+    }
+}
+
+// raw_center → MST → 최장 경로 추출 → ordered_center
+bool orderCenterByMST(const std::vector<Eigen::Vector2d>& raw_center,
+                      std::vector<Eigen::Vector2d>& ordered_center)
+{
+    const int N = (int)raw_center.size();
+    if (N < 2)
+    {
+        ordered_center = raw_center;
+        return false;
+    }
+
+    struct Edge
+    {
+        int u, v;
+        double w;
+    };
+
+    std::vector<Edge> edges;
+    edges.reserve(N * (N - 1) / 2);
+    for (int i = 0; i < N; ++i)
+    {
+        for (int j = i + 1; j < N; ++j)
+        {
+            double w = (raw_center[i] - raw_center[j]).norm();
+            edges.push_back({i, j, w});
+        }
+    }
+
+    std::sort(edges.begin(), edges.end(),
+              [](const Edge& a, const Edge& b) { return a.w < b.w; });
+
+    DSU dsu(N);
+    std::vector<std::vector<int>> adj(N);
+    int used_edges = 0;
+    for (const auto& e : edges)
+    {
+        if (dsu.unite(e.u, e.v))
+        {
+            adj[e.u].push_back(e.v);
+            adj[e.v].push_back(e.u);
+            ++used_edges;
+            if (used_edges == N - 1) break;
+        }
+    }
+
+    if (used_edges == 0)
+    {
+        ordered_center = raw_center;
+        return false;
+    }
+
+    // 1) 임의의 점(0번)에서 가장 먼 점 f1 찾기
+    int f1 = 0;
+    double best_dist = -1.0;
+    dfsFarthest(0, -1, 0.0, adj, raw_center, f1, best_dist);
+
+    // 2) f1에서 가장 먼 점 f2 찾으면서 parent 기록 → 직경 경로
+    int f2 = f1;
+    best_dist = -1.0;
+    std::vector<int> parent(N, -1);
+    dfsDiameter(f1, -1, 0.0, adj, raw_center, parent, f2, best_dist);
+
+    // 3) f2에서 parent를 타고 f1까지 올라가며 경로 재구성
+    std::vector<int> path_idx;
+    for (int cur = f2; cur != -1; cur = parent[cur])
+        path_idx.push_back(cur);
+    std::reverse(path_idx.begin(), path_idx.end()); // f1 → f2
+
+    if (path_idx.empty())
+    {
+        ordered_center = raw_center;
+        return false;
+    }
+
+    // 4) 차량(0,0)에 더 가까운 끝점을 시작으로 방향 맞추기
+    double d_start = raw_center[path_idx.front()].squaredNorm();
+    double d_end   = raw_center[path_idx.back()].squaredNorm();
+    if (d_start > d_end)
+        std::reverse(path_idx.begin(), path_idx.end());
+
+    ordered_center.clear();
+    ordered_center.reserve(path_idx.size());
+    for (int idx : path_idx)
+        ordered_center.push_back(raw_center[idx]);
+
+    return true;
+}
+
+} // anonymous namespace
 
 // ===== 생성자 =====
 RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
@@ -23,13 +377,13 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     pnh_.param("speed",                       speed_,                       0.4);   // m/s
     pnh_.param("vehicle_length",              vehicle_length_,              0.25);  // m
     pnh_.param("lfd",                         lfd_,                         0.6);   // m
-    pnh_.param("angle_from_left_first_cone",  angle_from_left_first_cone_,  45.0);   // m
+    pnh_.param("angle_from_left_first_cone",  angle_from_left_first_cone_, 45.0);  // deg
     pnh_.param("dist_from_left_first_cone",   dist_from_left_first_cone_,   1.5);   // m
     pnh_.param("dist_from_right_first_cone",  dist_from_right_first_cone_,  1.5);   // m
     pnh_.param("dist_between_cones",          dist_between_cones_,          0.4);   // m
-    pnh_.param("max_turn_angle_deg",           max_turn_angle_deg_,          45.0);  // 세그먼트 사이 최대 회전 각
-    pnh_.param("weight_dist",                  weight_dist_,                 1.0);   // 거리 가중치
-    pnh_.param("weight_angle",                 weight_angle_,                0.5);   // 각도 가중치
+    pnh_.param("max_turn_angle_deg",          max_turn_angle_deg_,         45.0);   // 세그먼트 사이 최대 회전 각
+    pnh_.param("weight_dist",                 weight_dist_,                 1.0);   // 거리 가중치
+    pnh_.param("weight_angle",                weight_angle_,                0.5);   // 각도 가중치
 
     // 스플라인 샘플링 간격 (센터라인 상에서 몇 m마다 샘플링할지)
     pnh_.param("centerline_ds",               centerline_ds_,               0.05);  // 5cm 간격
@@ -41,7 +395,7 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     pnh_.param("start_y_max",     start_y_max_,     0.6);
     pnh_.param("start_min_count", start_min_count_, 6);
 
-    // ing: 0 < x < 1.0, -1.0 < y < 1.0, 개수 >= 4
+    // ing: 0 < x < 2.0, -2.0 < y < 2.0, 개수 >= 4
     pnh_.param("ing_x_min",       ing_x_min_,       0.0);
     pnh_.param("ing_x_max",       ing_x_max_,       2.0);
     pnh_.param("ing_y_min",       ing_y_min_,      -2.0);
@@ -59,8 +413,10 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     centerline_path_pub_ = nh_.advertise<nav_msgs::Path>(
         "rubber_cone_centerline", 1, false);
 
-    left_boundary_path_pub_  = nh_.advertise<nav_msgs::Path>("left_boundary_path", 1, false);
-    right_boundary_path_pub_ = nh_.advertise<nav_msgs::Path>("right_boundary_path", 1, false);
+    left_boundary_path_pub_  = nh_.advertise<nav_msgs::Path>(
+        "left_boundary_path", 1, false);
+    right_boundary_path_pub_ = nh_.advertise<nav_msgs::Path>(
+        "right_boundary_path", 1, false);
 
     // 제어 메시지 초기화
     target_control_.drive.steering_angle = 0.0;
@@ -99,7 +455,7 @@ void RubberConeNode::obstaclesCallback(const obstacle_detector::Obstacles::Const
 
         publishBoundaryPaths(left_line, right_line);
 
-        // 2) 센터라인 계산 (스플라인 보간 포함)
+        // 2) 센터라인 계산 (Delaunay + MST + 스플라인 보간)
         std::vector<Eigen::Vector2d> center_line;
         buildCenterLine(left_line, right_line, center_line);
 
@@ -206,20 +562,19 @@ bool RubberConeNode::selectFirstCone(const std::vector<Eigen::Vector2d>& side_po
     std::vector<Eigen::Vector2d> filtered;
     filtered.reserve(side_points.size());
 
-    // 옆 방향을 기준으로 한 각도 범위
     for (const auto& p : side_points)
     {
         double ang_deg = std::atan2(p.y(), p.x()) * 180.0 / M_PI;
 
         if (left_side)
         {
-            // 왼쪽 옆 방향 근처만 사용
+            // 왼쪽 옆 방향(약 90도 근처) 이상만 사용
             if (ang_deg > angle_from_left_first_cone_)
                 filtered.push_back(p);
         }
         else
         {
-            // 오른쪽 옆 방향 근처만 사용
+            // 오른쪽 옆 방향(-90도 근처) 이하만 사용
             if (ang_deg < -angle_from_left_first_cone_)
                 filtered.push_back(p);
         }
@@ -268,7 +623,6 @@ double RubberConeNode::angleDiff(double a, double b) const
     return normalizeAngle(a - b);
 }
 
-
 // 한 측 라인을 첫 콘에서부터 앞으로 이어서 생성
 void RubberConeNode::buildLineFromFirst(const std::vector<Eigen::Vector2d>& all_points,
                                         const Eigen::Vector2d& first_point,
@@ -282,7 +636,7 @@ void RubberConeNode::buildLineFromFirst(const std::vector<Eigen::Vector2d>& all_
     line.push_back(first_point);
     Eigen::Vector2d current_point = first_point;
 
-    const double max_step_dist = dist_between_cones_;        // 기본 거리 한계
+    const double max_step_dist     = dist_between_cones_;             // 기본 거리 한계
     const double max_turn_angle_rad = max_turn_angle_deg_ * M_PI / 180.0;
 
     while (true)
@@ -316,7 +670,7 @@ void RubberConeNode::buildLineFromFirst(const std::vector<Eigen::Vector2d>& all_
             if (dist > max_step_dist)
                 continue;
 
-            // 3) 각도 제약: 라인에 두 개 이상 포인트가 있을 때만 적용
+            // 3) 각도 제약
             double angle_penalty = 0.0;
             if (line.size() >= 2)
             {
@@ -341,7 +695,7 @@ void RubberConeNode::buildLineFromFirst(const std::vector<Eigen::Vector2d>& all_
             }
             else
             {
-                // 첫 번째 세그먼트인 경우: 차량 진행 방향(x+)과의 각도 차이를 penalty로 줄 수도 있음
+                // 첫 번째 세그먼트인 경우: 차량 진행 방향(x+)과의 각도 차이를 penalty로
                 Eigen::Vector2d v_curr = p - current_point;
                 if (v_curr.norm() < 1e-6)
                     continue;
@@ -385,7 +739,8 @@ void RubberConeNode::buildBoundaries(std::vector<Eigen::Vector2d>& left_line,
         Eigen::Vector2d first_left;
         if (selectFirstCone(left_points, true, first_left))
         {
-            buildLineFromFirst(points_, first_left, left_line);
+            // 왼쪽 포인트만 사용해서 왼쪽 경계 생성
+            buildLineFromFirst(left_points, first_left, left_line);
         }
     }
 
@@ -396,7 +751,8 @@ void RubberConeNode::buildBoundaries(std::vector<Eigen::Vector2d>& left_line,
         Eigen::Vector2d first_right;
         if (selectFirstCone(right_points, false, first_right))
         {
-            buildLineFromFirst(points_, first_right, right_line);
+            // 오른쪽 포인트만 사용해서 오른쪽 경계 생성
+            buildLineFromFirst(right_points, first_right, right_line);
         }
     }
 }
@@ -466,59 +822,150 @@ void RubberConeNode::smoothCenterLineWithSpline(const std::vector<Eigen::Vector2
     }
 }
 
-// left/right_line → center_line (스플라인 보간 포함)
+// left/right_line → center_line (Delaunay + label-different midpoints + MST + spline)
 void RubberConeNode::buildCenterLine(const std::vector<Eigen::Vector2d>& left_line,
                                      const std::vector<Eigen::Vector2d>& right_line,
                                      std::vector<Eigen::Vector2d>& center_line) const
 {
     center_line.clear();
+
+    // 0) 양쪽 경계 모두 없는 경우
+    if (left_line.empty() && right_line.empty())
+        return;
+
+    // 1) 델로네용 점 + 라벨 구성
+    std::vector<DTPoint> P;
+    std::vector<int>     label;  // 0 = left, 1 = right
+
+    bool has_left  = !left_line.empty();
+    bool has_right = !right_line.empty();
+
+    if (has_left)
+    {
+        for (const auto& p : left_line)
+        {
+            P.push_back(DTPoint{p.x(), p.y()});
+            label.push_back(0);
+        }
+    }
+    if (has_right)
+    {
+        for (const auto& p : right_line)
+        {
+            P.push_back(DTPoint{p.x(), p.y()});
+            label.push_back(1);
+        }
+    }
+
+    // 한쪽 경계만 있을 때: 첫 점을 y축 대칭해서 가짜 반대편 추가
+    if (has_left && !has_right)
+    {
+        const Eigen::Vector2d& p0 = left_line.front();
+        P.push_back(DTPoint{p0.x(), -p0.y()});
+        label.push_back(1);
+    }
+    else if (!has_left && has_right)
+    {
+        const Eigen::Vector2d& p0 = right_line.front();
+        P.push_back(DTPoint{p0.x(), -p0.y()});
+        label.push_back(0);
+    }
+
+    const int N = (int)P.size();
+    if (N == 0)
+        return;
+
+    // 점이 너무 적으면 삼각분할 대신 간단 처리
     std::vector<Eigen::Vector2d> raw_center;
 
-    // 1) 원래 Python 코드와 동일한 방식으로 raw_center 구성
-    if (!left_line.empty() && !right_line.empty())
+    // 점이 너무 적으면(삼각분할 의미 없음) → 경계 기반 센터라인 사용
+    if (N < 3)
     {
-        const std::size_t L = left_line.size();
-        const std::size_t R = right_line.size();
+        std::vector<Eigen::Vector2d> raw_center;
 
-        if (L > R)
+        if (!left_line.empty() && !right_line.empty())
         {
-            for (std::size_t i = 0; i < R; ++i)
-                raw_center.push_back(0.5 * (left_line[i] + right_line[i]));
-
-            Eigen::Vector2d diff = raw_center[R - 1] - left_line[R - 1];
-            for (std::size_t i = R; i < L; ++i)
-                raw_center.push_back(left_line[i] + diff);
+            // 양쪽 경계가 모두 있을 때:
+            // 각 측 라인이 x 증가 방향으로 정렬되어 있으니
+            // 인덱스 맞춰서 단순 평균으로 센터라인 생성
+            int m = std::min(left_line.size(), right_line.size());
+            raw_center.reserve(m);
+            for (int i = 0; i < m; ++i)
+            {
+                raw_center.emplace_back(
+                    0.5 * (left_line[i].x() + right_line[i].x()),
+                    0.5 * (left_line[i].y() + right_line[i].y())
+                );
+            }
         }
-        else if (L < R)
+        else if (!left_line.empty() || !right_line.empty())
         {
-            for (std::size_t i = 0; i < L; ++i)
-                raw_center.push_back(0.5 * (left_line[i] + right_line[i]));
-
-            Eigen::Vector2d diff = raw_center[L - 1] - right_line[L - 1];
-            for (std::size_t i = L; i < R; ++i)
-                raw_center.push_back(right_line[i] + diff);
+            // 한쪽 경계만 있을 때:
+            // 그냥 그 라인을 그대로 따라가도록 센터라인을 그 라인으로 둠
+            // const auto& src = !left_line.empty() ? left_line : right_line;
+            // raw_center = src;
+            return;
         }
         else
         {
-            for (std::size_t i = 0; i < L; ++i)
-                raw_center.push_back(0.5 * (left_line[i] + right_line[i]));
+            // 여기 오면 사실 P.size() < 3과 모순이지만 안전하게 리턴
+            return;
         }
-    }
-    else if (!left_line.empty() && right_line.empty())
-    {
-        Eigen::Vector2d diff = -left_line.front();
-        for (const auto& lp : left_line)
-            raw_center.push_back(lp + diff);
-    }
-    else if (left_line.empty() && !right_line.empty())
-    {
-        Eigen::Vector2d diff = -right_line.front();
-        for (const auto& rp : right_line)
-            raw_center.push_back(rp + diff);
+
+        if (!raw_center.empty())
+            smoothCenterLineWithSpline(raw_center, center_line);
+
+        return;
     }
 
-    // 2) 스플라인 보간으로 부드러운 center_line 생성
-    smoothCenterLineWithSpline(raw_center, center_line);
+    // 2) 델로네 삼각분할
+    auto tris = bowyerWatson(P);
+    if (tris.empty())
+    {
+        return;
+    }
+
+    // 3) 라벨이 서로 다른 엣지의 중점 모으기
+    std::set<EdgeKey> mixed_edges;
+
+    for (const auto& tr : tris)
+    {
+        int vs[3] = {tr.a, tr.b, tr.c};
+        for (int i = 0; i < 3; ++i)
+        {
+            int u = vs[i];
+            int v = vs[(i + 1) % 3];
+
+            if (u == v) continue;
+            if (label[u] == label[v]) continue;
+
+            EdgeKey ek;
+            ek.u = std::min(u, v);
+            ek.v = std::max(u, v);
+            mixed_edges.insert(ek);
+        }
+    }
+
+    raw_center.reserve(mixed_edges.size());
+    for (const auto& e : mixed_edges)
+    {
+        const auto& pa = P[e.u];
+        const auto& pb = P[e.v];
+        raw_center.emplace_back(
+            0.5 * (pa.x + pb.x),
+            0.5 * (pa.y + pb.y));
+    }
+
+    if (raw_center.empty())
+        return;
+
+    // 4) MST 기반 최장 경로 순서로 재정렬 후 스플라인 스무딩
+    std::vector<Eigen::Vector2d> ordered_center;
+    bool ok = orderCenterByMST(raw_center, ordered_center);
+    if (!ok)
+        ordered_center = raw_center;
+
+    smoothCenterLineWithSpline(ordered_center, center_line);
 }
 
 // center_line → steering angle
@@ -530,25 +977,17 @@ double RubberConeNode::computeSteeringFromCenterLine(std::vector<Eigen::Vector2d
         return 0.0;
     }
 
-    // x 오름차순 정렬 (앞쪽부터)
-    std::sort(center_line.begin(), center_line.end(),
-              [](const Eigen::Vector2d& a, const Eigen::Vector2d& b)
-              {
-                  return a.x() < b.x();
-              });
-
-    Eigen::Vector2d first = center_line.front();
     double theta = 0.0;
     is_look_forward_point_ = false;
 
+    // center_line 은 MST + 스플라인으로 "앞에서 뒤로" 정렬되어 있다고 가정
     for (const auto& p : center_line)
     {
         double dis = p.norm();
         if (dis >= lfd_)
         {
             is_look_forward_point_ = true;
-            Eigen::Vector2d v = p; // + first;
-            theta = std::atan2(v.y(), v.x());
+            theta = std::atan2(p.y(), p.x());
             break;
         }
     }
@@ -556,11 +995,10 @@ double RubberConeNode::computeSteeringFromCenterLine(std::vector<Eigen::Vector2d
     if (!is_look_forward_point_)
     {
         const Eigen::Vector2d& last = center_line.back();
-        Eigen::Vector2d v = last; // + first;
-        theta = std::atan2(v.y(), v.x() + vehicle_length_);
+        theta = std::atan2(last.y(), last.x() + vehicle_length_);
     }
 
-    double steering = -std::atan2(2.0 * vehicle_length_ * std::sin(theta), lfd_);
+    double steering = std::atan2(2.0 * vehicle_length_ * std::sin(theta), lfd_);
     return steering;
 }
 
@@ -572,8 +1010,10 @@ void RubberConeNode::publishControl(double steering)
 
     control_pub_.publish(target_control_);
 
-    ROS_INFO_STREAM_THROTTLE(1.0,
-        "[RubberConeNode] mission running, steering = " << steering * 180.0 / M_PI << "deg.");
+    ROS_INFO_STREAM_THROTTLE(
+        1.0,
+        "[RubberConeNode] mission running, steering = "
+        << steering * 180.0 / M_PI << " deg.");
 }
 
 void RubberConeNode::fillPathMsg(const std::vector<Eigen::Vector2d>& pts,

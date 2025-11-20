@@ -19,15 +19,15 @@
         <param name="angle_from_left_first_cone"  value="45.0" />
 
         <!-- 첫 콘까지 허용 거리 -->
-        <param name="dist_from_left_first_cone"  value="1.5" />
-        <param name="dist_from_right_first_cone" value="1.5" />
+        <param name="dist_from_left_first_cone"  value="1.0" />
+        <param name="dist_from_right_first_cone" value="1.0" />
 
         <!-- 인접 콘 간 최대 거리 -->
         <param name="dist_between_cones"         value="0.4" />
 
         <param name="max_turn_angle_deg" value="45.0" />
         <param name="weight_dist"        value="1.0" />
-        <param name="weight_angle"       value="0.5" />
+        <param name="weight_angle"       value="1.0" />
 
         <!-- 센터라인 스플라인 샘플 간격 (m) -->
         <param name="centerline_ds"              value="0.05" />
