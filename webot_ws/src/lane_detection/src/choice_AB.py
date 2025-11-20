@@ -2,92 +2,101 @@
 # -*- coding: utf-8 -*-
 
 import rospy
-from ar_track_alvar_msgs.msg import AlvarMarkers
 from std_msgs.msg import Int32, Bool
 
-class AR:
+
+class ChoiceABSign(object):
+    """
+    /traffic_sign(Int32)를 받아서
+
+        0: NONE
+        1: LEFT  (좌측 차선 선택)
+        2: RIGHT (우측 차선 선택)
+        3: PARK  (주차 미션 트리거)
+
+    로 해석한 뒤,
+
+        /direction_flag(Int32)
+            0: 왼쪽 차선
+            1: 오른쪽 차선
+
+        /parking_flag(Bool)
+            True: 주차 미션 시작 신호
+
+    를 퍼블리시하는 노드.
+    """
+
+    SIGN_NONE  = 0
+    SIGN_LEFT  = 1
+    SIGN_RIGHT = 2
+    SIGN_PARK  = 3
+
     def __init__(self):
-        rospy.init_node('Choice_AB')
+        rospy.init_node("Choice_AB_sign")
 
-        self.lane_switch = rospy.Publisher('/direction_flag', Int32, queue_size=1)
-        self.switch_data = Int32()
+        # 표지판 ID 매핑 (필요하면 파라미터로 조절 가능)
+        self.left_sign_id  = rospy.get_param("~left_sign_id",  self.SIGN_LEFT)
+        self.right_sign_id = rospy.get_param("~right_sign_id", self.SIGN_RIGHT)
+        self.park_sign_id  = rospy.get_param("~park_sign_id",  self.SIGN_PARK)
 
-        self.ar_markers = []
-
-        rospy.Subscriber('/ar_pose_marker', AlvarMarkers, self.ar_callback, queue_size=1)
+        # Publishers
+        self.lane_pub   = rospy.Publisher("/direction_flag", Int32, queue_size=1)
         self.parking_pub = rospy.Publisher("/parking_flag", Bool, queue_size=1)
-        self.is_ar_markers = False
-        self.ar_markers = []
+
+        self.lane_msg    = Int32()
         self.parking_msg = Bool()
 
-        ############## 변경 가능한 파라미터 ###############
-        self.target_ar_id1 = 0 # A(왼쪽)
-        self.target_ar_id2 = 4 # B(오른쪽)
-        self.counting_to_need = 1
-        self.distance_from_ar = 2.5
-        ##############################################
+        # 내부 상태
+        self.current_lane = None          # 0(LEFT) / 1(RIGHT)
+        self.parking_triggered = False    # 주차 신호 한 번만 쏘고 싶은 경우 사용
 
-        self.ar_id = None
-        self.ar_detected_count = 0
+        # Subscriber
+        rospy.Subscriber("/traffic_sign", Int32,
+                         self.traffic_sign_callback, queue_size=1)
 
-        rate = rospy.Rate(8) # 10hz
-        ################ main ###################
-        while not rospy.is_shutdown():
-            if self.is_ar_markers:
-                if self.check_AR():
-                    if self.ar_id == self.target_ar_id1:
-                        self.switch_data.data = 0
-                        self.lane_switch.publish(self.switch_data)
-                        rospy.loginfo(f"check_AR: left lane gogo")
+        rospy.loginfo("Choice_AB_sign node started. Subscribing to [/traffic_sign]")
+        rospy.spin()
 
-                        self.parking_msg.data = True
-                        self.parking_pub.publish(self.parking_msg)
+    # --------------------------------------------------------------------- #
+    def traffic_sign_callback(self, msg):
+        sign_id = msg.data
 
-                    elif self.ar_id == self.target_ar_id2:
-                        self.switch_data.data = 1
-                        self.lane_switch.publish(self.switch_data)
-                        rospy.loginfo(f"check_AR: right lane gogo")
-                        
-                        self.parking_msg.data = True
-                        self.parking_pub.publish(self.parking_msg)
+        # 0: NONE → 아무것도 안 함 (이전 상태 유지)
+        if sign_id == self.SIGN_NONE:
+            returnㅊ
 
-            self.is_ar_markers = False
-            rate.sleep()
+        # LEFT / RIGHT 표지판 → 차선 선택
+        if sign_id == self.left_sign_id:
+            # 0 = 왼쪽 (기존 Choice_AB와 동일하게 유지)
+            self.current_lane = 0
+            self.lane_msg.data = self.current_lane
+            self.lane_pub.publish(self.lane_msg)
+            rospy.loginfo("Choice_AB_sign: LEFT sign detected -> direction_flag = 0 (left lane)")
 
-    def ar_callback(self, data):
-        self.is_ar_markers = True
-        self.ar_markers = data.markers
+        elif sign_id == self.right_sign_id:
+            # 1 = 오른쪽
+            self.current_lane = 1
+            self.lane_msg.data = self.current_lane
+            self.lane_pub.publish(self.lane_msg)
+            rospy.loginfo("Choice_AB_sign: RIGHT sign detected -> direction_flag = 1 (right lane)")
 
-    def check_AR(self):
-        if len(self.ar_markers) == 1:
-            ar_marker = self.ar_markers[0]
-            if self.ar_id == None:
-                self.ar_id = ar_marker.id
-            else:
-                if self.ar_id != ar_marker.id:
-                    self.ar_id = ar_marker.id
-                    self.ar_detected_count = 0
-                    return False
-            if self.ar_detected(ar_marker.pose.pose.position.z):
-                return True
-            else:
-                return False
-        else:
-            return False
+        # PARK 표지판 → 주차 미션 트리거
+        # if sign_id == self.park_sign_id:
+        #     # 예전 AR 코드처럼, True 한 번 쏘고 그대로 유지
+        #     if not self.parking_triggered:
+        #         self.parking_msg.data = True
+        #         self.parking_pub.publish(self.parking_msg)
+        #         self.parking_triggered = True
+        #         rospy.loginfo("Choice_AB_sign: PARK sign detected -> parking_flag = True")
 
-    def ar_detected(self,distance):
-        if distance <= self.distance_from_ar:
-            self.ar_detected_count += 1
-            if self.ar_detected_count >= self.counting_to_need:
-                return True
-            else:
-                return False
-        else:
-            self.ar_detected_count = 0
-            return False
+        # 필요하면, 특정 시점에 parking_flag를 False로 리셋하는 로직을
+        # 다른 노드에서 보내거나, 여기서 타임아웃/조건 걸어줄 수도 있다.
+        # (현재는 예전 AR 코드와 동일하게 '한 번 True'만 쏘는 구조)
+        # 주행 로직이 edge-trigger로 받는다면 이대로 충분.
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     try:
-        Choice_AB = AR()
+        node = ChoiceABSign()
     except rospy.ROSInterruptException:
-        rospy.loginfo("Choice_AB node terminated.")
+        pass
