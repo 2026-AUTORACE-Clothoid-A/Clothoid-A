@@ -92,135 +92,209 @@ class CameraReceiver:
             
         #     #if w > h and 60 < w < 160 and not self.flag and self.crosswalk_flag:
         #     if w > h and 30 < w and h < 50 and not self.flag and self.crosswalk_flag: # 50 < w < 160
-        if test_result is not None and test_result > 50:
+        if test_result is not None and test_result > 15 and not self.flag:
                 # cv2.rectangle(self.warp_img, (x + 100, y), (x + w + 100, y + h), (0, 0, 255), 2) 
                 rospy.loginfo("START Detected")
                 self.flag = True
 
-                #전진 1.8 
+                # #전진 1.8 
+                # start_time = time.time()
+                # while time.time() - start_time < 0.6: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
+
                 start_time = time.time()
-                while time.time() - start_time < 0.6: 
+                while time.time() - start_time < 2.20: 
                     self.drive_info.drive.speed = 0.2
+                    self.drive_info.drive.steering_angle = -0.34
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05)
+
+                start_time = time.time()
+                while time.time() - start_time < 0.5: 
+                    self.drive_info.drive.speed = -0.18
                     self.drive_info.drive.steering_angle = 0.0
                     self.drive_pub.publish(self.drive_info)
                     time.sleep(0.05) 
 
                 start_time = time.time()
-                while time.time() - start_time < 0.2: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = -0.25
+                while time.time() - start_time < 2.0: 
+                    self.drive_info.drive.speed = -0.2
+                    self.drive_info.drive.steering_angle = 0.0
                     self.drive_pub.publish(self.drive_info)
                     time.sleep(0.05) 
 
                 start_time = time.time()
-                while time.time() - start_time < 0.8: 
-                    self.drive_info.drive.speed = 0.3
-                    self.drive_info.drive.steering_angle = -0.45
+                while time.time() - start_time < 1.35: 
+                    self.drive_info.drive.speed = -0.2
+                    self.drive_info.drive.steering_angle = -0.34
                     self.drive_pub.publish(self.drive_info)
                     time.sleep(0.05) 
 
-                self.drive_info.drive.speed = 0.0
-                self.drive_info.drive.steering_angle = 0.0
-                self.drive_pub.publish(self.drive_info)
-                time.sleep(0.05)
+                start_time = time.time()
+                while time.time() - start_time < 0.5: 
+                    self.drive_info.drive.speed = 0.18
+                    self.drive_info.drive.steering_angle = 0.0
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05) 
+
+                start_time = time.time()
+                while time.time() - start_time < 0.4: 
+                    self.drive_info.drive.speed = 0.2
+                    self.drive_info.drive.steering_angle = 0.34
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05)
+
+                # ========================================================
+
+                start_time = time.time()
+                while time.time() - start_time < 0.5: 
+                    self.drive_info.drive.speed = -0.18
+                    self.drive_info.drive.steering_angle = 0.0
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05) 
+
+                # ========================================================
+
+                start_time = time.time()
+                while time.time() - start_time < 0.4: 
+                    self.drive_info.drive.speed = -0.2
+                    self.drive_info.drive.steering_angle = 0.34
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05)
+
+                start_time = time.time()
+                while time.time() - start_time < 0.5: 
+                    self.drive_info.drive.speed = 0.18
+                    self.drive_info.drive.steering_angle = 0.0
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05) 
+
+                start_time = time.time()
+                while time.time() - start_time < 1.35: 
+                    self.drive_info.drive.speed = 0.2
+                    self.drive_info.drive.steering_angle = -0.34
+                    self.drive_pub.publish(self.drive_info)
+                    time.sleep(0.05) 
+
+                # start_time = time.time()
+                # while time.time() - start_time < 1.36: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = -0.34
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
+
+                # start_time = time.time()
+                # while time.time() - start_time < 3.0: 
+                #     self.drive_info.drive.speed = -0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
+
+                # self.drive_info.drive.speed = 0.0
+                # self.drive_info.drive.steering_angle = 0.0
+                # self.drive_pub.publish(self.drive_info)
+                # time.sleep(0.05)
                 
-                #후진 
-                start_time = time.time()
-                while time.time() - start_time < 0.3: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
+                # #후진 
+                # start_time = time.time()
+                # while time.time() - start_time < 0.3: 
+                #     self.drive_info.drive.speed = -0.2
+                #     self.drive_info.drive.steering_angle = 0.45
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
 
-                start_time = time.time()
-                while time.time() - start_time < 1.2: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
+                # start_time = time.time()
+                # while time.time() - start_time < 1.2: 
+                #     self.drive_info.drive.speed = -0.2
+                #     self.drive_info.drive.steering_angle = 0.45
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
 
-                start_time = time.time()
-                while time.time() - start_time < 2.2: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = -0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
+                # start_time = time.time()
+                # while time.time() - start_time < 2.2: 
+                #     self.drive_info.drive.speed = -0.2
+                #     self.drive_info.drive.steering_angle = -0.45
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)
 
-                start_time = time.time()
-                while time.time() - start_time < 0.2: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
+                # start_time = time.time()
+                # while time.time() - start_time < 0.2: 
+                #     self.drive_info.drive.speed = -0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
 
-                self.drive_info.drive.speed = 0.0
-                self.drive_info.drive.steering_angle = 0.0
-                self.drive_pub.publish(self.drive_info)
-                time.sleep(0.05)
+                # self.drive_info.drive.speed = 0.0
+                # self.drive_info.drive.steering_angle = 0.0
+                # self.drive_pub.publish(self.drive_info)
+                # time.sleep(0.05)
 
-                #전진
-                start_time = time.time()
-                while time.time() - start_time < 1.0: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.25
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
+                # #전진
+                # start_time = time.time()
+                # while time.time() - start_time < 1.0: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = 0.25
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)
 
-                start_time = time.time()
-                while time.time() - start_time < 0.3: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
+                # start_time = time.time()
+                # while time.time() - start_time < 0.3: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)
                     
-                # 주차완료 5초
-                start_time = time.time()
-                while time.time() - start_time < 5.5: 
-                    self.drive_info.drive.speed = 0.0
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
+                # # 주차완료 5초
+                # start_time = time.time()
+                # while time.time() - start_time < 5.5: 
+                #     self.drive_info.drive.speed = 0.0
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
                 
-                start_time = time.time()
-                while time.time() - start_time < 1.2:
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
+                # start_time = time.time()
+                # while time.time() - start_time < 1.2:
+                #     self.drive_info.drive.speed = -0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)  
 
-                start_time = time.time()
-                while time.time() - start_time < 2.2: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = -0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
+                # start_time = time.time()
+                # while time.time() - start_time < 2.2: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = -0.45
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)  
 
-                start_time = time.time()
-                while time.time() - start_time < 0.8: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
+                # start_time = time.time()
+                # while time.time() - start_time < 0.8: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)
 
-                start_time = time.time()
-                while time.time() - start_time < 1.8: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
+                # start_time = time.time()
+                # while time.time() - start_time < 1.8: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = 0.45
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)  
 
-                start_time = time.time()
-                while time.time() - start_time < 1.5: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
+                # start_time = time.time()
+                # while time.time() - start_time < 1.5: 
+                #     self.drive_info.drive.speed = 0.2
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05)  
 
-                while True:
-                    self.drive_info.drive.speed = 0.0 # 정지
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
+                # while True:
+                #     self.drive_info.drive.speed = 0.0 # 정지
+                #     self.drive_info.drive.steering_angle = 0.0
+                #     self.drive_pub.publish(self.drive_info)
+                #     time.sleep(0.05) 
 
         #cv2.imshow("warp", self.warp_img)
         #cv2.imshow("HSV", hsv_img)
@@ -289,10 +363,12 @@ def check_histogram(binary_img):
 
     # 1. 히스토그램 계산 (Y축 방향만)
     # 행(Row) 단위로 픽셀 합계를 구함 -> 가로선 검출
-    histogram_y = np.sum(binary_img, axis=1) // 255 
+    margin = 60
+    shift = 45
+    histogram_y = np.sum(binary_img[:,margin+shift:w-margin+shift], axis=1) // 255 
 
     # 2. 임계값 설정
-    THRESH_HORIZON_LEN = 75   # 가로선으로 인정할 최소 길이 (픽셀 수)
+    THRESH_HORIZON_LEN = 85   # 가로선으로 인정할 최소 길이 (픽셀 수)
     
     # 3. 로직 판단 (중앙값 계산)
     # 임계값을 넘는 행(row)의 인덱스들을 모두 찾음
