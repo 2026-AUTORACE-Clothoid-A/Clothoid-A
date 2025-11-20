@@ -67,6 +67,9 @@ class CameraReceiver:
         self.drive_info = AckermannDriveStamped()
         self.flag = False
         self.crosswalk_flag = False
+
+        self.hsv_img = None
+        self.threshold = None
     
     def flag_callback(self, data):
         self.crosswalk_flag = data.data
@@ -74,7 +77,7 @@ class CameraReceiver:
     def callback(self, data):
         image = self.bridge.imgmsg_to_cv2(data, "bgr8")
         warp_img, M, Minv = warp_image(image, warp_src, warp_dst, (warp_img_w, warp_img_h))
-        hsv_img, threshold, result = image_processing(warp_img)
+        self.hsv_img, self.threshold, result = image_processing(warp_img)
         contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         counter = 0
@@ -219,6 +222,17 @@ class CameraReceiver:
         #cv2.imshow("result_PARK", result)
         #cv2.waitKey(1)
 
+    def process(self):
+        try:
+            #cv2.imshow("warp", warp_img)
+            cv2.imshow("HSV", self.hsv_img)
+            cv2.imshow("thresh", self.threshold)
+            #cv2.imshow("result_PARK", result)
+            cv2.waitKey(1)
+        
+        except:
+            pass
+
 
 def warp_image(img, src, dst, size):
     M = cv2.getPerspectiveTransform(src, dst)
@@ -257,7 +271,12 @@ def image_processing(img):
 def run():
     rospy.init_node("parking_rect_pub")
     cam = CameraReceiver()
-    rospy.spin()
+    
+    rate = rospy.Rate(30)
+    
+    while not rospy.is_shutdown():
+        cam.process()
+        rate.sleep()
 
 
 if __name__ == "__main__":
