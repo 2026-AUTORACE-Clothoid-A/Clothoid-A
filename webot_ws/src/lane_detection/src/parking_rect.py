@@ -70,24 +70,30 @@ class CameraReceiver:
 
         self.hsv_img = None
         self.threshold = None
+        self.warp_img = None
+        self.debug_img = None
     
     def flag_callback(self, data):
         self.crosswalk_flag = data.data
 
     def callback(self, data):
         image = self.bridge.imgmsg_to_cv2(data, "bgr8")
-        warp_img, M, Minv = warp_image(image, warp_src, warp_dst, (warp_img_w, warp_img_h))
-        self.hsv_img, self.threshold, result = image_processing(warp_img)
+        self.warp_img, M, Minv = warp_image(image, warp_src, warp_dst, (warp_img_w, warp_img_h))
+        self.hsv_img, self.threshold, result = image_processing(self.warp_img)
+        test_result, self.debug_img = check_histogram(result)
         contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        counter = 0
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)  
-            cv2.rectangle(warp_img, (x + 100, y), (x + w + 100, y + h), (0, 255, 0), 4) 
+        rospy.loginfo(f"{test_result}")
+
+        # counter = 0
+        # for contour in contours:
+        #     x, y, w, h = cv2.boundingRect(contour)  
+        #     cv2.rectangle(self.warp_img, (x + 100, y), (x + w + 100, y + h), (0, 255, 0), 4) 
             
-            #if w > h and 60 < w < 160 and not self.flag and self.crosswalk_flag:
-            if w > h and 30 < w and h < 50 and not self.flag and self.crosswalk_flag: # 50 < w < 160
-                cv2.rectangle(warp_img, (x + 100, y), (x + w + 100, y + h), (0, 0, 255), 2) 
+        #     #if w > h and 60 < w < 160 and not self.flag and self.crosswalk_flag:
+        #     if w > h and 30 < w and h < 50 and not self.flag and self.crosswalk_flag: # 50 < w < 160
+        if test_result is not None and test_result > 50:
+                # cv2.rectangle(self.warp_img, (x + 100, y), (x + w + 100, y + h), (0, 0, 255), 2) 
                 rospy.loginfo("START Detected")
                 self.flag = True
 
@@ -216,7 +222,7 @@ class CameraReceiver:
                     self.drive_pub.publish(self.drive_info)
                     time.sleep(0.05) 
 
-        #cv2.imshow("warp", warp_img)
+        #cv2.imshow("warp", self.warp_img)
         #cv2.imshow("HSV", hsv_img)
         #cv2.imshow("thresh", threshold)
         #cv2.imshow("result_PARK", result)
@@ -224,9 +230,10 @@ class CameraReceiver:
 
     def process(self):
         try:
-            #cv2.imshow("warp", warp_img)
+            cv2.imshow("warp", self.warp_img)
             cv2.imshow("HSV", self.hsv_img)
             cv2.imshow("thresh", self.threshold)
+            cv2.imshow("debug image", self.debug_img)
             #cv2.imshow("result_PARK", result)
             cv2.waitKey(1)
         
@@ -266,6 +273,58 @@ def image_processing(img):
     result = cv2.bitwise_and(hsv_img, threshold)
 
     return hsv_img, threshold, result
+
+
+def check_histogram(binary_img):
+    """
+    :param binary_img: 0과 255로 구성된 이진 이미지 (Gray scale)
+    :return: (center_y, debug_img) 
+             - center_y: 검출된 가로선의 중앙 Y좌표 (검출 안되면 None)
+             - debug_img: 시각화 이미지
+    """
+    h, w = binary_img.shape
+    
+    # 디버깅용 컬러 이미지 생성
+    debug_img = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
+
+    # 1. 히스토그램 계산 (Y축 방향만)
+    # 행(Row) 단위로 픽셀 합계를 구함 -> 가로선 검출
+    histogram_y = np.sum(binary_img, axis=1) // 255 
+
+    # 2. 임계값 설정
+    THRESH_HORIZON_LEN = 75   # 가로선으로 인정할 최소 길이 (픽셀 수)
+    
+    # 3. 로직 판단 (중앙값 계산)
+    # 임계값을 넘는 행(row)의 인덱스들을 모두 찾음
+    valid_y_indices = np.where(histogram_y > THRESH_HORIZON_LEN)[0]
+    
+    center_y = None
+    if len(valid_y_indices) > 0:
+        # 검출된 모든 Y좌표들의 중앙값(Median) 계산 (정수로 변환)
+        center_y = int(np.median(valid_y_indices))
+
+    # ==========================================
+    # 4. 시각화 (Debugging)
+    # ==========================================
+
+    # (1) Y축 히스토그램 그리기 - 빨간색 / 노란색
+    for y, val in enumerate(histogram_y):
+        # 기본 히스토그램 (빨간색)
+        cv2.line(debug_img, (0, y), (int(val), y), (0, 0, 255), 1)
+        
+        # 임계값을 넘은 유효한 가로선 구간 (노란색 하이라이트)
+        if val > THRESH_HORIZON_LEN:
+            cv2.line(debug_img, (0, y), (int(val), y), (0, 255, 255), 1)
+
+    # (2) 결과 표시
+    if center_y is not None:
+        # 검출된 중앙선 그리기 (보라색 굵은 선)
+        cv2.line(debug_img, (0, center_y), (w, center_y), (255, 0, 255), 2)
+        cv2.putText(debug_img, f"Center Y: {center_y}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    else:
+        cv2.putText(debug_img, "SEARCHING", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    return center_y, debug_img
 
 
 def run():
