@@ -75,6 +75,7 @@ class CameraReceiver:
         self.histogram_debug = None
 
         self.stopline_thresh = 14
+        self.diff = 0
 
         self.is_debug = True
     
@@ -91,19 +92,12 @@ class CameraReceiver:
         if not self.flag and histogram_result:
             rospy.loginfo(f"{histogram_result}")
 
-        # if not self.flag and histogram_result is not None and histogram_result > self.stopline_thresh:
-        #     rospy.loginfo("START Detected")
-        #     self.flag = True
-
         if not self.flag and histogram_result is not None and histogram_result > self.stopline_thresh:
             rospy.loginfo("START Detected - Starting Parking Thread")
             self.flag = True
-            self.temp = (histogram_result - self.stopline_thresh)/40
-            
-            # [핵심 변경 사항] 주차 로직을 별도의 쓰레드로 실행
-            parking_thread = threading.Thread(target=self.parking_sequence_logic)
-            parking_thread.daemon = True # 메인 프로그램 종료 시 함께 종료
-            parking_thread.start()
+            self.diff = (histogram_result - self.stopline_thresh) / 40
+
+            self.parking_sequence_logic()
 
     def parking_sequence_logic(self):
         # 전진에서 후진 변경 시 급발진 방지용
@@ -116,7 +110,7 @@ class CameraReceiver:
 
         # 45도가 될 때까지 우회전
         start_time = time.time()
-        while time.time() - start_time < 1.8-self.temp: 
+        while time.time() - start_time < 1.8-self.diff: 
             self.drive_info.drive.speed = 0.2
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
