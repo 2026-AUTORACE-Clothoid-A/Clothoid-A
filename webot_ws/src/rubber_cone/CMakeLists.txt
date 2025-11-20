@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
   nav_msgs
   visualization_msgs
   geometry_msgs
+  ackermann_msgs
 )
 
 ## System dependencies are found with CMake's conventions
@@ -110,7 +111,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES rubber_cone
-  CATKIN_DEPENDS obstacle_detector roscpp rospy std_msgs geometry_msgs visualization_msgs nav_msgs
+  CATKIN_DEPENDS obstacle_detector roscpp rospy std_msgs geometry_msgs visualization_msgs nav_msgs ackermann_msgs
 #  DEPENDS system_lib
 )
 
@@ -142,6 +143,7 @@ include_directories(
 # add_executable(${PROJECT_NAME}_node src/rubber_cone_node.cpp)
 add_executable(cone_sorter_node src/cone_sorter_node.cpp)
 add_executable(cone_matching_node src/cone_matching_node.cpp)
+add_executable(rubber_cone_node src/rubber_cone_node.cpp)
 
 ## Rename C++ executable without prefix
 ## The above recommended prefix causes long target names, the following renames the
@@ -154,6 +156,7 @@ add_executable(cone_matching_node src/cone_matching_node.cpp)
 # add_dependencies(${PROJECT_NAME}_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 add_dependencies(cone_sorter_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 add_dependencies(cone_matching_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(rubber_cone_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
 # target_link_libraries(${PROJECT_NAME}_node
@@ -161,6 +164,7 @@ add_dependencies(cone_matching_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin
 # )
 target_link_libraries(cone_sorter_node ${catkin_LIBRARIES})
 target_link_libraries(cone_matching_node ${catkin_LIBRARIES})
+target_link_libraries(rubber_cone_node ${catkin_LIBRARIES})
 
 #############
 ## Install ##
@@ -203,6 +207,10 @@ target_link_libraries(cone_matching_node ${catkin_LIBRARIES})
 #   # myfile2
 #   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
 # )
+install(FILES
+  launch/rubber_cone.launch
+  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}
+)
 
 #############
 ## Testing ##
