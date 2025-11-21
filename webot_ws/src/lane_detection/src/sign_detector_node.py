@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+# For headless mode (no DISPLAY), comment out the following line
+# export DISPLAY=:1
+# xhost +local:root 로컬에서
+
+import os
 import rospy
 import cv2
 import numpy as np
@@ -33,7 +38,7 @@ class SignDetectorNode(object):
         rospy.init_node('sign_detector_node')
 
         # --- 파라미터 ---
-        self.camera_topic = rospy.get_param('~camera_topic', '/camera/image_raw')
+        self.camera_topic = rospy.get_param('~camera_topic', '/usb_cam/image_raw/calib')
         self.resize_width  = rospy.get_param('~resize_width', 320)
         self.resize_height = rospy.get_param('~resize_height', 240)
 
@@ -44,20 +49,20 @@ class SignDetectorNode(object):
         self.upper_blue = np.array(init_upper, dtype=np.uint8)
 
         # 모폴로지 커널 크기
-        self.morph_kernel_size = rospy.get_param('~morph_kernel', 3)
+        self.morph_kernel_size = rospy.get_param('~morph_kernel', 2)
 
         # 최소 컨투어 면적 (노이즈 제거용, 픽셀단위)
-        self.min_area = rospy.get_param('~min_area', 500)
+        self.min_area = rospy.get_param('~min_area', 20)
 
         # 원형성(circularity) 임계값
-        self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.6)
+        self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.7)
 
         # 연속 프레임 안정화용
         # self.counting_to_need = rospy.get_param('~counting_to_need', 1)
 
         # --- 표지판 안정화용 상태 ---
-        self.frames_to_confirm = rospy.get_param('~frames_to_confirm', 5)  # 5프레임 연속이면 확정
-        self.frames_to_forget  = rospy.get_param('~frames_to_forget', 10)  # 10프레임 연속 NONE이면 리셋
+        self.frames_to_confirm = rospy.get_param('~frames_to_confirm', 3)  # 5프레임 연속이면 확정
+        self.frames_to_forget  = rospy.get_param('~frames_to_forget', 8)  # 10프레임 연속 NONE이면 리셋
 
         self.stable_sign = self.SIGN_NONE          # 현재 확정된 표지판 (publish 값)
         self.candidate_sign = self.SIGN_NONE       # 새로 감지 중인 후보 표지판
@@ -96,6 +101,10 @@ class SignDetectorNode(object):
         HSV 파란색 범위를 트랙바로 조절할 수 있게 설정.
         H: 0~179, S/V: 0~255
         """
+        if os.getenv('DISPLAY') is None:
+            rospy.logwarn("DISPLAY not found → Running in headless mode, trackbar disabled")
+            return
+    
         # mask 창에 트랙바 붙일 거라 이름을 mask로 통일
         cv2.namedWindow("mask", cv2.WINDOW_NORMAL)
 
@@ -114,6 +123,8 @@ class SignDetectorNode(object):
         """
         트랙바 값 읽어서 self.lower_blue / self.upper_blue 갱신.
         """
+        if os.getenv('DISPLAY') is None:
+            return
         try:
             h_low = cv2.getTrackbarPos('H_low', 'mask')
             s_low = cv2.getTrackbarPos('S_low', 'mask')
@@ -183,6 +194,11 @@ class SignDetectorNode(object):
             for cnt in contours:
                 area = cv2.contourArea(cnt)
                 if area < self.min_area:
+                    rospy.loginfo_throttle(
+                        0.05,
+                        "sign_detector_node: skip contour area=%.1f < min_area=%.1f",
+                        area, self.min_area
+                    )
                     continue
 
                 peri = cv2.arcLength(cnt, True)
@@ -195,6 +211,11 @@ class SignDetectorNode(object):
                 #elif len(approx) == 4:
                 #    shape = 'rect'
                 else:
+                    rospy.loginfo_throttle(
+                        0.05,
+                        "sign_detector_node: skip contour circularity=%.3f < thresh=%.3f",
+                        circularity, self.circularity_thresh
+                    )
                     # 원/사각형이 아니면 스킵
                     continue
 
@@ -258,7 +279,10 @@ class SignDetectorNode(object):
         )
 
         if total_blue < 1:   # 거의 0이면만 NONE
-            rospy.loginfo_throttle(0.05, "ROI -> NONE (blue too small)")
+            rospy.loginfo_throttle(
+                0.05,
+                "sign_detector_node: ROI -> NONE (blue too small, total=%d)", total_blue
+            )
             return self.SIGN_NONE
 
         if blue_q3 > blue_q4:

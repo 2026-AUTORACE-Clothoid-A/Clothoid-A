@@ -59,44 +59,24 @@
 
 ### 3.1. 처리 흐름
 
-1. **전처리**
-   - 입력: BGR 이미지
-   - BGR → HSV 변환
-   - 해상도 축소(예: 640×480 → 320×240)
-   - Gaussian/Median blur로 노이즈 완화
+1. **전처리 / HSV 마스크**
+   - 입력 이미지를 HSV로 변환한 뒤 `lower_blue`~`upper_blue` 파라미터로 마스크 생성.
+   - `morph_kernel` 크기(기본 1)로 오프닝/클로징을 적용해 잡음을 제거.
+   - GUI가 가능하면 trackbar로 HSV 범위를 실시간 튜닝.
 
-2. **파란색 마스크 생성**
-   - HSV에서 파란색 범위에 대해 `cv2.inRange` 로 이진 마스크 생성
-   - 모폴로지 연산(오프닝/클로징)으로 작은 잡음 제거
+2. **컨투어 필터링**
+   - 외곽 컨투어만 추출해 면적(`min_area`)과 원형도(`circularity_thresh`)를 체크.
+   - 조건에서 탈락하면 `sign_detector_node: skip contour ...` 로그가 찍혀 디버깅 가능.
+   - 원형만 ROI로 추출, 사각형은 PARK로 간주.
 
-3. **컨투어 탐색 및 형태 분류**
-   - `findContours` 로 파란 덩어리 탐색
-   - 각 컨투어에 대해:
-     - 면적이 작으면 제외
-     - `approxPolyDP` 로 다각형 근사
-     - 원형성(circularity = 4πA / P²) 계산
-     - 조건:
-       - `len(approx) >= 8` & circularity > threshold → **원형**
-       - `len(approx) == 4` → **사각형**
+3. **좌/우 분류 (사분면 비교)**
+   - ROI 하단 좌/우 사분면의 파란 픽셀 수(`q3`, `q4`)를 비교.
+   - `q3 > q4`이면 LEFT, 반대면 RIGHT. 총 파란 픽셀이 거의 없으면 NONE.
+   - 로그로 `ROI blue q3=..., q4=..., total=...` 를 출력하여 왜 0이 나왔는지 확인.
 
-4. **ROI 추출 및 분류**
-   - `boundingRect` 로 ROI 추출
-   - 원형:
-     - ROI를 32×32 grayscale/binary로 정규화
-     - 경량 CNN 또는 HOG+SVM으로 **LEFT / RIGHT** 판별
-   - 사각형:
-     - 현 대회 규격 상 파란 사각형은 `주차` 표지 하나뿐이라 가정하고 **PARK** 로 분류
-
-5. **Temporal filter**
-   - 최근 N프레임(예: 5 프레임) 동안의 결과를 누적
-   - 동일한 결과가 일정 비율 이상 & 신뢰도(threshold) 이상일 때만 최종 sign 결정
-
-6. **/traffic_sign 퍼블리시**
-   - 최종 결정된 sign을 Int32로 퍼블리시:
-     - 0: NONE
-     - 1: LEFT
-     - 2: RIGHT
-     - 3: PARK
+4. **Temporal filter & 퍼블리시**
+   - `frames_to_confirm`/`frames_to_forget` 로 안정화.
+   - 확정된 결과를 `/traffic_sign`(Int32)로 퍼블리시(0 NONE / 1 LEFT / 2 RIGHT / 3 PARK).
 
 ---
 
@@ -155,3 +135,15 @@
 - 실제 트랙에서:
   - 표지판 크기/거리/조명 조건에 맞게 파라미터 재조정
   - LEFT/RIGHT/PARK 각각에 대해 인식 안정도 검증
+
+---
+
+## 6. `sign_detector_node_small.py` 실험 기록 (폐기 예정)
+
+| 항목 | 내용 |
+| --- | --- |
+| 인식 방식 | 기존 파란 마스크/컨투어 파이프라인에 **템플릿 매칭(64×64)** 을 추가. 실제 표지판 이미지를 전처리(`make_arrow_template.py`)해 `left/right_template.npy`로 사용. 면적 ≤ 600 픽셀인 컨투어는 템플릿을 강제로 적용해 좌/우를 구분하도록 시도. |
+| 옵션 | HSV 트랙바, 디버그 윈도우, 외부 템플릿 경로 파라미터, 세밀한 로그(`match score`, `contour skip`, `detected_sign (pre-stabilize)` 등). |
+| 기대 효과 | 기존 방식이 어렵던 작은 표지판(약 20~30px)에서도 템플릿 매칭으로 안정적인 좌/우 판정. |
+| 실제 결과 | 기존 `sign_detector_node.py` 대비 **정확도 개선이 거의 없음**. 템플릿 매칭/전처리 비용으로 프레임 처리 시간이 2~3배 증가. 작은 잡음 컨투어가 자주 들어와 `frames_to_forget=1` 조건에서 출력이 좌↔0으로 튀는 문제가 빈번. |
+| 결론 | 실시간성과 안정성이 악화돼 **실제 주행에서는 기존 `sign_detector_node.py`만 사용**. `sign_detector_node_small.py`는 실험 참고용으로 남겼다가 폐기 예정. 향후 필요하면 더 경량화된 HOG+SVM/ORB 등의 대안을 검토. |
