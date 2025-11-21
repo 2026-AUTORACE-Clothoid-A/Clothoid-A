@@ -17,15 +17,29 @@ namespace cone_sorter
 class ConeSorterNode
 {
 public:
-    explicit ConeSorterNode(ros::NodeHandle& nh);
+    explicit ConeSorterNode(ros::NodeHandle& nh, ros::NodeHandle& pnh);
 
 private:
     ros::NodeHandle nh_;
+    ros::NodeHandle pnh_;
     ros::Subscriber obstacles_sub_;
 
     // 결과 경계를 다른 노드에서 쓸 수 있도록 퍼블리시
     ros::Publisher left_boundary_pub_;
     ros::Publisher right_boundary_pub_;
+
+    // 미션 상태 퍼블리셔 (true: 미션 진행 중, false: 미션 아님)
+    ros::Publisher mission_state_pub_;
+
+    // ====== 미션 상태 ======
+    enum class MissionState
+    {
+        IDLE,
+        RUNNING
+    };
+
+    MissionState mission_state_;
+    bool is_obstacles_;
 
     // ====== 파라미터들 (전부 rosparam으로 튜닝 가능하게) ======
     double max_dist_to_first_;         // 시작 콘으로 인정할 최대 거리 [m]
@@ -38,6 +52,26 @@ private:
     double ellipse_minor_radius_factor_;       // 타원 단축 = factor * max_dist_between_cones_
     double len_override_factor_;               // len_last_to_candidate < factor * max_dist_between_cones_
     double car_size_;                          // 차량 길이(충돌 체크용) [m]
+
+    // --- 러버콘 스타일 첫 점 선택용 파라미터 ---
+    double angle_from_left_first_cone_deg_; // 왼쪽 첫 콘 각도 기준 [deg]
+    double dist_from_left_first_cone_;      // 왼쪽 첫 콘까지 허용 거리 [m]
+    double dist_from_right_first_cone_;     // 오른쪽 첫 콘까지 허용 거리 [m]
+
+    // --- 미션 판정 영역 파라미터 (base_link 기준) ---
+    // start 영역
+    double start_x_min_;
+    double start_x_max_;
+    double start_y_min_;
+    double start_y_max_;
+    int    start_min_count_;
+
+    // ing 영역
+    double ing_x_min_;
+    double ing_x_max_;
+    double ing_y_min_;
+    double ing_y_max_;
+    int    ing_min_count_;
 
     // ===== 비용 항목 구조체 =====
     struct TraceCostTerms
@@ -85,7 +119,12 @@ private:
     void obstaclesCallback(const obstacle_detector::Obstacles::ConstPtr& msg);
     void processOnce();
 
+    // ====== 미션 상태 판정 ======
+    bool checkMissionStartCondition() const;
+    bool checkMissionContinueCondition() const;
+
     // ====== 1단계: 시작 콘 선택 ======
+    // (기존 함수들: 폴백용으로 남겨둠)
     void maskConeCanBeFirst(
         Side side,
         std::vector<double>& distances,
@@ -98,6 +137,10 @@ private:
         const std::vector<bool>& mask_valid) const;
 
     std::vector<int> selectFirstKStartingCones(Side side) const;
+
+    // --- 러버콘 로직 기반 새 시작 콘 선택 ---
+    std::vector<int> extractSideIndices(Side side) const;
+    bool selectFirstConeIndex(Side side, int& out_idx) const;
 
     // ====== 2단계: 거리 행렬 / 인접 행렬 / BFS ======
     Eigen::MatrixXd computeDistanceMatrix(
