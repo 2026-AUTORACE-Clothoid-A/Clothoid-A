@@ -2,6 +2,7 @@
 
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <std_msgs/Bool.h>
 
 #include <algorithm>
 #include <cmath>
@@ -31,45 +32,68 @@ static double angleBetween(const Eigen::Vector2d& a, const Eigen::Vector2d& b)
 static double deg2rad(double d) { return d * M_PI / 180.0; }
 
 // ===== 생성자 =====
-ConeSorterNode::ConeSorterNode(ros::NodeHandle& nh)
+ConeSorterNode::ConeSorterNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     : nh_(nh)
+    , pnh_(pnh)
+    , mission_state_(MissionState::IDLE)
+    , is_obstacles_(false)
 {
-    // 파라미터 로드 (스케일카 환경 기본값)
-    nh_.param("max_dist_to_first",        max_dist_to_first_,        1.0);   // m
-    nh_.param("max_dist_between_cones",   max_dist_between_cones_,   0.4);   // m
-    nh_.param("max_n_neighbors",          max_n_neighbors_,          10);    // 개
-    nh_.param("max_trace_length",         max_trace_length_,         20);    // 콘 개수
+    // ---------- 파라미터 로드 (스케일카 환경 기본값) ----------
+    pnh_.param("max_dist_to_first",        max_dist_to_first_,        1.0);   // m
+    pnh_.param("max_dist_between_cones",   max_dist_between_cones_,   0.4);   // m
+    pnh_.param("max_n_neighbors",          max_n_neighbors_,          10);    // 개
+    pnh_.param("max_trace_length",         max_trace_length_,         20);    // 콘 개수
 
-    nh_.param("threshold_directional_angle_deg", threshold_directional_angle_deg_, 30.0);  // deg
-    nh_.param("threshold_absolute_angle_deg",    threshold_absolute_angle_deg_,   45.0);  // deg
+    pnh_.param("threshold_directional_angle_deg", threshold_directional_angle_deg_, 30.0);  // deg
+    pnh_.param("threshold_absolute_angle_deg",    threshold_absolute_angle_deg_,   45.0);  // deg
 
-    nh_.param("ellipse_major_radius_factor", ellipse_major_radius_factor_, 2.0);  // * max_dist_between_cones_
-    nh_.param("ellipse_minor_radius_factor", ellipse_minor_radius_factor_, 1.0);  // * max_dist_between_cones_
-    nh_.param("len_override_factor",         len_override_factor_,        2.0);   // * max_dist_between_cones_
+    pnh_.param("ellipse_major_radius_factor", ellipse_major_radius_factor_, 2.0);  // * max_dist_between_cones_
+    pnh_.param("ellipse_minor_radius_factor", ellipse_minor_radius_factor_, 1.0);  // * max_dist_between_cones_
+    pnh_.param("len_override_factor",         len_override_factor_,        2.0);   // * max_dist_between_cones_
 
-    nh_.param("car_size",                    car_size_,                  0.5);    // m (대략 차량 길이)
+    pnh_.param("car_size",                    car_size_,                  0.5);    // m (대략 차량 길이)
 
     // 각도 비용에서 "꺾였다"고 보는 기준
-    nh_.param("angle_cost_threshold_deg",      angle_cost_threshold_deg_,      30.0);
+    pnh_.param("angle_cost_threshold_deg",      angle_cost_threshold_deg_,      30.0);
 
     // 콘 간격이 이 값보다 크면 residual distance cost에 반영
-    nh_.param("residual_dist_threshold",       residual_dist_threshold_,       max_dist_between_cones_);
+    pnh_.param("residual_dist_threshold",       residual_dist_threshold_,       max_dist_between_cones_);
 
     // wrong_direction_cost 에서 사용할 각도 임계값
-    nh_.param("wrong_dir_threshold_deg",       wrong_dir_threshold_deg_,       30.0);
+    pnh_.param("wrong_dir_threshold_deg",       wrong_dir_threshold_deg_,       30.0);
 
     // 주변 콘 검색 파라미터 (cones_on_either_cost)
-    nh_.param("cones_side_search_dist",        cones_side_search_dist_,        0.8);
-    nh_.param("cones_side_search_angle_deg",   cones_side_search_angle_deg_,   120.0);
+    pnh_.param("cones_side_search_dist",        cones_side_search_dist_,        0.8);
+    pnh_.param("cones_side_search_angle_deg",   cones_side_search_angle_deg_,   120.0);
 
     // ---- 항목별 가중치 ----
-    nh_.param("w_angle_cost",          w_angle_cost_,          1000.0);
-    nh_.param("w_residual_dist_cost",  w_residual_dist_cost_,   200.0);
-    nh_.param("w_num_cones_cost",      w_num_cones_cost_,      5000.0);
-    nh_.param("w_initial_dir_cost",    w_initial_dir_cost_,    1000.0);
-    nh_.param("w_change_dir_cost",     w_change_dir_cost_,     2000.0);
-    nh_.param("w_cones_side_cost",     w_cones_side_cost_,     1000.0);
-    nh_.param("w_wrong_dir_cost",      w_wrong_dir_cost_,      1000.0);
+    pnh_.param("w_angle_cost",          w_angle_cost_,          1000.0);
+    pnh_.param("w_residual_dist_cost",  w_residual_dist_cost_,   200.0);
+    pnh_.param("w_num_cones_cost",      w_num_cones_cost_,      5000.0);
+    pnh_.param("w_initial_dir_cost",    w_initial_dir_cost_,    1000.0);
+    pnh_.param("w_change_dir_cost",     w_change_dir_cost_,     2000.0);
+    pnh_.param("w_cones_side_cost",     w_cones_side_cost_,     1000.0);
+    pnh_.param("w_wrong_dir_cost",      w_wrong_dir_cost_,      1000.0);
+
+    // --- 러버콘 스타일 첫 점 선택용 파라미터 ---
+    pnh_.param("angle_from_left_first_cone", angle_from_left_first_cone_deg_, 45.0);  // deg
+    pnh_.param("dist_from_left_first_cone",  dist_from_left_first_cone_,      1.0);   // m
+    pnh_.param("dist_from_right_first_cone", dist_from_right_first_cone_,     1.0);   // m
+
+    // --- 미션 판정 영역 파라미터 ---
+    // start: 0 < x < 1.3, -0.6 < y < 0.6, 개수 >= 6 (RubberCone 기본값과 동일)
+    pnh_.param("start_x_min",     start_x_min_,     0.0);
+    pnh_.param("start_x_max",     start_x_max_,     1.3);
+    pnh_.param("start_y_min",     start_y_min_,    -0.6);
+    pnh_.param("start_y_max",     start_y_max_,     0.6);
+    pnh_.param("start_min_count", start_min_count_, 6);
+
+    // ing: 0 < x < 2.0, -2.0 < y < 2.0, 개수 >= 4
+    pnh_.param("ing_x_min",       ing_x_min_,       0.0);
+    pnh_.param("ing_x_max",       ing_x_max_,       2.0);
+    pnh_.param("ing_y_min",       ing_y_min_,      -2.0);
+    pnh_.param("ing_y_max",       ing_y_max_,       2.0);
+    pnh_.param("ing_min_count",   ing_min_count_,   4);
 
     // base_link 기준: 차량은 원점, x+ 정면
     car_pos_ = Eigen::Vector2d(0.0, 0.0);
@@ -82,11 +106,15 @@ ConeSorterNode::ConeSorterNode(ros::NodeHandle& nh)
     // 경계 퍼블리셔 (nav_msgs/Path)
     left_boundary_pub_  = nh_.advertise<nav_msgs::Path>("left_boundary_path", 1, true);
     right_boundary_pub_ = nh_.advertise<nav_msgs::Path>("right_boundary_path", 1, true);
+
+    // 미션 상태 퍼블리셔 (true: 미션 구간, false: 미션 아님)
+    mission_state_pub_  = nh_.advertise<std_msgs::Bool>("cone_mission_active", 1, true);
 }
 
 // ===== raw_obstacles 콜백 =====
 void ConeSorterNode::obstaclesCallback(const obstacle_detector::Obstacles::ConstPtr& msg)
 {
+    is_obstacles_ = true;
     cones_.clear();
     cones_.reserve(msg->circles.size());
 
@@ -96,10 +124,75 @@ void ConeSorterNode::obstaclesCallback(const obstacle_detector::Obstacles::Const
         cones_.emplace_back(c.center.x, c.center.y);
     }
 
-    processOnce();
+    // ----- 미션 상태 업데이트 -----
+    switch (mission_state_)
+    {
+    case MissionState::IDLE:
+        if (checkMissionStartCondition())
+        {
+            mission_state_ = MissionState::RUNNING;
+            ROS_INFO("[ConeSorterNode] Mission START");
+        }
+        break;
+
+    case MissionState::RUNNING:
+        if (!checkMissionContinueCondition())
+        {
+            mission_state_ = MissionState::IDLE;
+            ROS_INFO("[ConeSorterNode] Mission END (no longer in cone zone)");
+            break;
+        }
+        // 미션 진행 중일 때만 경계 생성 파이프라인 수행
+        processOnce();
+        break;
+    default:
+        break;
+    }
+
+    // ----- 미션 상태 토픽 발행 (true: RUNNING, false: IDLE) -----
+    std_msgs::Bool m;
+    m.data = (mission_state_ == MissionState::RUNNING);
+    mission_state_pub_.publish(m);
 }
 
-// ===== Stage1: 시작 콘 후보 마스크 =====
+// ===== 미션 상태 판정 =====
+bool ConeSorterNode::checkMissionStartCondition() const
+{
+    int count = 0;
+    for (const auto& p : cones_)
+    {
+        double x = p.x();
+        double y = p.y();
+        if (x > start_x_min_ && x < start_x_max_ &&
+            y > start_y_min_ && y < start_y_max_)
+        {
+            ++count;
+            if (count >= start_min_count_)
+                return true;
+        }
+    }
+    return false;
+}
+
+bool ConeSorterNode::checkMissionContinueCondition() const
+{
+    int count = 0;
+    for (const auto& p : cones_)
+    {
+        double x = p.x();
+        double y = p.y();
+        if (x > ing_x_min_ && x < ing_x_max_ &&
+            y > ing_y_min_ && y < ing_y_max_)
+        {
+            ++count;
+            if (count >= ing_min_count_)
+                return true;
+        }
+    }
+    return false;
+}
+
+// ===== Stage1: 기존 mask/select (폴백용으로 유지) =====
 void ConeSorterNode::maskConeCanBeFirst(
     Side side,
     std::vector<double>& distances,
@@ -157,7 +250,6 @@ void ConeSorterNode::maskConeCanBeFirst(
     }
 }
 
-// ===== Stage1: 하나의 시작 콘 선택 =====
 int ConeSorterNode::selectStartingCone(
     Side /*side*/,
     const std::vector<int>* indices_to_skip,
@@ -204,7 +296,6 @@ int ConeSorterNode::selectStartingCone(
     return best_idx;
 }
 
-// ===== Stage1: 최대 2개의 시작 콘 선택 =====
 std::vector<int> ConeSorterNode::selectFirstKStartingCones(Side side) const
 {
     std::vector<int> result;
@@ -266,10 +357,105 @@ std::vector<int> ConeSorterNode::selectFirstKStartingCones(Side side) const
         return result;
     }
 
-    // 7) 두 개 모두 사용 (파이썬에서 [index_2, index_1] 반환에 대응)
+    // 7) 두 개 모두 사용
     result.push_back(index_2);
     result.push_back(index_1);
     return result;
+}
+
+// ===== 러버콘 로직 기반: 측별 인덱스 추출 =====
+std::vector<int> ConeSorterNode::extractSideIndices(Side side) const
+{
+    std::vector<int> idx;
+    idx.reserve(cones_.size());
+
+    if (side == Side::LEFT)
+    {
+        for (std::size_t i = 0; i < cones_.size(); ++i)
+        {
+            if (cones_[i].y() > 0.0)
+                idx.push_back(static_cast<int>(i));
+        }
+    }
+    else
+    {
+        for (std::size_t i = 0; i < cones_.size(); ++i)
+        {
+            if (cones_[i].y() < 0.0)
+                idx.push_back(static_cast<int>(i));
+        }
+    }
+    return idx;
+}
+
+// ===== 러버콘 selectFirstCone() 기반 시작 콘 인덱스 선택 =====
+bool ConeSorterNode::selectFirstConeIndex(Side side, int& out_idx) const
+{
+    auto side_indices = extractSideIndices(side);
+    if (side_indices.empty())
+        return false;
+
+    const double ang_th = angle_from_left_first_cone_deg_;
+    std::vector<int> filtered;
+    filtered.reserve(side_indices.size());
+
+    // 1단계: 각도 필터
+    for (int idx : side_indices)
+    {
+        const auto& p = cones_[idx];
+        double ang_deg = std::atan2(p.y(), p.x()) * 180.0 / M_PI;
+
+        if (side == Side::LEFT)
+        {
+            // 왼쪽: ang > angle_from_left_first_cone
+            if (ang_deg > ang_th)
+                filtered.push_back(idx);
+        }
+        else
+        {
+            // 오른쪽: ang < -angle_from_left_first_cone
+            if (ang_deg < -ang_th)
+                filtered.push_back(idx);
+        }
+    }
+
+    const std::vector<int>& candidates = filtered.empty() ? side_indices : filtered;
+
+    // 2단계: 거리 최소 후보 선택
+    double best_dist = std::numeric_limits<double>::infinity();
+    int best_idx = -1;
+    for (int idx : candidates)
+    {
+        double d = cones_[idx].norm();
+        if (d < best_dist)
+        {
+            best_dist = d;
+            best_idx = idx;
+        }
+    }
+
+    if (best_idx < 0)
+        return false;
+
+    // 3단계: 시작 콘까지의 최대 거리 조건
+    double max_first_dist = (side == Side::LEFT)
+                          ? dist_from_left_first_cone_
+                          : dist_from_right_first_cone_;
+
+    if (best_dist > max_first_dist)
+    {
+        // 조건 실패 시: 기존 Stage1 로직으로 폴백
+        // std::vector<int> legacy = selectFirstKStartingCones(side);
+        // if (!legacy.empty())
+        // {
+        //     out_idx = legacy.front();
+        //     return true;
+        // }
+        return false;
+    }
+
+    out_idx = best_idx;
+    return true;
 }
 
 // ===== Stage2: 거리 행렬 (제곱 거리) =====
@@ -1078,51 +1264,42 @@ void ConeSorterNode::processOnce()
         return;
     }
 
-    // --- Stage1: 왼/오른쪽 시작 콘 선정 ---
-    std::vector<int> left_start_idxs  = selectFirstKStartingCones(Side::LEFT);
-    std::vector<int> right_start_idxs = selectFirstKStartingCones(Side::RIGHT);
+    // --- Stage1: 러버콘 스타일 시작 콘 선정 (필요 시 기존 로직으로 폴백) ---
+    int start_idx_left  = -1;
+    int start_idx_right = -1;
 
-    if (left_start_idxs.empty() && right_start_idxs.empty())
+    if (!selectFirstConeIndex(Side::LEFT, start_idx_left))
+    {
+        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No valid LEFT starting cone (Rubber logic + fallback).");
+    }
+    if (!selectFirstConeIndex(Side::RIGHT, start_idx_right))
+    {
+        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No valid RIGHT starting cone (Rubber logic + fallback).");
+    }
+
+    if (start_idx_left < 0 && start_idx_right < 0)
     {
         ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No valid starting cones for LEFT/RIGHT.");
         return;
     }
 
-    auto vecToStr = [](const std::vector<int>& v) -> std::string
-    {
-        std::ostringstream oss;
-        for (std::size_t i = 0; i < v.size(); ++i)
-        {
-            if (i > 0) oss << ", ";
-            oss << v[i];
-        }
-        return oss.str();
-    };
-
     ROS_INFO_THROTTLE(0.5,
-        "[Stage1] left_start_idxs=[%s], right_start_idxs=[%s]",
-        vecToStr(left_start_idxs).c_str(),
-        vecToStr(right_start_idxs).c_str());
+        "[Stage1] left_start_idx=%d, right_start_idx=%d",
+        start_idx_left, start_idx_right);
 
-    int start_idx_left  = left_start_idxs.empty()  ? -1 : left_start_idxs.front();
-    int start_idx_right = right_start_idxs.empty() ? -1 : right_start_idxs.front();
-
-    if (start_idx_left < 0)
-    {
-        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] Cannot run Stage2 for LEFT (no start index).");
-        return;
-    }
-
-    // --- Stage2: 인접 행렬 + reachable (LEFT 기준) ---
+    // --- Stage2: 인접 행렬 + reachable (한 쪽 인덱스로 adjacency 구성 후,
+    //           각 측에서 BFS 별도 수행) ---
     Eigen::MatrixXi adjacency;
-    std::vector<int> reachable_left;
+    std::vector<int> reachable_dummy;
+
+    int any_start = (start_idx_left >= 0) ? start_idx_left : start_idx_right;
     createAdjacencyMatrix(
         cones_,
         max_n_neighbors_,
-        start_idx_left,
+        any_start,
         max_dist_between_cones_,
         adjacency,
-        reachable_left);
+        reachable_dummy);
 
     if (adjacency.rows() == 0)
     {
@@ -1130,7 +1307,11 @@ void ConeSorterNode::processOnce()
         return;
     }
 
+    std::vector<int> reachable_left;
     std::vector<int> reachable_right;
+
+    if (start_idx_left >= 0)
+        reachable_left = breadthFirstOrder(adjacency, start_idx_left);
     if (start_idx_right >= 0)
         reachable_right = breadthFirstOrder(adjacency, start_idx_right);
 
@@ -1143,7 +1324,7 @@ void ConeSorterNode::processOnce()
     TraceSearchResult traces_left;
     TraceSearchResult traces_right;
 
-    if (!reachable_left.empty())
+    if (start_idx_left >= 0 && !reachable_left.empty())
     {
         traces_left = findAllEndConfigurations(
             cones_, adjacency, start_idx_left,
@@ -1225,9 +1406,10 @@ void ConeSorterNode::processOnce()
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "cone_sorter_node");
-    ros::NodeHandle nh("~");
+    ros::NodeHandle nh;
+    ros::NodeHandle pnh("~");
 
-    cone_sorter::ConeSorterNode node(nh);
+    cone_sorter::ConeSorterNode node(nh, pnh);
 
     ros::spin();
     return 0;
