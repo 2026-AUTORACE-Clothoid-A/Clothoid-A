@@ -67,7 +67,7 @@ class CameraReceiver:
         self.drive_pub = rospy.Publisher("high_level/ackermann_cmd_mux/input/nav_0", AckermannDriveStamped, queue_size=1)
         self.drive_info = AckermannDriveStamped()
         self.flag = False
-        self.crosswalk_flag = False
+        self.barricade_flag = False
 
         self.hsv_img = None
         self.threshold = None
@@ -80,7 +80,7 @@ class CameraReceiver:
         self.is_debug = True
     
     def flag_callback(self, data):
-        self.crosswalk_flag = data.data
+        self.barricade_flag = data.data
 
     def callback(self, data):
         image = self.bridge.imgmsg_to_cv2(data, "bgr8")
@@ -92,7 +92,7 @@ class CameraReceiver:
         if not self.flag and histogram_result:
             rospy.loginfo(f"{histogram_result}")
 
-        if not self.flag and histogram_result is not None and histogram_result > self.stopline_thresh:
+        if not self.flag and self.barricade_flag and histogram_result is not None and histogram_result > self.stopline_thresh:
             rospy.loginfo("START Detected - Starting Parking Thread")
             self.flag = True
             self.diff = (histogram_result - self.stopline_thresh) / 40
