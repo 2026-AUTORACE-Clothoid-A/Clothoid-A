@@ -37,7 +37,7 @@ cv2.createTrackbar('Upper Thresh', 'thresh', 255, 255, nothing)
 
 cv2.namedWindow('HSV')
 cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing) 
-cv2.createTrackbar('Lower S', 'HSV', 100, 255, nothing) 
+cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
 cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
 cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
 cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
