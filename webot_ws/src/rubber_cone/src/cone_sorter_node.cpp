@@ -419,7 +419,7 @@ bool ConeSorterNode::selectFirstConeIndex(Side side, int& out_idx) const
         }
     }
 
-    const std::vector<int>& candidates = filtered.empty() ? side_indices : filtered;
+    const std::vector<int>& candidates = filtered;
 
     // 2단계: 거리 최소 후보 선택
     double best_dist = std::numeric_limits<double>::infinity();

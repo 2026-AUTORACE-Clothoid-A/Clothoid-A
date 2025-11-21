@@ -371,6 +371,8 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     , has_left_boundary_(false)
     , has_right_boundary_(false)
     , is_look_forward_point_(false)
+    , last_left_boundary_stamp_(0.0)
+    , last_right_boundary_stamp_(0.0)
 {
     // ----- 파라미터 로드 -----
     pnh_.param("speed",          speed_,          0.4);  // m/s
@@ -384,6 +386,8 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
         lsq_window_size_ = 5;
     if (lsq_window_size_ % 2 == 0)
         lsq_window_size_ += 1;
+
+    pnh_.param("boundary_timeout", boundary_timeout_sec_, 0.3);
 
     // ----- ROS 구독/퍼블리시 -----
     left_boundary_sub_ = nh_.subscribe(
@@ -422,6 +426,10 @@ void RubberConeNode::leftBoundaryCallback(const nav_msgs::Path::ConstPtr& msg)
     }
     has_left_boundary_ = !left_line_.empty();
 
+    last_left_boundary_stamp_ = msg->header.stamp;
+    if (last_left_boundary_stamp_.isZero())
+        last_left_boundary_stamp_ = ros::Time::now();
+
     if (mission_active_)
         updateAndControl();
 }
@@ -437,9 +445,14 @@ void RubberConeNode::rightBoundaryCallback(const nav_msgs::Path::ConstPtr& msg)
     }
     has_right_boundary_ = !right_line_.empty();
 
+    last_right_boundary_stamp_ = msg->header.stamp;
+    if (last_right_boundary_stamp_.isZero())
+        last_right_boundary_stamp_ = ros::Time::now();
+
     if (mission_active_)
         updateAndControl();
 }
+
 
 void RubberConeNode::missionStateCallback(const std_msgs::Bool::ConstPtr& msg)
 {
@@ -454,12 +467,15 @@ void RubberConeNode::missionStateCallback(const std_msgs::Bool::ConstPtr& msg)
     else if (!mission_active_ && prev_mission_active_)
     {
         ROS_INFO("[RubberConeNode] Mission END (cone_mission_active = false)");
-        // 미션 종료 시 정지 또는 스티어링 0
-        // target_control_.header.stamp = ros::Time::now();
-        // target_control_.drive.speed  = 0.0;
-        // target_control_.drive.steering_angle = 0.0;
-        // control_pub_.publish(target_control_);
         is_look_forward_point_ = false;
+
+        // ★ 옵션: 미션 끝나면 경계 상태도 리셋 ★
+        has_left_boundary_  = false;
+        has_right_boundary_ = false;
+        left_line_.clear();
+        right_line_.clear();
+        last_left_boundary_stamp_  = ros::Time(0);
+        last_right_boundary_stamp_ = ros::Time(0);
     }
 
     prev_mission_active_ = mission_active_;
@@ -472,11 +488,50 @@ void RubberConeNode::updateAndControl()
     if (!mission_active_)
         return;
 
-    if (!has_left_boundary_ && !has_right_boundary_)
+    // 현재 시간 기준으로 경계의 신선도 체크
+    ros::Time now = ros::Time::now();
+
+    bool left_fresh  = has_left_boundary_  &&
+                       !last_left_boundary_stamp_.isZero() &&
+                       (now - last_left_boundary_stamp_).toSec() <= boundary_timeout_sec_;
+
+    bool right_fresh = has_right_boundary_ &&
+                       !last_right_boundary_stamp_.isZero() &&
+                       (now - last_right_boundary_stamp_).toSec() <= boundary_timeout_sec_;
+
+    // 디버그용 로그
+    if (!left_fresh && has_left_boundary_)
+    {
+        ROS_WARN_THROTTLE(1.0,
+            "[RubberConeNode] left boundary stale (age=%.3f s > %.3f s)",
+            (now - last_left_boundary_stamp_).toSec(), boundary_timeout_sec_);
+    }
+    if (!right_fresh && has_right_boundary_)
+    {
+        ROS_WARN_THROTTLE(1.0,
+            "[RubberConeNode] right boundary stale (age=%.3f s > %.3f s)",
+            (now - last_right_boundary_stamp_).toSec(), boundary_timeout_sec_);
+    }
+
+    // 둘 다 오래됐으면 제어 안 함
+    if (!left_fresh && !right_fresh)
+    {
+        ROS_WARN_THROTTLE(1.0,
+            "[RubberConeNode] All boundaries stale. Skip control.");
         return;
+    }
+
+    // 신선한 경계만 넘겨서 센터라인 생성
+    std::vector<Eigen::Vector2d> left_for_center;
+    std::vector<Eigen::Vector2d> right_for_center;
+
+    if (left_fresh)
+        left_for_center = left_line_;
+    if (right_fresh)
+        right_for_center = right_line_;
 
     std::vector<Eigen::Vector2d> center_line;
-    buildCenterLine(left_line_, right_line_, center_line);
+    buildCenterLine(left_for_center, right_for_center, center_line);
 
     if (center_line.empty())
     {
@@ -779,38 +834,40 @@ void RubberConeNode::smoothCenterLineWithSpline(
 }
 
 // ===== 스티어링 계산 =====
-
 double RubberConeNode::computeSteeringFromCenterLine(
     const std::vector<Eigen::Vector2d>& center_line)
 {
-    if (center_line.empty())
+    const int N = static_cast<int>(center_line.size());
+    if (N == 0)
     {
         is_look_forward_point_ = false;
         return 0.0;
     }
 
-    double theta = 0.0;
-    is_look_forward_point_ = false;
+    // 기본값: 마지막 점을 타겟으로 (lfd 못 채운 경우 fallback)
+    Eigen::Vector2d target = center_line.back();
 
-    // 앞에서부터 lfd 이상 떨어진 점을 찾음
-    for (const auto& p : center_line)
+    is_look_forward_point_ = false;
+    double s_acc = 0.0;  // 아크길이 누적
+
+    // center_line[0] -> [1] -> ... 를 따라가면서 ds 누적
+    for (int i = 1; i < N; ++i)
     {
-        double dis = p.norm();
-        if (dis >= lfd_)
+        double ds = (center_line[i] - center_line[i - 1]).norm();
+        s_acc += ds;
+
+        if (s_acc >= lfd_)
         {
+            target = center_line[i];
             is_look_forward_point_ = true;
-            theta = std::atan2(p.y(), p.x() + vehicle_length_);
             break;
         }
     }
 
-    if (!is_look_forward_point_)
-    {
-        // const Eigen::Vector2d& last = center_line.back();
-        // theta = std::atan2(last.y(), last.x() + vehicle_length_);
-        return 0.0;
-    }
+    // theta 계산 (차량 휠베이스 고려)
+    double theta = std::atan2(target.y(), target.x() + vehicle_length_);
 
+    // Pure Pursuit 형식 조향각
     double steering = std::atan2(2.0 * vehicle_length_ * std::sin(theta), lfd_);
     return steering;
 }

@@ -43,6 +43,10 @@ private:
     double centerline_ds_;  // 센터라인 샘플링 간격
     int    lsq_window_size_; // 로컬 3차 최소제곱 윈도우 크기(홀수)
 
+    ros::Time last_left_boundary_stamp_;
+    ros::Time last_right_boundary_stamp_;
+    double    boundary_timeout_sec_;   // 경계가 이 시간 이상 안 들어오면 무효로 간주
+
     // 최신 경계 점들 (base_link 기준)
     std::vector<Eigen::Vector2d> left_line_;
     std::vector<Eigen::Vector2d> right_line_;

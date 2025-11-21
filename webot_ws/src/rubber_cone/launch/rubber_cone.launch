@@ -35,11 +35,11 @@
         <param name="w_num_cones_cost"     value="5000.0" />
         <param name="w_initial_dir_cost"   value="1000.0" />
         <param name="w_change_dir_cost"    value="2000.0" />
-        <param name="w_cones_side_cost"    value="1000.0" />
+        <param name="w_cones_side_cost"    value="0.0" />
         <param name="w_wrong_dir_cost"     value="1000.0" />
 
         <!-- 러버콘 스타일 첫 점 선택용 -->
-        <param name="angle_from_left_first_cone" value="45.0" />
+        <param name="angle_from_left_first_cone" value="60.0" />
         <param name="dist_from_left_first_cone"  value="1.0" />
         <param name="dist_from_right_first_cone" value="1.0" />
 
@@ -62,11 +62,13 @@
     <node pkg="rubber_cone" type="rubber_cone_node" name="rubber_cone_node" output="screen">
 
         <!-- 주행 관련 파라미터 -->
-        <param name="speed"          value="0.4" />
+        <param name="speed"          value="0.3" />
         <param name="vehicle_length" value="0.25" />
-        <param name="lfd"            value="0.5" />
+        <param name="lfd"            value="0.3" />
         <param name="centerline_ds"  value="0.05" />
-        <param name="lsq_window_size"  value="5" />
+        <param name="approx_track_width"  value="0.7" />
+        <param name="lsq_window_size"  value="9" />
+        <param name="boundary_timeout"  value="0.1" />
 
     </node>
 
