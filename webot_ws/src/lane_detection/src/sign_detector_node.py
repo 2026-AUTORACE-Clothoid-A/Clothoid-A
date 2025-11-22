@@ -35,7 +35,7 @@ class SignDetectorNode(object):
     SIGN_PARK  = 3
 
     def __init__(self):
-        rospy.init_node('sign_detector_node')
+        # rospy.init_node('sign_detector_node')
 
         # --- 파라미터 ---
         self.camera_topic = rospy.get_param('~camera_topic', '/usb_cam/image_raw/calib')
@@ -91,7 +91,19 @@ class SignDetectorNode(object):
                                           queue_size=1)
 
         rospy.loginfo("sign_detector_node started. Subscribing to [%s]" % self.camera_topic)
-        rospy.spin()
+
+        self.frame = None
+        self.mask = None
+        self.canny = None
+
+    def process(self):
+        try:
+            cv2.imshow("frame", self.frame)
+            cv2.imshow("mask", self.mask_img)
+            cv2.imshow("canny", self.canny)
+            cv2.waitKey(1)
+        except:
+            pass    
 
     # ---------------------------------------------------------------------- #
     # 트랙바 초기화
@@ -107,6 +119,7 @@ class SignDetectorNode(object):
     
         # mask 창에 트랙바 붙일 거라 이름을 mask로 통일
         cv2.namedWindow("mask", cv2.WINDOW_NORMAL)
+        cv2.namedWindow('canny', cv2.WINDOW_NORMAL)
 
         def nothing(x):
             pass
@@ -118,6 +131,9 @@ class SignDetectorNode(object):
         cv2.createTrackbar('S_high', 'mask', int(upper_init[1]), 255, nothing)
         cv2.createTrackbar('V_low', 'mask', int(lower_init[2]), 255, nothing)
         cv2.createTrackbar('V_high', 'mask', int(upper_init[2]), 255, nothing)
+
+        cv2.createTrackbar('Lower Thresh', 'canny', 50, 255, nothing)
+        cv2.createTrackbar('Upper Thresh', 'canny', 100, 255, nothing)
 
     def update_hsv_from_trackbar(self):
         """
@@ -161,89 +177,76 @@ class SignDetectorNode(object):
     # ---------------------------------------------------------------------- #
     def image_callback(self, msg):
         try:
-            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+            self.frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except CvBridgeError as e:
-            rospy.logwarn("CvBridge error: %s", e)
             return
 
-        # 해상도 축소 (연산량 줄이기)
-        #frame = cv2.resize(frame, (self.resize_width, self.resize_height),
-        #                   interpolation=cv2.INTER_AREA)
+        # --- [수정 2] 매 프레임마다 마스크 변수 리셋 (검은색 도화지 준비) ---
+        h, w = self.frame.shape[:2]
+        self.mask = np.zeros((h, w), dtype=np.uint8)
+        self.mask_img = np.zeros((h, w, 3), dtype=np.uint8) # 컬러 영상용
 
-        # 트랙바 값으로 HSV 범위 갱신
-        self.update_hsv_from_trackbar()
+        # 1. Canny Edge
+        blurred = cv2.GaussianBlur(self.frame, (5, 5), 0)
+        low_canny = cv2.getTrackbarPos('Lower Thresh', 'canny')
+        high_canny = cv2.getTrackbarPos('Upper Thresh', 'canny')
+        if low_canny == 0 and high_canny == 0: low_canny, high_canny = 50, 150
+        self.canny = cv2.Canny(blurred, low_canny, high_canny)
 
-        # 1) 파란색 마스크 생성
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
+        # 2. Contour 탐색
+        contours, _ = cv2.findContours(self.canny, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        # 모폴로지로 잡음 제거
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
-
-        # 2) 컨투어 탐색
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL,
-                                       cv2.CHAIN_APPROX_SIMPLE)
-
+        target_cnt = None
         detected_sign = self.SIGN_NONE
 
         if contours:
-            # 가장 큰 컨투어 하나만 사용 (상황에 따라 바꿀 수 있음)
+            # 면적 큰 순서로 정렬
             contours = sorted(contours, key=cv2.contourArea, reverse=True)
 
+            # --- [수정 3] "찾는 로직"과 "그리는 로직" 분리 ---
+            # 먼저 조건을 만족하는 최적의 컨투어(target_cnt)를 찾습니다.
             for cnt in contours:
                 area = cv2.contourArea(cnt)
-                if area < self.min_area:
-                    rospy.loginfo_throttle(
-                        0.05,
-                        "sign_detector_node: skip contour area=%.1f < min_area=%.1f",
-                        area, self.min_area
-                    )
-                    continue
+                if area < self.min_area: continue
 
                 peri = cv2.arcLength(cnt, True)
-                approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
                 circularity = 4.0 * math.pi * area / (peri * peri + 1e-6)
 
-                shape = None
                 if circularity > self.circularity_thresh:
-                    shape = 'circle'
-                #elif len(approx) == 4:
-                #    shape = 'rect'
-                else:
-                    rospy.loginfo_throttle(
-                        0.05,
-                        "sign_detector_node: skip contour circularity=%.3f < thresh=%.3f",
-                        circularity, self.circularity_thresh
-                    )
-                    # 원/사각형이 아니면 스킵
-                    continue
+                    # 찾았다!
+                    target_cnt = cnt
+                    break # 가장 크고 동그란거 하나 찾으면 루프 종료
 
-                rospy.loginfo_throttle(0.05, "cnt area=%.1f, len(approx)=%d, circularity=%.3f, shape=%s" %(area, len(approx), circularity, shape))
+            # 타겟을 찾았을 때만 마스킹 수행
+            if target_cnt is not None:
+                # (1) 마스크 생성 (내부를 흰색으로 채움)
+                cv2.drawContours(self.mask, [target_cnt], 0, (255), thickness=cv2.FILLED)
+                
+                # (2) 원본에서 오려내기 (여기가 핵심! inRange 말고 bitwise_and 결과를 저장)
+                self.mask_img = cv2.bitwise_and(self.frame, self.frame, mask=self.mask)
 
-                x, y, w, h = cv2.boundingRect(cnt)
-                roi = frame[y:y + h, x:x + w]
+                hsv = cv2.cvtColor(self.mask_img, cv2.COLOR_BGR2HSV)
+                self.mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
+                
+                # (3) ROI 추출 (검은 배경의 mask_img에서 추출)
+                x, y, w, h = cv2.boundingRect(target_cnt)
+                roi = self.mask_img[y:y + h, x:x + w]
 
-                if shape == 'circle':
-                    detected_sign = self.classify_circle_roi(roi)
-                elif shape == 'rect':
-                    detected_sign = self.classify_rect_roi(roi)
+                # (4) 상세 분류
+                detected_sign = self.classify_circle_roi(roi)
 
-                # 첫 유효 표지판만 사용 (필요시 여러 개 처리 로직 추가)
+                # (5) 시각화 (원본 프레임에 박스 그리기)
                 if detected_sign != self.SIGN_NONE:
-                    break
+                    cv2.rectangle(self.frame, (x, y), (x+w, y+h), (0, 0, 255), 3)
+                    sign_str = "LEFT" if detected_sign == self.SIGN_LEFT else "RIGHT"
+                    cv2.putText(self.frame, sign_str, (x, y - 10), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
 
-        # 3) Temporal filter + 퍼블리시
         self.update_and_publish(detected_sign)
-
-        # 디버그용 화면
-        cv2.imshow("frame", frame)
-        cv2.imshow("mask", mask)
-        cv2.waitKey(1)
 
     # ---------------------------------------------------------------------- #
     # 분류/후처리 함수들
-    # ---------------------------------------------------------------------- #
+    # -------------------------------------------------------SS--------------- #
     def classify_circle_roi(self, roi_bgr):
         """
         원형 ROI(파란 원 안의 화살표)를 보고 LEFT/RIGHT 분류.
@@ -368,10 +371,19 @@ class SignDetectorNode(object):
         self.sign_pub.publish(self.sign_msg)
 
 
+def run():
+    rospy.init_node("sign_detector_node")
+    node = SignDetectorNode()
+    
+    rate = rospy.Rate(30)
+    
+    while not rospy.is_shutdown():
+        node.process()
+        rate.sleep()
 
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
-        node = SignDetectorNode()
+        run()
+        
     except rospy.ROSInterruptException:
         pass
