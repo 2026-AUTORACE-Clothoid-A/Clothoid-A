@@ -29,7 +29,7 @@ y_l = 40
 nwindows = 20
 margin = 20
 minpix = 15 # 수정
-lane_width = 110
+lane_width = 95
 
 # 0:left, 1:right, 2:both
 lane_flag = 1
@@ -54,9 +54,9 @@ cv2.namedWindow('Canny')
 
 # HSV
 cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing)
-cv2.createTrackbar('Lower S', 'HSV', 215, 255, nothing) 
-cv2.createTrackbar('Lower V', 'HSV', 0, 255, nothing) 
-cv2.createTrackbar('Upper H', 'HSV', 180, 180, nothing)
+cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
+cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
+cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
 cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
 cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
 
@@ -137,13 +137,16 @@ class CameraReceiver:
 
         rospy.loginfo("AR Change lane")
         lane_flag = 1
-        lane_width = 135 
+        lane_width = 140
 
     def parking_callback(self, data): # 주차용 차선 변경
         self.parking_flag = data.data
 
+        # if self.parking_flag:
+        #     threading.Timer(9.0, self.change_lane).start()
+
         if self.parking_flag:
-            threading.Timer(9.0, self.change_lane).start()
+            self.change_lane()
 
     def flag_callback(self, data): # 교차로 차선 변경
         global lane_flag

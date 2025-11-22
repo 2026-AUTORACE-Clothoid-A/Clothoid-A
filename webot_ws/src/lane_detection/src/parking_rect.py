@@ -9,6 +9,7 @@ from sensor_msgs.msg import Image, CompressedImage
 from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import Int32, Bool
 import time
+import threading
 
 # image shape
 Width = 640
@@ -35,10 +36,10 @@ cv2.createTrackbar('Lower Thresh', 'thresh', 80, 255, nothing)
 cv2.createTrackbar('Upper Thresh', 'thresh', 255, 255, nothing) 
 
 cv2.namedWindow('HSV')
-cv2.createTrackbar('Lower H', 'HSV', 0, 180, nothing) 
-cv2.createTrackbar('Lower S', 'HSV', 50, 255, nothing) 
-cv2.createTrackbar('Lower V', 'HSV', 60, 255, nothing) 
-cv2.createTrackbar('Upper H', 'HSV', 180, 180, nothing)
+cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing) 
+cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
+cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
+cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
 cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
 cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
 
@@ -66,158 +67,151 @@ class CameraReceiver:
         self.drive_pub = rospy.Publisher("high_level/ackermann_cmd_mux/input/nav_0", AckermannDriveStamped, queue_size=1)
         self.drive_info = AckermannDriveStamped()
         self.flag = False
-        self.crosswalk_flag = False
+        self.barricade_flag = False
+
+        self.hsv_img = None
+        self.threshold = None
+        self.warp_img = None
+        self.histogram_debug = None
+
+        self.stopline_thresh = 14
+        self.diff = 0
+
+        self.is_debug = True
     
     def flag_callback(self, data):
-        self.crosswalk_flag = data.data
+        self.barricade_flag = data.data
 
     def callback(self, data):
         image = self.bridge.imgmsg_to_cv2(data, "bgr8")
-        warp_img, M, Minv = warp_image(image, warp_src, warp_dst, (warp_img_w, warp_img_h))
-        hsv_img, threshold, result = image_processing(warp_img)
+        self.warp_img, M, Minv = warp_image(image, warp_src, warp_dst, (warp_img_w, warp_img_h))
+        self.hsv_img, self.threshold, result = image_processing(self.warp_img)
+        histogram_result, self.histogram_debug = check_histogram(result, self.is_debug)
         contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        counter = 0
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)  
-            cv2.rectangle(warp_img, (x + 100, y), (x + w + 100, y + h), (0, 255, 0), 4) 
+        if not self.flag and histogram_result:
+            rospy.loginfo(f"{histogram_result}")
+
+        if not self.flag and self.barricade_flag and histogram_result is not None and histogram_result > self.stopline_thresh:
+            rospy.loginfo("START Detected - Starting Parking Thread")
+            self.flag = True
+            self.diff = (histogram_result - self.stopline_thresh) / 40
+
+            self.parking_sequence_logic()
+
+    def parking_sequence_logic(self):
+        # 전진에서 후진 변경 시 급발진 방지용
+        start_time = time.time()
+        while time.time() - start_time < 0.5: 
+            self.drive_info.drive.speed = 0.195
+            self.drive_info.drive.steering_angle = -0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 45도가 될 때까지 우회전
+        start_time = time.time()
+        while time.time() - start_time < 1.8-self.diff: 
+            self.drive_info.drive.speed = 0.2
+            self.drive_info.drive.steering_angle = -0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05)
+
+        # 전진에서 후진 변경 시 급발진 방지용
+        start_time = time.time()
+        while time.time() - start_time < 0.5: 
+            self.drive_info.drive.speed = -0.195
+            self.drive_info.drive.steering_angle = 0.085
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 핸들 정방향으로 후진
+        start_time = time.time()
+        while time.time() - start_time < 2.0: 
+            self.drive_info.drive.speed = -0.2
+            self.drive_info.drive.steering_angle = 0.085
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 핸들 오른쪽으로 돌려서 후진
+        start_time = time.time()
+        while time.time() - start_time < 1.6: 
+            self.drive_info.drive.speed = -0.2
+            self.drive_info.drive.steering_angle = -0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 후진에서 전진 변경 시 급발진 방지용
+        start_time = time.time()
+        while time.time() - start_time < 0.5: 
+            self.drive_info.drive.speed = 0.195
+            self.drive_info.drive.steering_angle = 0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 핸들 왼쪽으로 돌려서 전진 (주차 완료!)
+        start_time = time.time()
+        while time.time() - start_time < 0.25: 
+            self.drive_info.drive.speed = 0.2
+            self.drive_info.drive.steering_angle = 0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05)
+
+        # ========================================================
+        
+        # 전진에서 후진 변경 시 급발진 방지용
+        start_time = time.time()
+        while time.time() - start_time < 0.5: 
+            self.drive_info.drive.speed = -0.195
+            self.drive_info.drive.steering_angle = 0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # ========================================================
+
+        # 핸들 왼쪽으로 돌려서 후진
+        start_time = time.time()
+        while time.time() - start_time < 0.25: 
+            self.drive_info.drive.speed = -0.2
+            self.drive_info.drive.steering_angle = 0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05)
+
+        # 후진에서 전진 변경 시 급발진 방지용
+        start_time = time.time()
+        while time.time() - start_time < 0.5: 
+            self.drive_info.drive.speed = 0.195
+            self.drive_info.drive.steering_angle = -0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 핸들 오른쪽으로 돌려서 전진
+        start_time = time.time()
+        while time.time() - start_time < 1.6: 
+            self.drive_info.drive.speed = 0.2
+            self.drive_info.drive.steering_angle = -0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+        # 후진에서 전진 변경 시 급발진 방지용
+        start_time = time.time()
+        while time.time() - start_time < 0.5: 
+            self.drive_info.drive.speed = 0.195
+            self.drive_info.drive.steering_angle = 0.34
+            self.drive_pub.publish(self.drive_info)
+            time.sleep(0.05) 
+
+    def process(self):
+        if self.is_debug:
+            try:
+                cv2.imshow("warp", self.warp_img)
+                cv2.imshow("HSV", self.hsv_img)
+                cv2.imshow("thresh", self.threshold)
+                cv2.imshow("Histogram Debug", self.histogram_debug)
+                #cv2.imshow("result_PARK", result)
+                cv2.waitKey(1)
             
-            #if w > h and 60 < w < 160 and not self.flag and self.crosswalk_flag:
-            if w > h and 30 < w and h < 50 and not self.flag and self.crosswalk_flag: # 50 < w < 160
-                cv2.rectangle(warp_img, (x + 100, y), (x + w + 100, y + h), (0, 0, 255), 2) 
-                rospy.loginfo("START Detected")
-                self.flag = True
-
-                #전진 1.8 
-                start_time = time.time()
-                while time.time() - start_time < 0.6: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-                start_time = time.time()
-                while time.time() - start_time < 0.2: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = -0.25
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-                start_time = time.time()
-                while time.time() - start_time < 0.8: 
-                    self.drive_info.drive.speed = 0.3
-                    self.drive_info.drive.steering_angle = -0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-                self.drive_info.drive.speed = 0.0
-                self.drive_info.drive.steering_angle = 0.0
-                self.drive_pub.publish(self.drive_info)
-                time.sleep(0.05)
-                
-                #후진 
-                start_time = time.time()
-                while time.time() - start_time < 0.3: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-                start_time = time.time()
-                while time.time() - start_time < 1.2: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-                start_time = time.time()
-                while time.time() - start_time < 2.2: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = -0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
-
-                start_time = time.time()
-                while time.time() - start_time < 0.2: 
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-                self.drive_info.drive.speed = 0.0
-                self.drive_info.drive.steering_angle = 0.0
-                self.drive_pub.publish(self.drive_info)
-                time.sleep(0.05)
-
-                #전진
-                start_time = time.time()
-                while time.time() - start_time < 1.0: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.25
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
-
-                start_time = time.time()
-                while time.time() - start_time < 0.3: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
-                    
-                # 주차완료 5초
-                start_time = time.time()
-                while time.time() - start_time < 5.5: 
-                    self.drive_info.drive.speed = 0.0
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-                
-                start_time = time.time()
-                while time.time() - start_time < 1.2:
-                    self.drive_info.drive.speed = -0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
-
-                start_time = time.time()
-                while time.time() - start_time < 2.2: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = -0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
-
-                start_time = time.time()
-                while time.time() - start_time < 0.8: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)
-
-                start_time = time.time()
-                while time.time() - start_time < 1.8: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.45
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
-
-                start_time = time.time()
-                while time.time() - start_time < 1.5: 
-                    self.drive_info.drive.speed = 0.2
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05)  
-
-                while True:
-                    self.drive_info.drive.speed = 0.0 # 정지
-                    self.drive_info.drive.steering_angle = 0.0
-                    self.drive_pub.publish(self.drive_info)
-                    time.sleep(0.05) 
-
-        #cv2.imshow("warp", warp_img)
-        #cv2.imshow("HSV", hsv_img)
-        #cv2.imshow("thresh", threshold)
-        #cv2.imshow("result_PARK", result)
-        #cv2.waitKey(1)
+            except:
+                pass
 
 
 def warp_image(img, src, dst, size):
@@ -254,10 +248,74 @@ def image_processing(img):
     return hsv_img, threshold, result
 
 
+def check_histogram(binary_img, is_debug):
+    """
+    :param: (binary_img, is_debug)
+             - binary_img: 0과 255로 구성된 이진 이미지 (Gray scale)
+             - is_debug: 디버그 시각화 여부 
+    :return: (center_y, debug_img) 
+             - center_y: 검출된 가로선의 중앙 Y좌표 (검출 안되면 None)
+             - debug_img: 시각화 이미지
+    """
+    h, w = binary_img.shape
+    
+    # 디버깅용 컬러 이미지 생성
+    debug_img = None
+    if is_debug:
+        debug_img = cv2.cvtColor(binary_img, cv2.COLOR_GRAY2BGR)
+
+    # 1. 히스토그램 계산 (Y축 방향만)
+    # 행(Row) 단위로 픽셀 합계를 구함 -> 가로선 검출
+    margin = 60
+    shift = 45
+    histogram_y = np.sum(binary_img[:,margin+shift:w-margin+shift], axis=1) // 255 
+
+    # 2. 임계값 설정
+    THRESH_HORIZON_LEN = 20   # 가로선으로 인정할 최소 길이 (픽셀 수)
+    
+    # 3. 로직 판단 (중앙값 계산)
+    # 임계값을 넘는 행(row)의 인덱스들을 모두 찾음
+    valid_y_indices = np.where(histogram_y > THRESH_HORIZON_LEN)[0]
+    
+    center_y = None
+    if len(valid_y_indices) > 0:
+        # 검출된 모든 Y좌표들의 중앙값(Median) 계산 (정수로 변환)
+        center_y = int(np.median(valid_y_indices))
+
+    # ==========================================
+    # 4. 시각화 (Debugging)
+    # ==========================================
+
+    if is_debug:
+        # (1) Y축 히스토그램 그리기 - 빨간색 / 노란색
+        for y, val in enumerate(histogram_y):
+            # 기본 히스토그램 (빨간색)
+            cv2.line(debug_img, (0, y), (int(val), y), (0, 0, 255), 1)
+            
+            # 임계값을 넘은 유효한 가로선 구간 (노란색 하이라이트)
+            if val > THRESH_HORIZON_LEN:
+                cv2.line(debug_img, (0, y), (int(val), y), (0, 255, 255), 1)
+
+        # (2) 결과 표시
+        if center_y is not None:
+            # 검출된 중앙선 그리기 (보라색 굵은 선)
+            cv2.line(debug_img, (0, center_y), (w, center_y), (255, 0, 255), 2)
+            cv2.putText(debug_img, f"Center Y: {center_y}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        else:
+            cv2.putText(debug_img, "SEARCHING", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    return center_y, debug_img
+
+
 def run():
     rospy.init_node("parking_rect_pub")
     cam = CameraReceiver()
-    rospy.spin()
+    
+    rate = rospy.Rate(30)
+    
+    while not rospy.is_shutdown():
+        cam.process()
+        rate.sleep()
 
 
 if __name__ == "__main__":

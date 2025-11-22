@@ -35,6 +35,11 @@ RUN apt-get update && apt-get install -y \
     ros-noetic-robot-pose-ekf \
  && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get update && apt-get install -y \
+    ros-noetic-driver-base \
+    libncurses-dev \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 # Create user as uid 1001
