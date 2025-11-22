@@ -63,7 +63,7 @@ class ChoiceABSign(object):
 
         # 0: NONE → 아무것도 안 함 (이전 상태 유지)
         if sign_id == self.SIGN_NONE:
-            returnㅊ
+            return
 
         # LEFT / RIGHT 표지판 → 차선 선택
         if sign_id == self.left_sign_id:
