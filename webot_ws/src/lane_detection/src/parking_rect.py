@@ -79,6 +79,7 @@ class CameraReceiver:
         self.parking_start_time = 0.0
         self.parking_done = False
         self.min_range = 0.0
+        self.min_angle = 0.0
         self.is_sensor_step_done = False
         self.sensor_step_duration = 0.0
 
@@ -87,7 +88,7 @@ class CameraReceiver:
         self.warp_img = None
         self.histogram_debug = None
 
-        self.stopline_thresh = 14
+        self.stopline_thresh = 5
         self.diff = 0
 
         self.is_debug = True
@@ -120,10 +121,11 @@ class CameraReceiver:
 
         # 2. 극좌표(Polar) -> 직교좌표(Cartesian) 변환
         # angle = angle_min + (index * angle_increment)
-        min_angle = data.angle_min + (min_idx * data.angle_increment)
+        self.min_angle = data.angle_min + (min_idx * data.angle_increment)
+        # rospy.loginfo(f"min angle:\t{self.min_angle}")
         
-        object_x = self.min_range * math.cos(min_angle)
-        object_y = self.min_range * math.sin(min_angle)
+        object_x = self.min_range * math.cos(self.min_angle)
+        object_y = self.min_range * math.sin(self.min_angle)
 
         # 3. RViz용 Marker 메시지 생성 및 발행
         self.publish_marker(object_x, object_y, data.header.frame_id)
@@ -204,7 +206,8 @@ class CameraReceiver:
         step_start_time = total_time
 
         if not self.is_sensor_step_done:
-            if self.min_range > 0.40:
+            if self.min_angle < -1.5 or self.min_range < 0.32:
+                rospy.loginfo("DRIVE!!")
                 self.drive_info.drive.speed = 0.2
                 self.drive_info.drive.steering_angle = -0.34
                 self.drive_pub.publish(self.drive_info)
@@ -213,7 +216,11 @@ class CameraReceiver:
             else:
                 self.is_sensor_step_done = True
                 self.sensor_step_duration = dt - step_start_time
+
+                self.diff = self.min_range - 0.32
         total_time += self.sensor_step_duration
+
+        rospy.loginfo(f"{self.diff}")
 
         # 전진에서 후진 변경 시 급발진 방지용
         step_time = 0.5
@@ -226,7 +233,7 @@ class CameraReceiver:
             return 
 
         # 핸들 정방향으로 후진
-        step_time = 2.0
+        step_time = 1.9 + self.diff*20
         total_time += step_time
 
         if dt < total_time: 
@@ -236,7 +243,7 @@ class CameraReceiver:
             return 
 
         # 핸들 오른쪽으로 돌려서 후진
-        step_time = 1.6
+        step_time = 1.4 + self.diff
         total_time += step_time
 
         if dt < total_time: 
@@ -256,7 +263,7 @@ class CameraReceiver:
             return 
 
         # 핸들 왼쪽으로 돌려서 전진 (주차 완료!)
-        step_time = 0.25
+        step_time = 0.30
         total_time += step_time
 
         if dt < total_time: 
@@ -280,7 +287,7 @@ class CameraReceiver:
         # ========================================================
 
         # 핸들 왼쪽으로 돌려서 후진
-        step_time = 0.25
+        step_time = 0.30
         total_time += step_time
 
         if dt < total_time: 
