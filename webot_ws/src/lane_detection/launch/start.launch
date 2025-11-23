@@ -4,7 +4,7 @@
 	<node name="image_undistort" pkg="image_undistort_pkg" type="image_undistort_pkg_node" />
 	
 	<!-- AR_TRACK_ALVAR node -->
-	<!-- <node name="ar_track_alvar" pkg="ar_track_alvar" type="individualMarkersNoKinect" respawn="false">
+	<!-- <node name="ar_track_alvar" pkg="ar_track_alvar" type="individualMarkersNoKinect" respawn="true">
 		<param name="marker_size"           type="double" value="9.0" />
 		<param name="max_new_marker_error"  type="double" value="0.05" />
 		<param name="max_track_error"       type="double" value="0.05" />
@@ -53,7 +53,7 @@
 	</node>
 	
 	<node name="crosswalk" pkg="lane_detection" type="crosswalk.py" output="screen">
-		<param name"debug" value="true" />
+		<param name="debug" value="true" />
 	</node> 
 	
 	<node name="sign_detector_node" pkg="lane_detection" type="sign_detector_node.py" output="screen">
