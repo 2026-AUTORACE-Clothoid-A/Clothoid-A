@@ -44,6 +44,17 @@ min_speed = 0.4
 is_lane = True
 prev_lane = 1
 
+# 2025
+l_h = 20
+l_s = 70
+l_v = 100
+u_h = 35
+u_s = 255
+u_v = 255
+
+lower_thresh = 50
+upper_thresh = 100
+
 def nothing(x):
     pass
 
@@ -96,6 +107,9 @@ warp_dst = np.array([
 
 class CameraReceiver:
     def __init__(self):
+        global l_h, l_s, l_v, u_h, u_s, u_v
+        global lower_thresh, upper_thresh
+
         rospy.loginfo("Camera Receiver Object is Created")
         self.bridge = CvBridge()
         rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.image_callback)
@@ -116,15 +130,15 @@ class CameraReceiver:
             cv2.namedWindow('HSV')
             cv2.namedWindow('Canny')
 
-            cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing)
-            cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
-            cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
-            cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
-            cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
-            cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
+            cv2.createTrackbar('Lower H', 'HSV', l_h, 180, nothing)
+            cv2.createTrackbar('Lower S', 'HSV', l_s, 255, nothing) 
+            cv2.createTrackbar('Lower V', 'HSV', l_v, 255, nothing) 
+            cv2.createTrackbar('Upper H', 'HSV', u_h, 180, nothing)
+            cv2.createTrackbar('Upper S', 'HSV', u_s, 255, nothing)
+            cv2.createTrackbar('Upper V', 'HSV', u_v, 255, nothing)
 
-            cv2.createTrackbar('Lower Thresh', 'Canny', 50, 255, nothing) # 50 # 0 
-            cv2.createTrackbar('Upper Thresh', 'Canny', 100, 255, nothing) # 100 # 150
+            cv2.createTrackbar('Lower Thresh', 'Canny', lower_thresh, 255, nothing) # 50 # 0 
+            cv2.createTrackbar('Upper Thresh', 'Canny', upper_thresh, 255, nothing) # 100 # 150
 
     '''
     def restore_speed_stop(self):
@@ -170,6 +184,9 @@ class CameraReceiver:
 
     def image_callback(self, data):
         global speed, lane_flag, prev_lane
+        global l_h, l_s, l_v, u_h, u_s, u_v
+        global lower_thresh, upper_thresh
+
         self.image = self.bridge.imgmsg_to_cv2(data, "bgr8")
         blur = cv2.GaussianBlur(self.image, (5, 5), 0)
 
@@ -186,22 +203,13 @@ class CameraReceiver:
         # HSV ########################
         hsv = cv2.cvtColor(blur, cv2.COLOR_BGR2HSV)
 
-        l_h = cv2.getTrackbarPos('Lower H', 'HSV')
-        l_s = cv2.getTrackbarPos('Lower S', 'HSV')
-        l_v = cv2.getTrackbarPos('Lower V', 'HSV')
-        u_h = cv2.getTrackbarPos('Upper H', 'HSV')
-        u_s = cv2.getTrackbarPos('Upper S', 'HSV')
-        u_v = cv2.getTrackbarPos('Upper V', 'HSV')
-
         lower_white = np.array([l_h, l_s, l_v])
         upper_white = np.array([u_h, u_s, u_v])
         self.hsv_img = cv2.inRange(hsv, lower_white, upper_white)
         ###############################
 
         # Canny ########################
-        low_canny_thresh = cv2.getTrackbarPos('Lower Thresh', 'Canny')
-        high_canny_thresh = cv2.getTrackbarPos('Upper Thresh', 'Canny')
-        self.canny_img = cv2.Canny(blur, low_canny_thresh, high_canny_thresh)
+        self.canny_img = cv2.Canny(blur, lower_thresh, upper_thresh)
         ###############################
 
         '''
@@ -310,25 +318,18 @@ def image_processing_canny(img):
 
 
 def image_processing(img):
+    global l_h, l_s, l_v, u_h, u_s, u_v
+    global lower_thresh, upper_thresh
+    
     blur = cv2.GaussianBlur(img, (5, 5), 0)
 
     # Thresh ########################
     gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
-
-    low_thresh = cv2.getTrackbarPos('Lower Thresh', 'Thresh')
-    high_thresh = cv2.getTrackbarPos('Upper Thresh', 'Thresh')
-    _, thresh_img = cv2.threshold(gray, low_thresh, high_thresh, cv2.THRESH_BINARY)
+    _, thresh_img = cv2.threshold(gray, lower_thresh, upper_thresh, cv2.THRESH_BINARY)
     ###############################
 
     # HSV ########################
     hsv = cv2.cvtColor(blur, cv2.COLOR_BGR2HSV)
-
-    l_h = cv2.getTrackbarPos('Lower H', 'HSV')
-    l_s = cv2.getTrackbarPos('Lower S', 'HSV')
-    l_v = cv2.getTrackbarPos('Lower V', 'HSV')
-    u_h = cv2.getTrackbarPos('Upper H', 'HSV')
-    u_s = cv2.getTrackbarPos('Upper S', 'HSV')
-    u_v = cv2.getTrackbarPos('Upper V', 'HSV')
 
     lower_white = np.array([l_h, l_s, l_v])
     upper_white = np.array([u_h, u_s, u_v])
