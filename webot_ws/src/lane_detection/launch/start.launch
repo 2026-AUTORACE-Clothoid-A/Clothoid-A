@@ -67,6 +67,8 @@
 
 	<!-- <node name="arrow_cluster_node" pkg="roundAboutNav" type="arrow_cluster_node" output="screen" />  -->
 	
-	<node name="parking_rect" pkg="lane_detection" type="parking_rect.py" output="screen" /> 
+	<node name="parking_rect" pkg="lane_detection" type="parking_rect.py" output="screen"> 
+		<param name="debug" value="true" />
+	</node>
 	
 </launch>

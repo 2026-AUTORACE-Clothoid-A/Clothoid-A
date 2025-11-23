@@ -28,20 +28,19 @@ y_l = 40
 temp1 = 40
 temp2 = 80
 
+# 2025
+l_h = 20
+l_s = 70
+l_v = 100
+u_h = 35
+u_s = 255
+u_v = 255
+
+lower_thresh = 80
+upper_thresh = 255
+
 def nothing(x):
     pass
-
-cv2.namedWindow('thresh')
-cv2.createTrackbar('Lower Thresh', 'thresh', 80, 255, nothing) 
-cv2.createTrackbar('Upper Thresh', 'thresh', 255, 255, nothing) 
-
-cv2.namedWindow('HSV')
-cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing) 
-cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
-cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
-cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
-cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
-cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
 
 warp_src = np.array([
     [x_h, Height//2 + y_h], # 좌상단
@@ -60,7 +59,13 @@ warp_dst = np.array([
 
 class CameraReceiver:
     def __init__(self):
+        global l_h, l_s, l_v, u_h, u_s, u_v
+        global lower_thresh, upper_thresh
+
         rospy.loginfo("Parking Receiver Object is Created")
+
+        self.is_debug = rospy.get_param('~debug', True)
+
         self.bridge = CvBridge()
         rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.callback)
         rospy.Subscriber("/parking_flag", Bool, self.flag_callback)
@@ -77,7 +82,18 @@ class CameraReceiver:
         self.stopline_thresh = 14
         self.diff = 0
 
-        self.is_debug = True
+        if self.is_debug:
+            cv2.namedWindow('thresh')
+            cv2.createTrackbar('Lower Thresh', 'thresh', lower_thresh, 255, nothing) 
+            cv2.createTrackbar('Upper Thresh', 'thresh', upper_thresh, 255, nothing) 
+
+            cv2.namedWindow('HSV')
+            cv2.createTrackbar('Lower H', 'HSV', l_h, 180, nothing) 
+            cv2.createTrackbar('Lower S', 'HSV', l_s, 255, nothing) 
+            cv2.createTrackbar('Lower V', 'HSV', l_v, 255, nothing) 
+            cv2.createTrackbar('Upper H', 'HSV', u_h, 180, nothing)
+            cv2.createTrackbar('Upper S', 'HSV', u_s, 255, nothing)
+            cv2.createTrackbar('Upper V', 'HSV', u_v, 255, nothing)
     
     def flag_callback(self, data):
         self.barricade_flag = data.data
@@ -90,10 +106,12 @@ class CameraReceiver:
         contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         if not self.flag and histogram_result:
-            rospy.loginfo(f"{histogram_result}")
+            if self.is_debug:
+                rospy.loginfo(f"{histogram_result}")
 
         if not self.flag and self.barricade_flag and histogram_result is not None and histogram_result > self.stopline_thresh:
-            rospy.loginfo("START Detected - Starting Parking Thread")
+            if self.is_debug:
+                rospy.loginfo("START Detected - Starting Parking Thread")
             self.flag = True
             self.diff = (histogram_result - self.stopline_thresh) / 40
 
@@ -224,14 +242,11 @@ def warp_image(img, src, dst, size):
 
 
 def image_processing(img):
+    global l_h, l_s, l_v, u_h, u_s, u_v
+    global lower_thresh, upper_thresh
+
     blur = cv2.GaussianBlur(img, (5, 5), 0)
     hsv = cv2.cvtColor(blur, cv2.COLOR_BGR2HSV)
-    l_h = cv2.getTrackbarPos('Lower H', 'HSV')
-    l_s = cv2.getTrackbarPos('Lower S', 'HSV')
-    l_v = cv2.getTrackbarPos('Lower V', 'HSV')
-    u_h = cv2.getTrackbarPos('Upper H', 'HSV')
-    u_s = cv2.getTrackbarPos('Upper S', 'HSV')
-    u_v = cv2.getTrackbarPos('Upper V', 'HSV')
 
     lower_white = np.array([l_h, l_s, l_v])
     upper_white = np.array([u_h, u_s, u_v])
@@ -239,8 +254,8 @@ def image_processing(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) 
     blurred = cv2.GaussianBlur(gray, (5, 5), 0) 
-    low_thresh = cv2.getTrackbarPos('Lower Thresh', 'thresh')
-    high_thresh = cv2.getTrackbarPos('Upper Thresh', 'thresh')
+    low_thresh = lower_thresh
+    high_thresh = upper_thresh
     _, threshold = cv2.threshold(blurred, low_thresh, high_thresh, cv2.THRESH_BINARY) 
 
     result = cv2.bitwise_and(hsv_img, threshold)
