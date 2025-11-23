@@ -4,7 +4,7 @@
 	<node name="image_undistort" pkg="image_undistort_pkg" type="image_undistort_pkg_node" />
 	
 	<!-- AR_TRACK_ALVAR node -->
-	<!-- <node name="ar_track_alvar" pkg="ar_track_alvar" type="individualMarkersNoKinect" respawn="false">
+	<!-- <node name="ar_track_alvar" pkg="ar_track_alvar" type="individualMarkersNoKinect" respawn="true">
 		<param name="marker_size"           type="double" value="9.0" />
 		<param name="max_new_marker_error"  type="double" value="0.05" />
 		<param name="max_track_error"       type="double" value="0.05" />
@@ -45,19 +45,32 @@
 	<node name="lane_detection" pkg="lane_detection" type="lane_main.py" output="screen">
 		<param name="debug" value="true" />
 	</node>
-
-	<node name="barricade_detector" pkg="barricade_detector" type="barricade_detector.py" output="screen" />
 	
-	<node name="red_road" pkg="red_road" type="red_road_node" />
+	<node name="barricade_detector" pkg="barricade_detector" type="barricade_detector.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
 	
-	<node name="crosswalk" pkg="lane_detection" type="crosswalk.py" output="screen" /> 
+	<node name="red_road" pkg="red_road" type="red_road_node" output="screen">
+		<param name="debug" value="true" />
+	</node>
 	
-	<!-- <node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen" /> -->
+	<node name="crosswalk" pkg="lane_detection" type="crosswalk.py" output="screen">
+		<param name="debug" value="true" />
+	</node> 
+	
+	<node name="sign_detector_node" pkg="lane_detection" type="sign_detector_node.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
+	<node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
 	
 	<!-- <node name="round_about_node" pkg="roundAboutNav" type="round_about_node" output="screen" /> -->
 
 	<!-- <node name="arrow_cluster_node" pkg="roundAboutNav" type="arrow_cluster_node" output="screen" />  -->
 	
-	<node name="parking_rect" pkg="lane_detection" type="parking_rect.py" output="screen" /> 
+	<node name="parking_rect" pkg="lane_detection" type="parking_rect.py" output="screen"> 
+		<param name="debug" value="true" />
+	</node>
 	
 </launch>
