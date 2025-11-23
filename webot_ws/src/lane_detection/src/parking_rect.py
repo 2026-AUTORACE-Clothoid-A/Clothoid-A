@@ -194,8 +194,8 @@ class CameraReceiver:
                 rospy.loginfo(f"{histogram_result}")
 
         if not self.is_parking_active and self.barricade_flag and histogram_result is not None and histogram_result > self.stopline_thresh:
-          if self.is_debug:
-            rospy.loginfo("START Detected")
+            if self.is_debug:
+                rospy.loginfo("START Detected")
             self.is_parking_active = True
             
             self.diff = (histogram_result - self.stopline_thresh) / 40

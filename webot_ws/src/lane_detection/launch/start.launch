@@ -4,7 +4,7 @@
 	<node name="image_undistort" pkg="image_undistort_pkg" type="image_undistort_pkg_node" />
 	
 	<!-- AR_TRACK_ALVAR node -->
-	<!-- <node name="ar_track_alvar" pkg="ar_track_alvar" type="individualMarkersNoKinect" respawn="true">
+	<!-- <node name="ar_track_alvar" pkg="ar_track_alvar" type="individualMarkersNoKinect" respawn="false">
 		<param name="marker_size"           type="double" value="9.0" />
 		<param name="max_new_marker_error"  type="double" value="0.05" />
 		<param name="max_track_error"       type="double" value="0.05" />
@@ -20,7 +20,7 @@
 		<param name="~scan_topic" value="scan" />
 		<param name="~frequency" value="40.0" />
 		<param name="~show_lines" value="true" />
-		<param name="~least_thresh" value="0.06" />
+		<param name="~least_thresh" value="0.2" />
 		<param name="~min_line_length" value="0.3" />
 		<param name="~predict_distance" value="0.1" />
 		<param name="~seed_line_points" value="6" />
@@ -43,34 +43,34 @@
 	<include file="$(find rubber_cone)/launch/rubber_cone.launch" />
 
 	<node name="lane_detection" pkg="lane_detection" type="lane_main.py" output="screen">
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node>
 	
 	<node name="barricade_detector" pkg="barricade_detector" type="barricade_detector.py" output="screen">
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node>
 	
 	<node name="red_road" pkg="red_road" type="red_road_node" output="screen">
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node>
 	
 	<node name="crosswalk" pkg="lane_detection" type="crosswalk.py" output="screen">
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node> 
 	
 	<node name="sign_detector_node" pkg="lane_detection" type="sign_detector_node.py" output="screen">
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node>
 	<node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen">
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node>
 	
-	<!-- <node name="round_about_node" pkg="roundAboutNav" type="round_about_node" output="screen" /> -->
+	<node name="rotary" pkg="rotary" type="rotary.py" output="screen" />
 
 	<!-- <node name="arrow_cluster_node" pkg="roundAboutNav" type="arrow_cluster_node" output="screen" />  -->
 	
 	<node name="parking_rect" pkg="lane_detection" type="parking_rect.py" output="screen"> 
-		<param name="debug" value="true" />
+		<param name="debug" value="false" />
 	</node>
 	
 </launch>

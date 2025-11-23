@@ -7,7 +7,7 @@
             output="screen">
 
         <param name="target_frame"   value="base_link" />
-        <param name="stanley_k_gain" value="0.5" />
+        <param name="stanley_k_gain" value="1.0" />
         <param name="max_steer_deg"  value="21.0" />
         <param name="tunnel_speed"   value="0.4" />
     </node>

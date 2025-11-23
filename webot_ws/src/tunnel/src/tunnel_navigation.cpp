@@ -2,13 +2,16 @@
 
 #include <ackermann_msgs/AckermannDriveStamped.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <std_msgs/Bool.h>
 
 TunnelNavigationNode::TunnelNavigationNode()
 :   nh_(),
     private_nh_("~"),
     tf_buffer_(),
     tf_listener_(tf_buffer_),
-    is_tunnel_env_(false),
+    mission_started_(false),
+    mission_finished_(false),
+    has_progress_(false),
     last_steering_angle_(0.0)
 {
     // 파라미터 로드
@@ -23,8 +26,11 @@ TunnelNavigationNode::TunnelNavigationNode()
 
     // 구독/발행
     line_sub_ = nh_.subscribe("line_segments", 1,
-                                &TunnelNavigationNode::lineCallback, this);
-    cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("tunnel_cmd", 1);
+                              &TunnelNavigationNode::lineCallback, this);
+    cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_5", 1);
+
+    // 터널 미션 완료 여부 알리는 토픽 (bool)
+    tunnel_mission_pub_ = nh_.advertise<std_msgs::Bool>("tunnel_mission_done", 1);
 
     ROS_INFO_STREAM("TunnelNavigationNode initialized. target_frame=" << target_frame_
                     << ", stanley_k_gain=" << stanley_k_gain_
@@ -37,9 +43,9 @@ void TunnelNavigationNode::spin()
     ros::spin();
 }
 
-// 원점(0,0)에서 p0-p1을 지나는 직선까지의 수직 거리
+// 원점(0,0)에서 p0-p1을 지나는 직선까지의 수직 거리 (무한 직선 기준)
 double TunnelNavigationNode::perpendicularDistanceToLine(const Eigen::Vector2d& p0,
-                                                   const Eigen::Vector2d& p1) const
+                                                         const Eigen::Vector2d& p1) const
 {
     Eigen::Vector2d v = p1 - p0;
     double denom = v.norm();
@@ -49,6 +55,24 @@ double TunnelNavigationNode::perpendicularDistanceToLine(const Eigen::Vector2d& 
     // 2D에서 |p0 x p1| / |p1 - p0|
     double num = std::abs(p0.x() * p1.y() - p0.y() * p1.x());
     return num / denom;
+}
+
+// 원점(0,0)에서 선분 [p0, p1] 까지의 최소 유클리디안 거리
+double TunnelNavigationNode::euclideanDistanceToSegment(const Eigen::Vector2d& p0,
+                                                        const Eigen::Vector2d& p1) const
+{
+    Eigen::Vector2d v = p1 - p0;
+    double len2 = v.squaredNorm();
+    if (len2 < 1e-12)
+        return p0.norm();  // 거의 점인 경우
+
+    // 선분 [p0, p1] 위에서 원점에 가장 가까운 점의 파라미터 t (0~1)
+    double t = -p0.dot(v) / len2;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    Eigen::Vector2d proj = p0 + t * v;
+    return proj.norm();
 }
 
 // (1,0) 과 라인 방향 각도가 angle_thresh_rad 이내인지
@@ -74,12 +98,11 @@ bool TunnelNavigationNode::isAlignedWithHeading(
 
 void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::ConstPtr& msg)
 {
-    // 이전 데이터 초기화
+    // 이전 데이터 초기화 (라인 리스트만)
     segments_base_.clear();
     left_segments_.clear();
     right_segments_.clear();
     unknown_segments_.clear();
-    is_tunnel_env_ = false;
 
     const std::string& src_frame = msg->header.frame_id;
     if (src_frame.empty())
@@ -155,69 +178,167 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
         }
     }
 
-    // 2) 터널 환경 판단 + 양쪽에서 "가장 가까운" 라인 선택
-    bool left_ok  = false;
-    bool right_ok = false;
+    // 2) 터널 환경 세분화 판단 + 제어에 사용할 대표 선 선택
+
+    bool left_ok_for_control  = false;
+    bool right_ok_for_control = false;
 
     std::pair<Eigen::Vector2d, Eigen::Vector2d> best_left_seg;
     std::pair<Eigen::Vector2d, Eigen::Vector2d> best_right_seg;
-    double best_left_dist  = std::numeric_limits<double>::max();
-    double best_right_dist = std::numeric_limits<double>::max();
+    double best_left_dist_euc  = std::numeric_limits<double>::max();
+    double best_right_dist_euc = std::numeric_limits<double>::max();
 
-    // 왼쪽 라인들: 진행 방향과 10도 이내 + 원점 수직 거리 최소
+    // 시작/종료 조건용 플래그
+    bool has_left_start_line = false;  // x>0 & aligned
+    bool has_right_start_line = false;
+
+    bool has_left_end_line = false;    // x<0 & aligned
+    bool has_right_end_line = false;
+
+        // 왼쪽 라인 처리
     for (const auto& seg : left_segments_)
     {
         if (!isAlignedWithHeading(seg))
             continue;
 
-        double d = perpendicularDistanceToLine(seg.first, seg.second);
-        if (d < best_left_dist)
+        const Eigen::Vector2d& p0 = seg.first;
+        const Eigen::Vector2d& p1 = seg.second;
+
+        // 제어용: 원점과의 유클리디안 거리 최소인 선분 선택
+        double d_euc = euclideanDistanceToSegment(p0, p1);
+        if (d_euc < best_left_dist_euc)
         {
-            best_left_dist = d;
-            best_left_seg  = seg;
-            left_ok = true;
+            best_left_dist_euc = d_euc;
+            best_left_seg      = seg;
+            left_ok_for_control = true;
+        }
+
+        // 시작 판단용: x>0 & aligned (전방)
+        if (p0.x() > 0.0 && p1.x() > 0.0)
+        {
+            has_left_start_line = true;
+        }
+
+        // 종료 판단용: x<0 & aligned (후방)
+        if (p0.x() < 0.0 && p1.x() < 0.0)
+        {
+            has_left_end_line = true;
         }
     }
 
-    // 오른쪽 라인들: 진행 방향과 10도 이내 + 원점 수직 거리 최소
+    // 오른쪽 라인 처리
     for (const auto& seg : right_segments_)
     {
         if (!isAlignedWithHeading(seg))
             continue;
 
-        double d = perpendicularDistanceToLine(seg.first, seg.second);
-        if (d < best_right_dist)
+        const Eigen::Vector2d& p0 = seg.first;
+        const Eigen::Vector2d& p1 = seg.second;
+
+        // 제어용: 원점과의 유클리디안 거리 최소인 선분 선택
+        double d_euc = euclideanDistanceToSegment(p0, p1);
+        if (d_euc < best_right_dist_euc)
         {
-            best_right_dist = d;
-            best_right_seg  = seg;
-            right_ok = true;
+            best_right_dist_euc = d_euc;
+            best_right_seg      = seg;
+            right_ok_for_control = true;
+        }
+
+        // 시작 판단용: x>0 & aligned (전방)
+        if (p0.x() > 0.0 && p1.x() > 0.0)
+        {
+            has_right_start_line = true;
+        }
+
+        // 종료 판단용: x<0 & aligned (후방)
+        if (p0.x() < 0.0 && p1.x() < 0.0)
+        {
+            has_right_end_line = true;
         }
     }
 
-    is_tunnel_env_ = (left_ok && right_ok);
+    // 현재 프레임 기준 start/progress/end 조건 ------------------------
+    // 시작: 전방에 좌우 라인이 있어야 함
+    bool start_condition_now =
+        has_left_start_line && has_right_start_line;
+
+    // 진행: 이미 시작한 상태 + 좌우에 제어에 쓸 라인이 존재
+    bool progress_condition_now =
+        mission_started_ && left_ok_for_control && right_ok_for_control;
+
+    // 종료: 이미 진행한 상태 + 후방에만 좌우 라인이 존재
+    //  -> x<0 라인은 있어야 하고, x>0 라인은 없어야 함
+    bool end_condition_now =
+        has_progress_
+        && has_left_end_line && has_right_end_line
+        && !has_left_start_line && !has_right_start_line;
+
+    // ---- 미션 상태 업데이트 ----
+    if (!mission_started_ && start_condition_now)
+    {
+        mission_started_ = true;
+        ROS_INFO("TunnelNavigationNode: tunnel mission START detected.");
+    }
+
+    if (mission_started_ && progress_condition_now && !has_progress_)
+    {
+        has_progress_ = true;
+        ROS_INFO("TunnelNavigationNode: tunnel mission PROGRESS detected.");
+    }
+
+    if (!mission_finished_ && end_condition_now)
+    {
+        mission_finished_ = true;
+        ROS_INFO("TunnelNavigationNode: tunnel mission END detected.");
+    }
 
     ROS_DEBUG_STREAM("TunnelNavigationNode: total="   << segments_base_.size()
-                    << " left="               << left_segments_.size()
-                    << " right="              << right_segments_.size()
-                    << " unknown="            << unknown_segments_.size()
-                    << " tunnel_env="         << (is_tunnel_env_ ? "true" : "false"));
+                     << " left="               << left_segments_.size()
+                     << " right="              << right_segments_.size()
+                     << " unknown="            << unknown_segments_.size()
+                     << " start_now="          << (start_condition_now ? 1 : 0)
+                     << " progress_now="       << (progress_condition_now ? 1 : 0)
+                     << " end_now="            << (end_condition_now ? 1 : 0)
+                     << " mission_started="    << (mission_started_ ? 1 : 0)
+                     << " has_progress="       << (has_progress_ ? 1 : 0)
+                     << " mission_finished="   << (mission_finished_ ? 1 : 0));
 
-    if (!is_tunnel_env_)
+    // ---- 터널 미션 완료 여부(bool) 발행 ----
+    std_msgs::Bool mission_msg;
+    mission_msg.data = mission_finished_;
+    tunnel_mission_pub_.publish(mission_msg);
+
+    // ---- 제어 발행 여부 결정 ----
+    // "터널 미션을 시작하지 않는다면 False를 발행하면서 아무것도 안 하고"
+    // "시작하고 진행 중이면 False를 발행하면서 제어 발행"
+    // "종료라면 True를 발행하고 아무것도 하지 말기"
+    bool mission_in_control = mission_started_ && !mission_finished_;
+
+    if (!mission_in_control)
     {
-        // 터널이 아니면 조향 명령 발행 X
-        ROS_INFO_STREAM("TunnelNavigationNode: not in tunnel environment");
+        // 제어 발행 X
+        ROS_INFO_THROTTLE(1.0, "TunnelNavigationNode: mission not in control phase.");
+        return;
+    }
+
+    // 여기까지 왔으면: mission_started_ == true, mission_finished_ == false
+    // 그리고 제어에 사용할 대표 선이 있는지 확인
+    if (!left_ok_for_control || !right_ok_for_control)
+    {
+        ROS_WARN_THROTTLE(1.0, "TunnelNavigationNode: no valid left/right line for control.");
         return;
     }
 
     // 3) 스탠리 형태로 조향각 계산
 
-    double d_left  = best_left_dist;
-    double d_right = best_right_dist;
+    // 선택된 선분에 대해 "수직 거리" 계산
+    double d_left  = perpendicularDistanceToLine(best_left_seg.first,  best_left_seg.second);
+    double d_right = perpendicularDistanceToLine(best_right_seg.first, best_right_seg.second);
 
     // 두 벽 사이 중앙에서 얼마나 벗어났는지 근사
     // d_left == d_right 이면 중앙 → cross_track_error = 0
     double cross_track_error = 0.5 * (d_left - d_right);
-    // 부호 방향이 반대로 느껴지면 d_left - d_right로 바꿔보면 됨
+    // 필요 시 부호 바꾸고 싶으면 0.5 * (d_right - d_left) 로 변경
 
     // 벽 방향 벡터
     Eigen::Vector2d dir_left  = best_left_seg.second  - best_left_seg.first;
@@ -253,9 +374,11 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
 
     // 스탠리 cross-track steering (속도는 일단 command_speed_ 사용)
     double speed = command_speed_;
-    double cross_track_steering = std::atan2(stanley_k_gain_ * cross_track_error, speed + 0.1);
+    double cross_track_steering =
+        std::atan2(stanley_k_gain_ * cross_track_error, speed + 0.1);
 
     double steering_angle = heading_error + cross_track_steering;
+
     ROS_INFO_STREAM("Tunnel heading_error: " << heading_error * 180.0 / M_PI   << " [deg]");
     ROS_INFO_STREAM("Tunnel cross_track_steering: " << cross_track_steering * 180.0 / M_PI   << " [deg]");
 

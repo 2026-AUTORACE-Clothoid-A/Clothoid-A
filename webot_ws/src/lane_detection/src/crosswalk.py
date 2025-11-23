@@ -153,7 +153,7 @@ class CameraReceiver:
                     #self.parking_msg.data = True
                     #self.parking_pub.publish(self.parking_msg)
                    
-                    threading.Timer(6.5, self.curv_timer).start() # 6.5초 후 교차로에서 정지
+                    # threading.Timer(6.5, self.curv_timer).start() # 6.5초 후 교차로에서 정지
                     #threading.Timer(15, self.reset_stop_publishing).start() # 15초 후 코드 재실행 가능
                     
         # #cv2.imshow("warp", warp_img)
