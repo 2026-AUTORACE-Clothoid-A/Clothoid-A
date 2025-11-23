@@ -17,6 +17,10 @@ const double PUBLISH_TIMEOUT = 0.5;        // 발행 타임아웃 시간 (초)
 class RedRoadNode {
 public:
     RedRoadNode() : DetectFlag(false) {
+        ros::NodeHandle pnh("~");
+
+        pnh.param<bool>("debug", is_debug, true);
+
         // Publisher 생성
         pub = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_2", 1);
         // Subscriber 생성
@@ -83,8 +87,12 @@ public:
                     for (const auto& pt : red_contours[i]) {
                         adjusted_contour.emplace_back(pt.x + roi.x, pt.y + roi.y);
                     }
-                    ROS_INFO("Red Road detected!");
-                    cv::putText(frame_raw, "Red Road Detected", cv::Point(50, 50), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
+
+                    if (is_debug)
+                    {
+                        ROS_INFO("Red Road detected!");
+                        cv::putText(frame_raw, "Red Road Detected", cv::Point(50, 50), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
+                    }
                     drive_info.drive.speed = RED_ROAD_SPEED; // 빨간색 라인이 발견되었을 때 속도
                     cv::drawContours(frame_raw, std::vector<std::vector<cv::Point>>{adjusted_contour}, -1, cv::Scalar(0, 255, 0), 3); // 초록색으로 그림
                     break;
@@ -106,8 +114,12 @@ public:
                         for (const auto& pt : blue_contours[i]) {
                             adjusted_contour.emplace_back(pt.x + roi.x, pt.y + roi.y);
                         }
-                        ROS_INFO("Blue Road detected!");
-                        cv::putText(frame_raw, "Blue Road Detected", cv::Point(50, 80), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 0, 0), 2);
+
+                        if (is_debug)
+                        {
+                            ROS_INFO("Blue Road detected!");
+                            cv::putText(frame_raw, "Blue Road Detected", cv::Point(50, 80), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 0, 0), 2);
+                        }
                         drive_info.drive.speed = BLUE_ROAD_SPEED; // 파란색 라인이 발견되었을 때 속도
                         cv::drawContours(frame_raw, std::vector<std::vector<cv::Point>>{adjusted_contour}, -1, cv::Scalar(255, 255, 0), 3); // 노란색으로 그림
                         break;
@@ -122,7 +134,8 @@ public:
             } else {
                 DetectFlag = false;
                 if ((ros::Time::now() - last_detect_time).toSec() > DETECT_TIMEOUT) {
-                    ROS_INFO("No Colored Road detected for 1 seconds!");
+                    if (is_debug)
+                        ROS_INFO("No Colored Road detected for 1 seconds!");
                     //drive_info.drive.speed = 0.0; // 2초 동안 감지 안된 경우 정지
                 }
                 cv::putText(frame_raw, "No Colored Road Detected", cv::Point(50, 50), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
@@ -157,6 +170,7 @@ private:
     ackermann_msgs::AckermannDriveStamped drive_info;
 
     bool DetectFlag;
+    bool is_debug;
 };
 
 int main(int argc, char** argv) {

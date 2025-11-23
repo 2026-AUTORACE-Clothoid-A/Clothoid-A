@@ -43,12 +43,18 @@
 	<include file="$(find rubber_cone)/launch/rubber_cone.launch" />
 
 	<node name="lane_detection" pkg="lane_detection" type="lane_main.py" output="screen" />
-
-	<node name="barricade_detector" pkg="barricade_detector" type="barricade_detector.py" output="screen" />
 	
-	<node name="red_road" pkg="red_road" type="red_road_node" />
+	<node name="barricade_detector" pkg="barricade_detector" type="barricade_detector.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
 	
-	<node name="crosswalk" pkg="lane_detection" type="crosswalk.py" output="screen" /> 
+	<node name="red_road" pkg="red_road" type="red_road_node" output="screen">
+		<param name="debug" value="true" />
+	</node>
+	
+	<node name="crosswalk" pkg="lane_detection" type="crosswalk.py" output="screen">
+		<param name"debug" value="true" />
+	</node> 
 	
 	<!-- <node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen" /> -->
 	
