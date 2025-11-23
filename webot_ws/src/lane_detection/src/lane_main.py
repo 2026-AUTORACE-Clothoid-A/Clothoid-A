@@ -47,18 +47,18 @@ prev_lane = 1
 def nothing(x):
     pass
 
-cv2.namedWindow('HSV')
+# cv2.namedWindow('HSV')
 #cv2.namedWindow('Thresh')
-cv2.namedWindow('Canny')
+# cv2.namedWindow('Canny')
 #cv2.namedWindow('Yellow')
 
-# HSV
-cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing)
-cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
-cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
-cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
-cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
-cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
+# # HSV
+# cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing)
+# cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
+# cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
+# cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
+# cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
+# cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
 
 '''
 # Threshlod
@@ -66,9 +66,9 @@ cv2.createTrackbar('Lower Thresh', 'Thresh', 200, 255, nothing)
 cv2.createTrackbar('Upper Thresh', 'Thresh', 255, 255, nothing) 
 '''
 
-# Canny
-cv2.createTrackbar('Lower Thresh', 'Canny', 50, 255, nothing) # 50 # 0 
-cv2.createTrackbar('Upper Thresh', 'Canny', 100, 255, nothing) # 100 # 150
+# # Canny
+# cv2.createTrackbar('Lower Thresh', 'Canny', 50, 255, nothing) # 50 # 0 
+# cv2.createTrackbar('Upper Thresh', 'Canny', 100, 255, nothing) # 100 # 150
 
 '''
 # Yellow
@@ -98,8 +98,8 @@ class CameraReceiver:
     def __init__(self):
         rospy.loginfo("Camera Receiver Object is Created")
         self.bridge = CvBridge()
-        rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.callback)
-        rospy.Subscriber("/direction_flag", Int32, self.flag_callback)
+        rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.image_callback)
+        rospy.Subscriber("/direction_flag", Int32, self.choiceab_callback)
         rospy.Subscriber("/parking_flag", Bool, self.parking_callback)
         self.drive_pub = rospy.Publisher("high_level/ackermann_cmd_mux/input/nav_6", AckermannDriveStamped, queue_size=1)
         self.drive_info = AckermannDriveStamped()
@@ -109,6 +109,22 @@ class CameraReceiver:
         # 2025
         self.hsv_img = None
         self.canny_img = None
+
+        self.is_debug = rospy.get_param('~debug', True)
+
+        if self.is_debug:
+            cv2.namedWindow('HSV')
+            cv2.namedWindow('Canny')
+
+            cv2.createTrackbar('Lower H', 'HSV', 20, 180, nothing)
+            cv2.createTrackbar('Lower S', 'HSV', 70, 255, nothing) 
+            cv2.createTrackbar('Lower V', 'HSV', 100, 255, nothing) 
+            cv2.createTrackbar('Upper H', 'HSV', 35, 180, nothing)
+            cv2.createTrackbar('Upper S', 'HSV', 255, 255, nothing)
+            cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing)
+
+            cv2.createTrackbar('Lower Thresh', 'Canny', 50, 255, nothing) # 50 # 0 
+            cv2.createTrackbar('Upper Thresh', 'Canny', 100, 255, nothing) # 100 # 150
 
     '''
     def restore_speed_stop(self):
@@ -135,26 +151,24 @@ class CameraReceiver:
     def change_lane(self): # 주차용 차선 변경
         global lane_flag, lane_width
 
-        rospy.loginfo("AR Change lane")
+        if self.is_debug:
+            rospy.loginfo("Parking Change lane")
         lane_flag = 1
         lane_width = 140
 
     def parking_callback(self, data): # 주차용 차선 변경
         self.parking_flag = data.data
 
-        # if self.parking_flag:
-        #     threading.Timer(9.0, self.change_lane).start()
-
         if self.parking_flag:
             self.change_lane()
 
-    def flag_callback(self, data): # 교차로 차선 변경
+    def choiceab_callback(self, data): # 교차로 차선 변경
         global lane_flag
 
         if not self.parking_flag:  # AR 미션 전에만 변경
             lane_flag = data.data
 
-    def callback(self, data):
+    def image_callback(self, data):
         global speed, lane_flag, prev_lane
         self.image = self.bridge.imgmsg_to_cv2(data, "bgr8")
         blur = cv2.GaussianBlur(self.image, (5, 5), 0)
@@ -217,7 +231,7 @@ class CameraReceiver:
         warp_img, M, Minv = warp_image(sum_img, warp_src, warp_dst, (warp_img_w, warp_img_h))
         leftx_base, rightx_base, processed_img = image_processing_canny(warp_img)
 
-        left_fit, right_fit, avex, avey, tracker_img = sliding_window(leftx_base, rightx_base, processed_img, lane_flag)
+        left_fit, right_fit, avex, avey, tracker_img = sliding_window(leftx_base, rightx_base, processed_img, lane_flag, self.is_debug)
         #lane_img = draw_lane(self.image, warp_img, Minv, left_fit, right_fit, avex, avey)
 
         x = avex - 160
@@ -227,7 +241,8 @@ class CameraReceiver:
         if lane_flag == 4 or lane_flag == 5:
             speed = min_speed
 
-            rospy.loginfo("CURV")
+            if self.is_debug:
+                rospy.loginfo("CURV")
             threading.Timer(4.0, self.restore_speed, args=(lane_flag,)).start()
 
         if is_lane == True:
@@ -258,21 +273,22 @@ class CameraReceiver:
         #cv2.waitKey(1)
     
     def process(self):
-        try:
-            cv2.imshow("HSV", self.hsv_img)
-            #cv2.imshow("tracker", tracker_img)
-            cv2.imshow("Canny", self.canny_img)
-            #cv2.imshow("sum_img", sum_img)
+        if self.is_debug:
+            try:
+                cv2.imshow("HSV", self.hsv_img)
+                #cv2.imshow("tracker", tracker_img)
+                cv2.imshow("Canny", self.canny_img)
+                #cv2.imshow("sum_img", sum_img)
 
-            #cv2.imshow("warp", warp_img)
-            #cv2.imshow("result", lane_img)
-            #cv2.imshow("Thresh", thresh_img)
-            #cv2.imshow("Yellow", yellow_img)
+                #cv2.imshow("warp", warp_img)
+                #cv2.imshow("result", lane_img)
+                #cv2.imshow("Thresh", thresh_img)
+                #cv2.imshow("Yellow", yellow_img)
 
-            cv2.waitKey(1)
-            
-        except:
-            pass
+                cv2.waitKey(1)
+                
+            except:
+                pass
         
         
 def warp_image(img, src, dst, size):
@@ -329,7 +345,7 @@ def image_processing(img):
     return leftx_base, rightx_base, hsv_img, processed_img
 
 
-def sliding_window(leftx_base, rightx_base, processed_img, lane_flag):
+def sliding_window(leftx_base, rightx_base, processed_img, lane_flag, is_debug):
     global nwindows, margin, minpix, lane_width, warp_img_w, warp_img_h, is_lane
 
     window_height = int(processed_img.shape[0] // nwindows)
@@ -400,7 +416,8 @@ def sliding_window(leftx_base, rightx_base, processed_img, lane_flag):
         
         avex = int(np.array(lx).mean() + lane_width//2)
         avey = int(np.array(ly).mean())
-        rospy.loginfo("Left Lane Detected")
+        if is_debug:
+            rospy.loginfo("Left Lane Detected")
         
     elif lane_flag == 1 or lane_flag == 5: # 우측 차선만 
         lfit = np.polyfit(np.array(ry), np.array(rx) - lane_width, 2) 
@@ -410,7 +427,8 @@ def sliding_window(leftx_base, rightx_base, processed_img, lane_flag):
         
         avex = int(np.array(rx).mean() - lane_width//2)
         avey = int(np.array(ry).mean())
-        rospy.loginfo("Right Lane Detected")
+        if is_debug:
+            rospy.loginfo("Right Lane Detected")
 
     else: # 양쪽 차선
         lfit = np.polyfit(np.array(ly), np.array(lx), 2) 
