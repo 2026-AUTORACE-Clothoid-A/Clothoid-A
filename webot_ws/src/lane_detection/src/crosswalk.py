@@ -28,20 +28,19 @@ y_l = 40
 temp1 = 40
 temp2 = 80
 
+# 2025
+l_h = 0
+l_s = 0
+l_v = 150
+u_h = 180
+u_s = 60
+u_v = 255
+
+lower_thresh = 130
+upper_thresh = 255
+
 def nothing(x):
     pass
-
-cv2.namedWindow('thresh')
-cv2.createTrackbar('Lower Thresh', 'thresh', 130, 255, nothing) 
-cv2.createTrackbar('Upper Thresh', 'thresh', 255, 255, nothing) 
-
-cv2.namedWindow('HSV')
-cv2.createTrackbar('Lower H', 'HSV', 0, 180, nothing) 
-cv2.createTrackbar('Upper H', 'HSV', 180, 180, nothing) #180
-cv2.createTrackbar('Lower S', 'HSV', 0, 255, nothing)
-cv2.createTrackbar('Upper S', 'HSV', 60, 255, nothing) #140
-cv2.createTrackbar('Lower V', 'HSV', 150, 255, nothing)
-cv2.createTrackbar('Upper V', 'HSV', 255, 255, nothing) #255
 
 warp_src = np.array([
     [x_h, Height//2 + y_h], # 좌상단
@@ -61,6 +60,9 @@ import threading
 
 class CameraReceiver:
     def __init__(self):
+        global l_h, l_s, l_v, u_h, u_s, u_v
+        global lower_thresh, upper_thresh
+        
         rospy.loginfo("Crosswalk Receiver Object is Created")
         self.bridge = CvBridge()
         rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.callback)
@@ -74,6 +76,21 @@ class CameraReceiver:
 
         self.threshold = None
         self.hsv_img = None
+
+        self.is_debug = rospy.get_param('~debug', True)
+
+        if self.is_debug:
+            cv2.namedWindow('thresh')
+            cv2.createTrackbar('Lower Thresh', 'thresh', lower_thresh, 255, nothing) 
+            cv2.createTrackbar('Upper Thresh', 'thresh', upper_thresh, 255, nothing) 
+
+            cv2.namedWindow('HSV')
+            cv2.createTrackbar('Lower H', 'HSV', l_h, 180, nothing) 
+            cv2.createTrackbar('Lower S', 'HSV', l_s, 255, nothing)
+            cv2.createTrackbar('Lower V', 'HSV', l_v, 255, nothing)
+            cv2.createTrackbar('Upper H', 'HSV', u_h, 180, nothing) #180
+            cv2.createTrackbar('Upper S', 'HSV', u_s, 255, nothing) #140
+            cv2.createTrackbar('Upper V', 'HSV', u_v, 255, nothing) #255
         
     def flag_callback(self, data):
         self.lane_flag = data.data
@@ -85,13 +102,15 @@ class CameraReceiver:
         rate = rospy.Rate(30)  
         
         while True:
-            rospy.loginfo("CURV STOP")
+            if self.is_debug:
+                rospy.loginfo("CURV STOP")
             self.drive_info.drive.speed = 0.0
             self.drive_info.drive.steering_angle = 0.0
             self.drive_pub.publish(self.drive_info)
 
             if self.lane_flag != -1 and self.lane_flag != 3:
-                rospy.loginfo("CURV START")
+                if self.is_debug:
+                    rospy.loginfo("CURV START")
                 break
 
             rate.sleep()  
@@ -116,7 +135,8 @@ class CameraReceiver:
                 white_ratio = white_pixels / total_pixels * 100
               
                 if counter >= 4 and not self.stop_publishing and white_ratio > 10:
-                    rospy.loginfo("Crosswalk Detected")
+                    if self.is_debug:
+                        rospy.loginfo("Crosswalk Detected")
                     cv2.rectangle(warp_img, (x, y), (x + w, y + h), (0, 0, 255), 2) 
                    
                     start_time = time.time()
@@ -127,7 +147,8 @@ class CameraReceiver:
                         time.sleep(0.05) 
                     
                     self.stop_publishing = True
-                    rospy.loginfo("Crosswalk END")
+                    if self.is_debug:
+                        rospy.loginfo("Crosswalk END")
                     
                     #self.parking_msg.data = True
                     #self.parking_pub.publish(self.parking_msg)
@@ -142,14 +163,15 @@ class CameraReceiver:
         # cv2.waitKey(1)
 
     def process(self):
-        try:
-            #cv2.imshow("warp", warp_img)
-            cv2.imshow("HSV", self.hsv_img)
-            cv2.imshow("thresh", self.threshold)
-            #cv2.imshow("result_CROSS", result)
-            cv2.waitKey(1)
-        except:
-            pass
+        if self.is_debug:
+            try:
+                #cv2.imshow("warp", warp_img)
+                cv2.imshow("HSV", self.hsv_img)
+                cv2.imshow("thresh", self.threshold)
+                #cv2.imshow("result_CROSS", result)
+                cv2.waitKey(1)
+            except:
+                pass
 
 def warp_image(img, src, dst, size):
     M = cv2.getPerspectiveTransform(src, dst)
@@ -161,14 +183,11 @@ def warp_image(img, src, dst, size):
 
 
 def image_processing(img):
+    global l_h, l_s, l_v, u_h, u_s, u_v
+    global lower_thresh, upper_thresh
+
     blur = cv2.GaussianBlur(img, (5, 5), 0)
     hsv = cv2.cvtColor(blur, cv2.COLOR_BGR2HSV)
-    l_h = cv2.getTrackbarPos('Lower H', 'HSV')
-    l_s = cv2.getTrackbarPos('Lower S', 'HSV')
-    l_v = cv2.getTrackbarPos('Lower V', 'HSV')
-    u_h = cv2.getTrackbarPos('Upper H', 'HSV')
-    u_s = cv2.getTrackbarPos('Upper S', 'HSV')
-    u_v = cv2.getTrackbarPos('Upper V', 'HSV')
 
     lower_white = np.array([l_h, l_s, l_v])
     upper_white = np.array([u_h, u_s, u_v])
@@ -176,9 +195,7 @@ def image_processing(img):
 
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) 
     blurred = cv2.GaussianBlur(gray, (5, 5), 0) 
-    low_thresh = cv2.getTrackbarPos('Lower Thresh', 'thresh')
-    high_thresh = cv2.getTrackbarPos('Upper Thresh', 'thresh')
-    _, threshold = cv2.threshold(blurred, low_thresh, high_thresh, cv2.THRESH_BINARY) 
+    _, threshold = cv2.threshold(blurred, lower_thresh, upper_thresh, cv2.THRESH_BINARY) 
 
     result = cv2.bitwise_and(hsv_img, threshold)
 
