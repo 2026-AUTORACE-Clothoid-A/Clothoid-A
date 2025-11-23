@@ -7,6 +7,8 @@ import math
 from cv_bridge import CvBridge
 from sensor_msgs.msg import Image, CompressedImage
 from ackermann_msgs.msg import AckermannDriveStamped
+from sensor_msgs.msg import LaserScan
+from visualization_msgs.msg import Marker
 from std_msgs.msg import Int32, Bool
 import time
 import threading
@@ -64,23 +66,105 @@ class CameraReceiver:
         self.bridge = CvBridge()
         rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.callback)
         rospy.Subscriber("/parking_flag", Bool, self.flag_callback)
+        rospy.Subscriber("/scan", LaserScan, self.lidar_callback)
+        self.marker_pub = rospy.Publisher("/closest_point_marker", Marker, queue_size=10)
         self.drive_pub = rospy.Publisher("high_level/ackermann_cmd_mux/input/nav_0", AckermannDriveStamped, queue_size=1)
         self.drive_info = AckermannDriveStamped()
-        self.flag = False
+        self.is_parking_active = False
         self.barricade_flag = False
+
+        self.parking_timer = rospy.Timer(rospy.Duration(0.1), self.parking_timer_callback)
+        
+        # 주차 상태 관리 변수
+        self.parking_start_time = 0.0
+        self.parking_done = False
+        self.min_range = 0.0
+        self.min_angle = 0.0
+        self.is_sensor_step_done = False
+        self.sensor_step_duration = 0.0
 
         self.hsv_img = None
         self.threshold = None
         self.warp_img = None
         self.histogram_debug = None
 
-        self.stopline_thresh = 14
+        self.stopline_thresh = 5
         self.diff = 0
 
         self.is_debug = True
     
     def flag_callback(self, data):
         self.barricade_flag = data.data
+
+    def lidar_callback(self, data):
+        # if not self.is_parking_active:
+        #     return
+        
+        # 1. 가장 가까운 거리 찾기
+        # 'inf' (무한대) 값을 제외하고 가장 작은 값을 찾습니다.
+        try:
+            # 유효한 거리값만 필터링 (최소/최대 감지 거리 내의 값)
+            valid_ranges = []
+            for i, r in enumerate(data.ranges):
+                if data.range_min < r < data.range_max:
+                    valid_ranges.append((r, i))
+            
+            if not valid_ranges:
+                return # 유효한 포인트가 없으면 종료
+
+            # 거리를 기준으로 정렬하여 최소값 찾기
+            self.min_range, min_idx = min(valid_ranges, key=lambda x: x[0])
+            # rospy.loginfo(f"min range:\t{self.min_range}")
+
+        except ValueError:
+            return
+
+        # 2. 극좌표(Polar) -> 직교좌표(Cartesian) 변환
+        # angle = angle_min + (index * angle_increment)
+        self.min_angle = data.angle_min + (min_idx * data.angle_increment)
+        # rospy.loginfo(f"min angle:\t{self.min_angle}")
+        
+        object_x = self.min_range * math.cos(self.min_angle)
+        object_y = self.min_range * math.sin(self.min_angle)
+
+        # 3. RViz용 Marker 메시지 생성 및 발행
+        self.publish_marker(object_x, object_y, data.header.frame_id)
+
+    def publish_marker(self, x, y, frame_id):
+        marker = Marker()
+        marker.header.frame_id = frame_id  # Lidar 프레임과 동일하게 설정 (보통 'laser' 또는 'velodyne')
+        marker.header.stamp = rospy.Time.now()
+        
+        marker.ns = "closest_point"
+        marker.id = 0
+        marker.type = Marker.SPHERE      # 구 모양으로 표시
+        marker.action = Marker.ADD
+        
+        # 마커 위치 설정
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = 0.0     # 2D Lidar이므로 z는 0
+        
+        marker.pose.orientation.x = 0.0
+        marker.pose.orientation.y = 0.0
+        marker.pose.orientation.z = 0.0
+        marker.pose.orientation.w = 1.0
+
+        # 마커 크기 (단위: 미터)
+        marker.scale.x = 0.2
+        marker.scale.y = 0.2
+        marker.scale.z = 0.2
+
+        # 마커 색상 (R, G, B, Alpha) -> 빨간색
+        marker.color.r = 1.0
+        marker.color.g = 0.0
+        marker.color.b = 0.0
+        marker.color.a = 1.0             # 투명도 (1.0은 불투명)
+
+        # 마커 수명 (0은 무한대)
+        marker.lifetime = rospy.Duration(0.1) 
+
+        self.marker_pub.publish(marker)
 
     def callback(self, data):
         image = self.bridge.imgmsg_to_cv2(data, "bgr8")
@@ -89,116 +173,158 @@ class CameraReceiver:
         histogram_result, self.histogram_debug = check_histogram(result, self.is_debug)
         contours, _ = cv2.findContours(result, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        if not self.flag and histogram_result:
+        if not self.is_parking_active and histogram_result:
             rospy.loginfo(f"{histogram_result}")
 
-        if not self.flag and self.barricade_flag and histogram_result is not None and histogram_result > self.stopline_thresh:
-            rospy.loginfo("START Detected - Starting Parking Thread")
-            self.flag = True
+        if not self.is_parking_active and self.barricade_flag and histogram_result is not None and histogram_result > self.stopline_thresh:
+            rospy.loginfo("START Detected")
+            self.is_parking_active = True
             self.diff = (histogram_result - self.stopline_thresh) / 40
+            self.parking_start_time = rospy.Time.now().to_sec()
 
-            self.parking_sequence_logic()
+    def parking_timer_callback(self, event):
+        if not self.is_parking_active or self.parking_done:
+            return
 
-    def parking_sequence_logic(self):
+        # 현재 경과 시간 계산
+        current_time = rospy.Time.now().to_sec()
+        dt = current_time - self.parking_start_time
+        total_time = 0.0
+        # --- 시간 흐름에 따른 동작 정의 (누적 시간으로 계산) ---
+        
         # 전진에서 후진 변경 시 급발진 방지용
-        start_time = time.time()
-        while time.time() - start_time < 0.5: 
+        step_time = 0.5
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 45도가 될 때까지 우회전
-        start_time = time.time()
-        while time.time() - start_time < 1.8-self.diff: 
-            self.drive_info.drive.speed = 0.2
-            self.drive_info.drive.steering_angle = -0.34
-            self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05)
+        step_start_time = total_time
+
+        if not self.is_sensor_step_done:
+            if self.min_angle < -1.5 or self.min_range < 0.32:
+                rospy.loginfo("DRIVE!!")
+                self.drive_info.drive.speed = 0.2
+                self.drive_info.drive.steering_angle = -0.34
+                self.drive_pub.publish(self.drive_info)
+                return
+    
+            else:
+                self.is_sensor_step_done = True
+                self.sensor_step_duration = dt - step_start_time
+
+                self.diff = self.min_range - 0.32
+        total_time += self.sensor_step_duration
+
+        rospy.loginfo(f"{self.diff}")
 
         # 전진에서 후진 변경 시 급발진 방지용
-        start_time = time.time()
-        while time.time() - start_time < 0.5: 
+        step_time = 0.5
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = -0.195
             self.drive_info.drive.steering_angle = 0.085
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 핸들 정방향으로 후진
-        start_time = time.time()
-        while time.time() - start_time < 2.0: 
+        step_time = 1.9 + self.diff*20
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = -0.2
             self.drive_info.drive.steering_angle = 0.085
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 핸들 오른쪽으로 돌려서 후진
-        start_time = time.time()
-        while time.time() - start_time < 1.6: 
+        step_time = 1.4 + self.diff
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = -0.2
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 후진에서 전진 변경 시 급발진 방지용
-        start_time = time.time()
-        while time.time() - start_time < 0.5: 
+        step_time = 0.5
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 핸들 왼쪽으로 돌려서 전진 (주차 완료!)
-        start_time = time.time()
-        while time.time() - start_time < 0.25: 
+        step_time = 0.30
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = 0.2
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05)
+            return
 
         # ========================================================
         
         # 전진에서 후진 변경 시 급발진 방지용
-        start_time = time.time()
-        while time.time() - start_time < 0.5: 
+        step_time = 0.5
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = -0.195
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # ========================================================
 
         # 핸들 왼쪽으로 돌려서 후진
-        start_time = time.time()
-        while time.time() - start_time < 0.25: 
+        step_time = 0.30
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = -0.2
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05)
+            return
 
         # 후진에서 전진 변경 시 급발진 방지용
-        start_time = time.time()
-        while time.time() - start_time < 0.5: 
+        step_time = 0.5
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 핸들 오른쪽으로 돌려서 전진
-        start_time = time.time()
-        while time.time() - start_time < 1.6: 
+        step_time = 1.6
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = 0.2
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
         # 후진에서 전진 변경 시 급발진 방지용
-        start_time = time.time()
-        while time.time() - start_time < 0.5: 
+        step_time = 0.5
+        total_time += step_time
+
+        if dt < total_time: 
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
-            time.sleep(0.05) 
+            return 
 
     def process(self):
         if self.is_debug:
