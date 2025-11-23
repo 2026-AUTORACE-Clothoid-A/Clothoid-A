@@ -115,9 +115,12 @@ class CameraReceiver:
         rospy.Subscriber("/usb_cam/image_raw/calib", Image, self.image_callback)
         rospy.Subscriber("/direction_flag", Int32, self.choiceab_callback)
         rospy.Subscriber("/parking_flag", Bool, self.parking_callback)
+        rospy.Subscriber("/rotary_mission_done", Bool, self.rotary_callback)       
         self.drive_pub = rospy.Publisher("high_level/ackermann_cmd_mux/input/nav_6", AckermannDriveStamped, queue_size=1)
         self.drive_info = AckermannDriveStamped()
         self.parking_flag = False
+        self.rotary_flag = False
+        self.rotary_lane_change = False
         self.start_time = time.time()
         
         # 2025
@@ -175,6 +178,14 @@ class CameraReceiver:
 
         if self.parking_flag:
             self.change_lane()
+
+    def rotary_callback(self, data): # 주차용 차선 변경
+        global lane_flag
+        self.rotary_flag = data.data
+
+        if not self.rotary_lane_change and self.rotary_flag:
+            lane_flag = 1
+            self.rotary_lane_change = True
 
     def choiceab_callback(self, data): # 교차로 차선 변경
         global lane_flag
