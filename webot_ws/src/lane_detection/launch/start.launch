@@ -42,7 +42,9 @@
 
 	<include file="$(find rubber_cone)/launch/rubber_cone.launch" />
 
-	<node name="lane_detection" pkg="lane_detection" type="lane_main.py" output="screen" />
+	<node name="lane_detection" pkg="lane_detection" type="lane_main.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
 	
 	<node name="barricade_detector" pkg="barricade_detector" type="barricade_detector.py" output="screen">
 		<param name="debug" value="true" />
