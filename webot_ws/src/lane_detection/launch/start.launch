@@ -56,7 +56,12 @@
 		<param name"debug" value="true" />
 	</node> 
 	
-	<!-- <node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen" /> -->
+	<node name="sign_detector_node" pkg="lane_detection" type="sign_detector_node.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
+	<node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen">
+		<param name="debug" value="true" />
+	</node>
 	
 	<!-- <node name="round_about_node" pkg="roundAboutNav" type="round_about_node" output="screen" /> -->
 

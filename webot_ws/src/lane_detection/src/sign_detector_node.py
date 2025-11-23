@@ -36,6 +36,7 @@ class SignDetectorNode(object):
 
     def __init__(self):
         # rospy.init_node('sign_detector_node')
+        self.is_debug = rospy.get_param('~debug', True)
 
         # --- 파라미터 ---
         self.camera_topic = rospy.get_param('~camera_topic', '/usb_cam/image_raw/calib')
@@ -79,7 +80,10 @@ class SignDetectorNode(object):
         self.sign_count = 0
 
         # --- OpenCV 윈도우 & 트랙바 설정 ---
-        self.init_hsv_trackbar(init_lower, init_upper)
+        self.l_t = 50
+        self.u_t = 150
+        if self.is_debug:
+            self.init_hsv_trackbar(init_lower, init_upper, self.l_t, self.u_t)
 
         # --- Publisher / Subscriber ---
         self.sign_pub = rospy.Publisher('/traffic_sign', Int32, queue_size=1)
@@ -97,18 +101,19 @@ class SignDetectorNode(object):
         self.canny = None
 
     def process(self):
-        try:
-            cv2.imshow("frame", self.frame)
-            cv2.imshow("mask", self.mask_img)
-            cv2.imshow("canny", self.canny)
-            cv2.waitKey(1)
-        except:
-            pass    
+        if self.is_debug:
+            try:
+                cv2.imshow("frame", self.frame)
+                cv2.imshow("mask", self.mask_img)
+                cv2.imshow("canny", self.canny)
+                cv2.waitKey(1)
+            except:
+                pass    
 
     # ---------------------------------------------------------------------- #
     # 트랙바 초기화
     # ---------------------------------------------------------------------- #
-    def init_hsv_trackbar(self, lower_init, upper_init):
+    def init_hsv_trackbar(self, lower_init, upper_init, l_t, u_t):
         """
         HSV 파란색 범위를 트랙바로 조절할 수 있게 설정.
         H: 0~179, S/V: 0~255
@@ -132,8 +137,8 @@ class SignDetectorNode(object):
         cv2.createTrackbar('V_low', 'mask', int(lower_init[2]), 255, nothing)
         cv2.createTrackbar('V_high', 'mask', int(upper_init[2]), 255, nothing)
 
-        cv2.createTrackbar('Lower Thresh', 'canny', 50, 255, nothing)
-        cv2.createTrackbar('Upper Thresh', 'canny', 100, 255, nothing)
+        cv2.createTrackbar('Lower Thresh', 'canny', l_t, 255, nothing)
+        cv2.createTrackbar('Upper Thresh', 'canny', u_t, 255, nothing)
 
     def update_hsv_from_trackbar(self):
         """
@@ -188,8 +193,8 @@ class SignDetectorNode(object):
 
         # 1. Canny Edge
         blurred = cv2.GaussianBlur(self.frame, (5, 5), 0)
-        low_canny = cv2.getTrackbarPos('Lower Thresh', 'canny')
-        high_canny = cv2.getTrackbarPos('Upper Thresh', 'canny')
+        low_canny = self.l_t
+        high_canny = self.u_t
         if low_canny == 0 and high_canny == 0: low_canny, high_canny = 50, 150
         self.canny = cv2.Canny(blurred, low_canny, high_canny)
 
@@ -275,24 +280,28 @@ class SignDetectorNode(object):
         blue_q4 = np.count_nonzero(q4)
 
         total_blue = blue_q3 + blue_q4
-        rospy.loginfo_throttle(
-            0.05,
-            "ROI blue: q3=%d, q4=%d, total=%d" %
-            (blue_q3, blue_q4, total_blue)
-        )
-
-        if total_blue < 1:   # 거의 0이면만 NONE
+        if self.is_debug:
             rospy.loginfo_throttle(
                 0.05,
-                "sign_detector_node: ROI -> NONE (blue too small, total=%d)", total_blue
+                "ROI blue: q3=%d, q4=%d, total=%d" %
+                (blue_q3, blue_q4, total_blue)
             )
+
+        if total_blue < 1:   # 거의 0이면만 NONE
+            if self.is_debug:
+                rospy.loginfo_throttle(
+                    0.05,
+                    "sign_detector_node: ROI -> NONE (blue too small, total=%d)", total_blue
+                )
             return self.SIGN_NONE
 
         if blue_q3 > blue_q4:
-            rospy.loginfo_throttle(0.05, "ROI -> LEFT")
+            if self.is_debug:
+                rospy.loginfo_throttle(0.05, "ROI -> LEFT")
             return self.SIGN_LEFT
         else:
-            rospy.loginfo_throttle(0.05, "ROI -> RIGHT")
+            if self.is_debug:
+                rospy.loginfo_throttle(0.05, "ROI -> RIGHT")
             return self.SIGN_RIGHT
         # # 파란색이 너무 적으면 유효한 표지판 아닌 걸로 본다
         # if total_blue < 5:   # 필요하면 튜닝
