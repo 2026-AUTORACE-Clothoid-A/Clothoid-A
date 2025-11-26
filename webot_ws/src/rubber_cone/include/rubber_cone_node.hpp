@@ -36,6 +36,9 @@ private:
     bool has_right_boundary_;
     bool is_look_forward_point_;
 
+    double last_steering_;
+    bool   has_last_steering_;
+
     // ===== 파라미터 =====
     double speed_;          // 주행 속도
     double vehicle_length_; // 차량 휠베이스 근사
