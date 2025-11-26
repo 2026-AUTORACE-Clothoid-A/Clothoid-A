@@ -22,7 +22,7 @@ public:
         pnh.param<bool>("debug", is_debug, true);
 
         // Publisher 생성
-        pub = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_2", 1);
+        pub = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_5", 1);
         // Subscriber 생성
         sub_ = nh_.subscribe("/usb_cam/image_raw/calib", 10, &RedRoadNode::imageCallback, this);
         sub_lane = nh_.subscribe("high_level/ackermann_cmd_mux/input/nav_6", 10, &RedRoadNode::Callback, this);

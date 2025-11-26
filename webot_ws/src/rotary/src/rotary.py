@@ -74,15 +74,15 @@ class CameraReceiver:
         self.roi_x_max = rospy.get_param("~roi_x_max", 180)
 
         # HSV / Threshold 기본값
-        self.h_lower = rospy.get_param("~lower_h", 0)
-        self.s_lower = rospy.get_param("~lower_s", 0)
-        self.v_lower = rospy.get_param("~lower_v", 100)
+        self.h_lower = rospy.get_param("~lower_h", 45)
+        self.s_lower = rospy.get_param("~lower_s", 30)
+        self.v_lower = rospy.get_param("~lower_v", 130)
 
-        self.h_upper = rospy.get_param("~upper_h", 180)
-        self.s_upper = rospy.get_param("~upper_s", 30)
-        self.v_upper = rospy.get_param("~upper_v", 255)
+        self.h_upper = rospy.get_param("~upper_h", 90)
+        self.s_upper = rospy.get_param("~upper_s", 100)
+        self.v_upper = rospy.get_param("~upper_v", 180)
 
-        self.low_thresh  = rospy.get_param("~lower_thresh", 220)
+        self.low_thresh  = rospy.get_param("~lower_thresh", 100)
         self.high_thresh = rospy.get_param("~upper_thresh", 255)
 
         # START 사각형 조건
@@ -95,7 +95,7 @@ class CameraReceiver:
         # 정지 명령 관련 파라미터
         self.stop_topic = rospy.get_param(
             "~stop_topic",
-            "high_level/ackermann_cmd_mux/input/nav_0"
+            "high_level/ackermann_cmd_mux/input/nav_2"
         )
         self.stop_speed = rospy.get_param("~stop_speed", 0.0)
 
@@ -168,7 +168,7 @@ class CameraReceiver:
         cv2.createTrackbar('Lower H', 'HSV', self.h_lower, 180, nothing)
         cv2.createTrackbar('Lower S', 'HSV', self.s_lower, 255, nothing)
         cv2.createTrackbar('Lower V', 'HSV', self.v_lower, 255, nothing)
-        cv2.createTrackbar('Upper H', 'HSV', self.h_upper, 180)
+        cv2.createTrackbar('Upper H', 'HSV', self.h_upper, 180, nothing)
         cv2.createTrackbar('Upper S', 'HSV', self.s_upper, 255, nothing)
         cv2.createTrackbar('Upper V', 'HSV', self.v_upper, 255, nothing)
 
@@ -405,7 +405,7 @@ class CameraReceiver:
             x_offset = x + self.roi_x_min
 
             # 사각형 크기 로그 출력
-            rospy.loginfo(f"Detected rect - x: {x_offset}, y: {y}, w: {w}, h: {h}")
+            # rospy.loginfo(f"Detected rect - x: {x_offset}, y: {y}, w: {w}, h: {h}")
 
             # 기본 빨간 사각형 (모든 컨투어)
             if self.debug:

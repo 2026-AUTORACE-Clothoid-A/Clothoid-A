@@ -32,10 +32,10 @@ void LaserFeatureROS::compute_bearing(const sensor_msgs::LaserScan::ConstPtr &sc
 	double angle_increment_,angle_start_;
 	angle_increment_ = scan_msg->angle_increment;
 	angle_start_ = scan_msg->angle_min;
-	
+
 	line_feature_.set_angle_increment(angle_increment_);
 	line_feature_.set_angle_start(angle_start_);
-	
+
 	std::vector<double> bearings, cos_bearings, sin_bearings;
 	std::vector<unsigned int> index;
 	unsigned int i = 0;
@@ -59,7 +59,7 @@ void LaserFeatureROS::scanValues(const sensor_msgs::LaserScan::ConstPtr &scan_ms
 		compute_bearing(scan_msg);
 		com_bearing_flag = true;
 	}
-	
+
 	std::vector<double> scan_ranges_doubles(scan_msg->ranges.begin(), scan_msg->ranges.end());
 	line_feature_.setRangeData(scan_ranges_doubles);
 
@@ -71,12 +71,12 @@ void LaserFeatureROS::publishMarkerMsg(const std::vector<gline> &m_gline,visuali
 	marker_msg.ns = "line_extraction";
 	marker_msg.id = 0;
 	marker_msg.type = visualization_msgs::Marker::LINE_LIST;
-	marker_msg.scale.x = 0.1;
+	marker_msg.scale.x = 0.05;
 	marker_msg.color.r = 0.0;
 	marker_msg.color.g = 0.0;
 	marker_msg.color.b = 1.0;
 	marker_msg.color.a = 1.0;
-  
+
 
 	for (std::vector<gline>::const_iterator cit = m_gline.begin(); cit != m_gline.end(); ++cit)
 	{
@@ -149,7 +149,7 @@ void LaserFeatureROS::load_params()
 {
 	ROS_DEBUG("*************************************");
 	ROS_DEBUG("PARAMETERS:");
-  
+
 	std::string frame_id, scan_topic;
 	bool show_lines;
 
@@ -178,7 +178,7 @@ void LaserFeatureROS::load_params()
 	nh_local_.param<double>("min_line_length", min_line_length, 0.5);
 	line_feature_.set_min_line_length(min_line_length);
 	ROS_DEBUG("min_line_length: %lf", min_line_length);
-  
+
 	nh_local_.param<double>("predict_distance", predict_distance, 0.1);
 	line_feature_.set_predict_distance(predict_distance);
 	ROS_DEBUG("predict_distance: %lf", predict_distance);
