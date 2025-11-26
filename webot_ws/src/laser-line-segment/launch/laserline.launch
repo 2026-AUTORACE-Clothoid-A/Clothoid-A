@@ -4,11 +4,11 @@
     <param name="~scan_topic" value="scan" />
     <param name="~frequency" value="40.0" />
     <param name="~show_lines" value="true" />
-    <param name="~least_thresh" value="0.06" />
-    <param name="~min_line_length" value="0.3" />
-    <param name="~predict_distance" value="0.1" />
-    <param name="~seed_line_points" value="6" />
-    <param name="~min_line_points" value="10" />
+    <param name="~least_thresh" value="0.2" />
+    <param name="~min_line_length" value="0.1" />
+    <param name="~predict_distance" value="0.01" />
+    <param name="~seed_line_points" value="18" />
+    <param name="~min_line_points" value="22" />
   </node>
 </launch>
 

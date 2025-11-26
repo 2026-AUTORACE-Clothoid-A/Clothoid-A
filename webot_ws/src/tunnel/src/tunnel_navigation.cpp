@@ -23,8 +23,8 @@ TunnelNavigationNode::TunnelNavigationNode()
 
     // 구독/발행
     line_sub_ = nh_.subscribe("line_segments", 1,
-                                &TunnelNavigationNode::lineCallback, this);
-    cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("tunnel_cmd", 1);
+                              &TunnelNavigationNode::lineCallback, this);
+    cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_2", 1);
 
     ROS_INFO_STREAM("TunnelNavigationNode initialized. target_frame=" << target_frame_
                     << ", stanley_k_gain=" << stanley_k_gain_
@@ -37,9 +37,9 @@ void TunnelNavigationNode::spin()
     ros::spin();
 }
 
-// 원점(0,0)에서 p0-p1을 지나는 직선까지의 수직 거리
+// 원점(0,0)에서 p0-p1을 지나는 직선까지의 수직 거리 (무한 직선 기준)
 double TunnelNavigationNode::perpendicularDistanceToLine(const Eigen::Vector2d& p0,
-                                                   const Eigen::Vector2d& p1) const
+                                                         const Eigen::Vector2d& p1) const
 {
     Eigen::Vector2d v = p1 - p0;
     double denom = v.norm();
@@ -49,6 +49,24 @@ double TunnelNavigationNode::perpendicularDistanceToLine(const Eigen::Vector2d& 
     // 2D에서 |p0 x p1| / |p1 - p0|
     double num = std::abs(p0.x() * p1.y() - p0.y() * p1.x());
     return num / denom;
+}
+
+// 원점(0,0)에서 선분 [p0, p1] 까지의 최소 유클리디안 거리
+double TunnelNavigationNode::euclideanDistanceToSegment(const Eigen::Vector2d& p0,
+                                                        const Eigen::Vector2d& p1) const
+{
+    Eigen::Vector2d v = p1 - p0;
+    double len2 = v.squaredNorm();
+    if (len2 < 1e-12)
+        return p0.norm();  // 거의 점인 경우
+
+    // 선분 [p0, p1] 위에서 원점에 가장 가까운 점의 파라미터 t (0~1)
+    double t = -p0.dot(v) / len2;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+
+    Eigen::Vector2d proj = p0 + t * v;
+    return proj.norm();
 }
 
 // (1,0) 과 라인 방향 각도가 angle_thresh_rad 이내인지
@@ -164,13 +182,13 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
     double best_left_dist  = std::numeric_limits<double>::max();
     double best_right_dist = std::numeric_limits<double>::max();
 
-    // 왼쪽 라인들: 진행 방향과 10도 이내 + 원점 수직 거리 최소
+    // 왼쪽 라인들: 진행 방향과 10도 이내 + 원점과의 유클리디안 거리가 최소인 선분
     for (const auto& seg : left_segments_)
     {
         if (!isAlignedWithHeading(seg))
             continue;
 
-        double d = perpendicularDistanceToLine(seg.first, seg.second);
+        double d = euclideanDistanceToSegment(seg.first, seg.second);
         if (d < best_left_dist)
         {
             best_left_dist = d;
@@ -179,13 +197,13 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
         }
     }
 
-    // 오른쪽 라인들: 진행 방향과 10도 이내 + 원점 수직 거리 최소
+    // 오른쪽 라인들: 진행 방향과 10도 이내 + 원점과의 유클리디안 거리가 최소인 선분
     for (const auto& seg : right_segments_)
     {
         if (!isAlignedWithHeading(seg))
             continue;
 
-        double d = perpendicularDistanceToLine(seg.first, seg.second);
+        double d = euclideanDistanceToSegment(seg.first, seg.second);
         if (d < best_right_dist)
         {
             best_right_dist = d;
@@ -211,13 +229,14 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
 
     // 3) 스탠리 형태로 조향각 계산
 
-    double d_left  = best_left_dist;
-    double d_right = best_right_dist;
+    // 👉 이제 여기서는 선택된 선분에 대해 "수직 거리"를 다시 계산해서 사용
+    double d_left  = perpendicularDistanceToLine(best_left_seg.first,  best_left_seg.second);
+    double d_right = perpendicularDistanceToLine(best_right_seg.first, best_right_seg.second);
 
     // 두 벽 사이 중앙에서 얼마나 벗어났는지 근사
     // d_left == d_right 이면 중앙 → cross_track_error = 0
     double cross_track_error = 0.5 * (d_left - d_right);
-    // 부호 방향이 반대로 느껴지면 d_left - d_right로 바꿔보면 됨
+    // 필요 시 부호 바꾸고 싶으면 0.5 * (d_right - d_left) 로 변경
 
     // 벽 방향 벡터
     Eigen::Vector2d dir_left  = best_left_seg.second  - best_left_seg.first;

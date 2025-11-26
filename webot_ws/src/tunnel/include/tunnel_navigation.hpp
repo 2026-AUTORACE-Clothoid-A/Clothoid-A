@@ -22,26 +22,30 @@ private:
     // 콜백: line_segments 수신
     void lineCallback(const laserline::LineSegmentArray::ConstPtr& msg);
 
-    // 원점(0,0)에서 라인(무한 직선)에 대한 수직 거리
+    // 원점(0,0)에서 p0-p1을 지나는 직선까지의 수직 거리 (무한 직선 기준)
     double perpendicularDistanceToLine(const Eigen::Vector2d& p0,
-                                        const Eigen::Vector2d& p1) const;
+                                       const Eigen::Vector2d& p1) const;
 
-    // 차량 진행 방향 (1,0) 과 라인 방향 각도가 angle_thresh_rad 이내인지
+    // 원점(0,0)에서 선분 [p0, p1] 까지의 최소 유클리디안 거리
+    double euclideanDistanceToSegment(const Eigen::Vector2d& p0,
+                                      const Eigen::Vector2d& p1) const;
+
+    // (1,0) 과 라인 방향 각도가 angle_thresh_rad 이내인지
     bool isAlignedWithHeading(const std::pair<Eigen::Vector2d, Eigen::Vector2d>& seg,
-                                double angle_thresh_rad = 10.0 * M_PI / 180.0) const;
+                              double angle_thresh_rad = 10.0 * M_PI / 180.0) const;
 
     // ROS
     ros::NodeHandle nh_;
     ros::NodeHandle private_nh_;
     ros::Subscriber line_sub_;
-    ros::Publisher  cmd_pub_;     // 터널 환경일 때 Ackermann 조향 명령 발행
+    ros::Publisher  cmd_pub_;
 
     // TF2
-    tf2_ros::Buffer           tf_buffer_;
+    tf2_ros::Buffer            tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
 
     // 파라미터
-    std::string target_frame_;    // 보통 "base_link"
+    std::string target_frame_;
     double stanley_k_gain_;
     double max_steer_rad_;
     double command_speed_;
@@ -55,6 +59,6 @@ private:
     // 터널 환경 여부
     bool is_tunnel_env_;
 
-    // 마지막 조향각 (디버깅용으로 쓰고 싶을 때)
+    // 마지막 조향각 (디버깅용)
     double last_steering_angle_;
 };

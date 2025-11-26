@@ -27,6 +27,7 @@ TUNNEL_DISTANCE_MAX = 0.5  # 터널 최대 거리 (m)
 # 2025
 count = 0
 is_barricade_done = False
+is_debug = True
 
 # LaserScan 데이터를 처리하여 Wall 검출
 def process_scan_data(scan_data):
@@ -85,6 +86,8 @@ def detect_line(lidar_points):
 
 # 터널 인식 함수
 def detect_tunnel(scan_data):
+    global is_debug
+
     left_distances = [
         scan_data.ranges[i]
         for i in TUNNEL_LEFT_INDEX_RANGE
@@ -97,12 +100,13 @@ def detect_tunnel(scan_data):
     ]
 
     if len(left_distances) > 5 and len(right_distances) > 5:  # 양쪽 충분한 포인트가 있으면 터널로 인식
-        rospy.loginfo("Tunnel detected.")
+        if is_debug:
+            rospy.loginfo("Tunnel detected.")
         return True
     return False
 
 def lidar_callback(scan_data, control_pub, parking_pub):
-    global count, is_barricade_done
+    global count, is_barricade_done, is_debug
 
     if detect_tunnel(scan_data):
         return  # 터널로 인식되면 정지 신호를 발행하지 않음
@@ -112,7 +116,8 @@ def lidar_callback(scan_data, control_pub, parking_pub):
 
     ackermann_msg = AckermannDriveStamped()
     if detected:
-        rospy.loginfo("barricade detected! Stopping.")
+        if is_debug:
+            rospy.loginfo("barricade detected! Stopping.")
         ackermann_msg.drive.speed = 0.0
         control_pub.publish(ackermann_msg)
         count += 1
@@ -127,6 +132,8 @@ def lidar_callback(scan_data, control_pub, parking_pub):
         parking_pub.publish(parking_msg)
 
 def main():
+    global is_debug
+
     rospy.init_node("barricade_detector", anonymous=True)
     control_pub = rospy.Publisher("/high_level/ackermann_cmd_mux/input/nav_3", AckermannDriveStamped, queue_size=10)
     parking_pub = rospy.Publisher("/parking_flag", Bool, queue_size=1)
@@ -134,6 +141,9 @@ def main():
     rospy.Subscriber("/scan", LaserScan, lambda scan_data: lidar_callback(scan_data, control_pub, parking_pub))
 
     rospy.loginfo("barricade_detector node started.")
+
+    is_debug = rospy.get_param('~debug', True)
+
     rospy.spin()
 
 if __name__ == "__main__":

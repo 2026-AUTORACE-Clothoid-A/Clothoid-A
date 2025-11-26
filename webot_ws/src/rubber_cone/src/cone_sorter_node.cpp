@@ -1254,32 +1254,58 @@ void ConeSorterNode::publishBoundary(
 }
 
 // ========== 전체 파이프라인 호출 ==========
-
 void ConeSorterNode::processOnce()
 {
     const std::size_t N = cones_.size();
-    if (N < 3)
+    if (N == 0)
     {
-        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] Not enough cones (%zu) for sorting.", N);
+        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No cones, skip.");
         return;
     }
 
-    // --- Stage1: 러버콘 스타일 시작 콘 선정 (필요 시 기존 로직으로 폴백) ---
+    // --- Stage1: 러버콘 스타일 시작 콘 선정 ---
     int start_idx_left  = -1;
     int start_idx_right = -1;
 
     if (!selectFirstConeIndex(Side::LEFT, start_idx_left))
     {
-        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No valid LEFT starting cone (Rubber logic + fallback).");
+        ROS_WARN_THROTTLE(1.0,
+            "[ConeSorterNode] No valid LEFT starting cone (Rubber logic).");
     }
     if (!selectFirstConeIndex(Side::RIGHT, start_idx_right))
     {
-        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No valid RIGHT starting cone (Rubber logic + fallback).");
+        ROS_WARN_THROTTLE(1.0,
+            "[ConeSorterNode] No valid RIGHT starting cone (Rubber logic).");
     }
 
+    // 시작점 둘 다 못 찾으면 → 어쩔 수 없이 종료
     if (start_idx_left < 0 && start_idx_right < 0)
     {
-        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] No valid starting cones for LEFT/RIGHT.");
+        ROS_WARN_THROTTLE(1.0,
+            "[ConeSorterNode] No valid starting cones for LEFT/RIGHT.");
+        return;
+    }
+
+    // 콘 개수가 3개 미만이면: trace 만들 수는 없지만
+    // "시작점만이라도" 경계로 보내기 (요청사항)
+    if (N < 3)
+    {
+        std::vector<Eigen::Vector2d> left_boundary_pts;
+        std::vector<Eigen::Vector2d> right_boundary_pts;
+
+        if (start_idx_left >= 0)
+            left_boundary_pts.push_back(cones_.at(start_idx_left));
+        if (start_idx_right >= 0)
+            right_boundary_pts.push_back(cones_.at(start_idx_right));
+
+        if (!left_boundary_pts.empty())
+            publishBoundary(left_boundary_pts, left_boundary_pub_, "base_link");
+        if (!right_boundary_pts.empty())
+            publishBoundary(right_boundary_pts, right_boundary_pub_, "base_link");
+
+        ROS_INFO_THROTTLE(1.0,
+            "[ConeSorterNode] N<3 fallback: left size=%zu, right size=%zu",
+            left_boundary_pts.size(), right_boundary_pts.size());
         return;
     }
 
@@ -1287,8 +1313,7 @@ void ConeSorterNode::processOnce()
         "[Stage1] left_start_idx=%d, right_start_idx=%d",
         start_idx_left, start_idx_right);
 
-    // --- Stage2: 인접 행렬 + reachable (한 쪽 인덱스로 adjacency 구성 후,
-    //           각 측에서 BFS 별도 수행) ---
+    // --- Stage2: 인접 행렬 + reachable ---
     Eigen::MatrixXi adjacency;
     std::vector<int> reachable_dummy;
 
@@ -1301,9 +1326,29 @@ void ConeSorterNode::processOnce()
         adjacency,
         reachable_dummy);
 
+    // adjacency가 비어버리면: 그래프 기반 탐색은 불가,
+    // 하지만 시작점은 있으니 그것만이라도 보내기
     if (adjacency.rows() == 0)
     {
-        ROS_WARN_THROTTLE(1.0, "[ConeSorterNode] Empty adjacency matrix.");
+        ROS_WARN_THROTTLE(1.0,
+            "[ConeSorterNode] Empty adjacency matrix, fallback to start cones only.");
+
+        std::vector<Eigen::Vector2d> left_boundary_pts;
+        std::vector<Eigen::Vector2d> right_boundary_pts;
+
+        if (start_idx_left >= 0)
+            left_boundary_pts.push_back(cones_.at(start_idx_left));
+        if (start_idx_right >= 0)
+            right_boundary_pts.push_back(cones_.at(start_idx_right));
+
+        if (!left_boundary_pts.empty())
+            publishBoundary(left_boundary_pts, left_boundary_pub_, "base_link");
+        if (!right_boundary_pts.empty())
+            publishBoundary(right_boundary_pts, right_boundary_pub_, "base_link");
+
+        ROS_INFO_THROTTLE(1.0,
+            "[ConeSorterNode] adjacency fallback: left size=%zu, right size=%zu",
+            left_boundary_pts.size(), right_boundary_pts.size());
         return;
     }
 
@@ -1348,6 +1393,7 @@ void ConeSorterNode::processOnce()
     std::vector<Eigen::Vector2d> left_boundary_pts;
     std::vector<Eigen::Vector2d> right_boundary_pts;
 
+    // LEFT 측
     if (!traces_left.end_configs.empty())
     {
         double best_score = std::numeric_limits<double>::infinity();
@@ -1368,7 +1414,13 @@ void ConeSorterNode::processOnce()
         for (int idx : best_cfg)
             left_boundary_pts.push_back(cones_.at(idx));
     }
+    else if (start_idx_left >= 0)
+    {
+        // <<< 요기: LEFT 후보 trace가 하나도 없을 때 시작점만이라도 보냄
+        left_boundary_pts.push_back(cones_.at(start_idx_left));
+    }
 
+    // RIGHT 측
     if (!traces_right.end_configs.empty())
     {
         double best_score = std::numeric_limits<double>::infinity();
@@ -1389,6 +1441,11 @@ void ConeSorterNode::processOnce()
         for (int idx : best_cfg)
             right_boundary_pts.push_back(cones_.at(idx));
     }
+    else if (start_idx_right >= 0)
+    {
+        // <<< 요기: RIGHT 후보 trace가 하나도 없을 때 시작점만이라도 보냄
+        right_boundary_pts.push_back(cones_.at(start_idx_right));
+    }
 
     if (!left_boundary_pts.empty())
         publishBoundary(left_boundary_pts, left_boundary_pub_, "base_link");
@@ -1399,7 +1456,6 @@ void ConeSorterNode::processOnce()
         "[ConeSorterNode] chosen left size=%zu, right size=%zu",
         left_boundary_pts.size(), right_boundary_pts.size());
 }
-
 } // namespace cone_sorter
 
 // ===== main =====

@@ -34,6 +34,8 @@ class ChoiceABSign(object):
     def __init__(self):
         rospy.init_node("Choice_AB_sign")
 
+        self.is_debug = rospy.get_param('~debug', True)
+
         # 표지판 ID 매핑 (필요하면 파라미터로 조절 가능)
         self.left_sign_id  = rospy.get_param("~left_sign_id",  self.SIGN_LEFT)
         self.right_sign_id = rospy.get_param("~right_sign_id", self.SIGN_RIGHT)
@@ -71,14 +73,16 @@ class ChoiceABSign(object):
             self.current_lane = 0
             self.lane_msg.data = self.current_lane
             self.lane_pub.publish(self.lane_msg)
-            rospy.loginfo("Choice_AB_sign: LEFT sign detected -> direction_flag = 0 (left lane)")
+            if self.is_debug:
+                rospy.loginfo("Choice_AB_sign: LEFT sign detected -> direction_flag = 0 (left lane)")
 
         elif sign_id == self.right_sign_id:
             # 1 = 오른쪽
             self.current_lane = 1
             self.lane_msg.data = self.current_lane
             self.lane_pub.publish(self.lane_msg)
-            rospy.loginfo("Choice_AB_sign: RIGHT sign detected -> direction_flag = 1 (right lane)")
+            if self.is_debug:
+                rospy.loginfo("Choice_AB_sign: RIGHT sign detected -> direction_flag = 1 (right lane)")
 
         # PARK 표지판 → 주차 미션 트리거
         # if sign_id == self.park_sign_id:
