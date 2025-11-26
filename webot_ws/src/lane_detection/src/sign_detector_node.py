@@ -36,6 +36,7 @@ class SignDetectorNode(object):
 
     def __init__(self):
         # rospy.init_node('sign_detector_node')
+        self.is_debug = rospy.get_param('~debug', True)
 
         # --- 파라미터 ---
         self.camera_topic = rospy.get_param('~camera_topic', '/usb_cam/image_raw/calib')
@@ -43,10 +44,11 @@ class SignDetectorNode(object):
         self.resize_height = rospy.get_param('~resize_height', 240)
 
         # HSV 파란색 범위 (초기값 – 트랙바로 실시간 변경)
-        init_lower = rospy.get_param('~lower_blue', [90, 80, 80])
-        init_upper = rospy.get_param('~upper_blue', [130, 255, 255])
+        init_lower = rospy.get_param('~lower_blue', [50, 45, 30]) #2차 #90, 80, 80 2024 #66, 53, 37 1차
+        init_upper = rospy.get_param('~upper_blue', [80, 130, 100]) #2차 #130, 255, 255 2024 #104, 121, 142 1차
         self.lower_blue = np.array(init_lower, dtype=np.uint8)
         self.upper_blue = np.array(init_upper, dtype=np.uint8)
+        self.max_v_value = rospy.get_param('~max_v_value', 220)  # [변경] 너무 밝은 ROI 제거를 위한 V 채널 한계
 
         # 모폴로지 커널 크기
         self.morph_kernel_size = rospy.get_param('~morph_kernel', 2)
@@ -61,7 +63,7 @@ class SignDetectorNode(object):
         # self.counting_to_need = rospy.get_param('~counting_to_need', 1)
 
         # --- 표지판 안정화용 상태 ---
-        self.frames_to_confirm = rospy.get_param('~frames_to_confirm', 3)  # 5프레임 연속이면 확정
+        self.frames_to_confirm = rospy.get_param('~frames_to_confirm', 5)  # 5프레임 연속이면 확정
         self.frames_to_forget  = rospy.get_param('~frames_to_forget', 8)  # 10프레임 연속 NONE이면 리셋
 
         self.stable_sign = self.SIGN_NONE          # 현재 확정된 표지판 (publish 값)
@@ -74,12 +76,21 @@ class SignDetectorNode(object):
         self.bridge = CvBridge()
         self.kernel = np.ones((self.morph_kernel_size,
                                self.morph_kernel_size), np.uint8)
+        # ROI points (trapezoid) and mask placeholder
+        self.roi_points = np.array(
+            [[200, 240], [440, 240], [480, 300], [160, 300]],
+            dtype=np.int32
+        )
+        self.roi_mask = None
 
         self.last_sign = self.SIGN_NONE
         self.sign_count = 0
 
         # --- OpenCV 윈도우 & 트랙바 설정 ---
-        self.init_hsv_trackbar(init_lower, init_upper)
+        self.l_t = 50
+        self.u_t = 150
+        if self.is_debug:
+            self.init_hsv_trackbar(init_lower, init_upper, self.l_t, self.u_t)
 
         # --- Publisher / Subscriber ---
         self.sign_pub = rospy.Publisher('/traffic_sign', Int32, queue_size=1)
@@ -97,18 +108,19 @@ class SignDetectorNode(object):
         self.canny = None
 
     def process(self):
-        try:
-            cv2.imshow("frame", self.frame)
-            cv2.imshow("mask", self.mask_img)
-            cv2.imshow("canny", self.canny)
-            cv2.waitKey(1)
-        except:
-            pass    
+        if self.is_debug:
+            try:
+                cv2.imshow("frame", self.frame)
+                cv2.imshow("mask", self.mask_img)
+                cv2.imshow("canny", self.canny)
+                cv2.waitKey(1)
+            except:
+                pass    
 
     # ---------------------------------------------------------------------- #
     # 트랙바 초기화
     # ---------------------------------------------------------------------- #
-    def init_hsv_trackbar(self, lower_init, upper_init):
+    def init_hsv_trackbar(self, lower_init, upper_init, l_t, u_t):
         """
         HSV 파란색 범위를 트랙바로 조절할 수 있게 설정.
         H: 0~179, S/V: 0~255
@@ -132,8 +144,8 @@ class SignDetectorNode(object):
         cv2.createTrackbar('V_low', 'mask', int(lower_init[2]), 255, nothing)
         cv2.createTrackbar('V_high', 'mask', int(upper_init[2]), 255, nothing)
 
-        cv2.createTrackbar('Lower Thresh', 'canny', 50, 255, nothing)
-        cv2.createTrackbar('Upper Thresh', 'canny', 100, 255, nothing)
+        cv2.createTrackbar('Lower Thresh', 'canny', l_t, 255, nothing)
+        cv2.createTrackbar('Upper Thresh', 'canny', u_t, 255, nothing)
 
     def update_hsv_from_trackbar(self):
         """
@@ -154,23 +166,39 @@ class SignDetectorNode(object):
             return
 
         # 범위 보정 (하한 <= 상한 보장)
-        h_low = max(0, min(h_low, 179))
-        h_high = max(0, min(h_high, 179))
+        h_low = max(0, h_low)
+        h_high = min(h_high, 179)
         if h_low > h_high:
             h_low, h_high = h_high, h_low
 
-        s_low = max(0, min(s_low, 255))
-        s_high = max(0, min(s_high, 255))
+        s_low = max(0, s_low)
+        s_high = min(s_high, 255)
         if s_low > s_high:
             s_low, s_high = s_high, s_low
 
-        v_low = max(0, min(v_low, 255))
-        v_high = max(0, min(v_high, 255))
+        v_low = max(0, v_low)
+        v_high = min(v_high, 255)
         if v_low > v_high:
             v_low, v_high = v_high, v_low
 
         self.lower_blue = np.array([h_low, s_low, v_low], dtype=np.uint8)
         self.upper_blue = np.array([h_high, s_high, v_high], dtype=np.uint8)
+
+    def update_canny_from_trackbar(self):
+        """트랙바 값으로 Canny 임계값을 실시간 업데이트"""
+        if os.getenv('DISPLAY') is None:
+            return
+        try:
+            lower = cv2.getTrackbarPos('Lower Thresh', 'canny')
+            upper = cv2.getTrackbarPos('Upper Thresh', 'canny')
+        except cv2.error:
+            return
+
+        # 순서 보장
+        self.l_t = max(0, lower)
+        self.u_t = min(upper, 255)
+        if self.l_t > self.u_t:
+            self.l_t, self.u_t = self.u_t, self.l_t
 
     # ---------------------------------------------------------------------- #
     # 콜백
@@ -181,19 +209,43 @@ class SignDetectorNode(object):
         except CvBridgeError as e:
             return
 
-        # --- [수정 2] 매 프레임마다 마스크 변수 리셋 (검은색 도화지 준비) ---
-        h, w = self.frame.shape[:2]
-        self.mask = np.zeros((h, w), dtype=np.uint8)
-        self.mask_img = np.zeros((h, w, 3), dtype=np.uint8) # 컬러 영상용
+        base_frame = self.frame.copy()
 
-        # 1. Canny Edge
-        blurred = cv2.GaussianBlur(self.frame, (5, 5), 0)
-        low_canny = cv2.getTrackbarPos('Lower Thresh', 'canny')
-        high_canny = cv2.getTrackbarPos('Upper Thresh', 'canny')
-        if low_canny == 0 and high_canny == 0: low_canny, high_canny = 50, 150
-        self.canny = cv2.Canny(blurred, low_canny, high_canny)
+        # Initialize or refresh ROI mask if frame size changes
+        if self.roi_mask is None or self.roi_mask.shape != self.frame.shape[:2]:
+            self.roi_mask = np.zeros(self.frame.shape[:2], dtype=np.uint8)
+            cv2.fillPoly(self.roi_mask, [self.roi_points], 255)
 
-        # 2. Contour 탐색
+        # Apply ROI before any preprocessing (keep original frame clean)
+        roi_frame = cv2.bitwise_and(base_frame, base_frame, mask=self.roi_mask)
+        proc_frame = roi_frame
+
+        # ROI visualization only (does not affect proc_frame)
+        roi_points_for_draw = self.roi_points.reshape((-1, 1, 2))
+        cv2.polylines(self.frame, [roi_points_for_draw], True, (0, 255, 255), 2)
+
+        # [추가] 트랙바 변경 사항을 매 프레임 반영
+        if self.is_debug:
+            self.update_hsv_from_trackbar()
+            self.update_canny_from_trackbar()
+
+        # [변경] HSV 마스크 기반으로 사전에 파란 영역만 추려서 컨투어 후보를 제한
+        blurred = cv2.GaussianBlur(proc_frame, (5, 5), 0)
+        hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
+        blue_mask = cv2.inRange(hsv_frame, self.lower_blue, self.upper_blue)
+        if self.morph_kernel_size > 0:
+            blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, self.kernel)
+        self.mask = blue_mask.copy()
+        self.mask_img = cv2.bitwise_and(proc_frame, proc_frame, mask=blue_mask)
+
+        # [변경] 파란색 마스크에 대해서만 엣지를 검출하여 밝은 조명 등 비파란 영역 배제
+        low_canny = self.l_t
+        high_canny = self.u_t
+        if low_canny == 0 and high_canny == 0:
+            low_canny, high_canny = 50, 150
+        self.canny = cv2.Canny(self.mask, low_canny, high_canny)
+
+        # 2. Contour 탐색 (마스크 한정)
         contours, _ = cv2.findContours(self.canny, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
         target_cnt = None
@@ -223,7 +275,7 @@ class SignDetectorNode(object):
                 cv2.drawContours(self.mask, [target_cnt], 0, (255), thickness=cv2.FILLED)
                 
                 # (2) 원본에서 오려내기 (여기가 핵심! inRange 말고 bitwise_and 결과를 저장)
-                self.mask_img = cv2.bitwise_and(self.frame, self.frame, mask=self.mask)
+                self.mask_img = cv2.bitwise_and(proc_frame, proc_frame, mask=self.mask)
 
                 hsv = cv2.cvtColor(self.mask_img, cv2.COLOR_BGR2HSV)
                 self.mask = cv2.inRange(hsv, self.lower_blue, self.upper_blue)
@@ -232,8 +284,23 @@ class SignDetectorNode(object):
                 x, y, w, h = cv2.boundingRect(target_cnt)
                 roi = self.mask_img[y:y + h, x:x + w]
 
-                # (4) 상세 분류
-                detected_sign = self.classify_circle_roi(roi)
+                # [변경] V 채널 평균이 너무 밝으면 (조명 등) ROI를 바로 무효 처리
+                reject_roi = False
+                if roi.size == 0:
+                    reject_roi = True
+                else:
+                    roi_hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                    mean_v = cv2.mean(roi_hsv[:, :, 2])[0]
+                    if mean_v > self.max_v_value:
+                        reject_roi = True
+                        if self.is_debug:
+                            rospy.loginfo_throttle(0.1, "ROI rejected (V=%.1f > %.1f)", mean_v, self.max_v_value)
+
+                # (4) 상세 분류 (V 채널 한계 통과 시에만 실행)
+                if not reject_roi:
+                    detected_sign = self.classify_circle_roi(roi)
+                else:
+                    detected_sign = self.SIGN_NONE
 
                 # (5) 시각화 (원본 프레임에 박스 그리기)
                 if detected_sign != self.SIGN_NONE:
@@ -275,24 +342,28 @@ class SignDetectorNode(object):
         blue_q4 = np.count_nonzero(q4)
 
         total_blue = blue_q3 + blue_q4
-        rospy.loginfo_throttle(
-            0.05,
-            "ROI blue: q3=%d, q4=%d, total=%d" %
-            (blue_q3, blue_q4, total_blue)
-        )
-
-        if total_blue < 1:   # 거의 0이면만 NONE
+        if self.is_debug:
             rospy.loginfo_throttle(
                 0.05,
-                "sign_detector_node: ROI -> NONE (blue too small, total=%d)", total_blue
+                "ROI blue: q3=%d, q4=%d, total=%d" %
+                (blue_q3, blue_q4, total_blue)
             )
+
+        if total_blue < 1:   # 거의 0이면만 NONE
+            if self.is_debug:
+                rospy.loginfo_throttle(
+                    0.05,
+                    "sign_detector_node: ROI -> NONE (blue too small, total=%d)", total_blue
+                )
             return self.SIGN_NONE
 
         if blue_q3 > blue_q4:
-            rospy.loginfo_throttle(0.05, "ROI -> LEFT")
+            if self.is_debug:
+                rospy.loginfo_throttle(0.05, "ROI -> LEFT")
             return self.SIGN_LEFT
         else:
-            rospy.loginfo_throttle(0.05, "ROI -> RIGHT")
+            if self.is_debug:
+                rospy.loginfo_throttle(0.05, "ROI -> RIGHT")
             return self.SIGN_RIGHT
         # # 파란색이 너무 적으면 유효한 표지판 아닌 걸로 본다
         # if total_blue < 5:   # 필요하면 튜닝
