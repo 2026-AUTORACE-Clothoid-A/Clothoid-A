@@ -39,14 +39,13 @@ private:
     ros::NodeHandle private_nh_;
     ros::Subscriber line_sub_;
     ros::Publisher  cmd_pub_;
-    ros::Publisher  tunnel_mission_pub_;   // 터널 미션 완료 여부 (bool) 발행
 
     // TF2
     tf2_ros::Buffer            tf_buffer_;
     tf2_ros::TransformListener tf_listener_;
 
     // 파라미터
-    std::string target_frame_;    // 보통 "base_link"
+    std::string target_frame_;
     double stanley_k_gain_;
     double max_steer_rad_;
     double command_speed_;
@@ -57,11 +56,9 @@ private:
     std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> right_segments_;
     std::vector<std::pair<Eigen::Vector2d, Eigen::Vector2d>> unknown_segments_;
 
-    // 터널 미션 상태
-    bool mission_started_;    // 시작 판단이 한 번이라도 참이었던 적 있는지
-    bool mission_finished_;   // 종료 판단이 한 번이라도 참이었던 적 있는지
-    bool has_progress_;       // 진행 판단이 한 번이라도 참이었던 적 있는지
+    // 터널 환경 여부
+    bool is_tunnel_env_;
 
-    // 디버깅용 마지막 조향각
+    // 마지막 조향각 (디버깅용)
     double last_steering_angle_;
 };
