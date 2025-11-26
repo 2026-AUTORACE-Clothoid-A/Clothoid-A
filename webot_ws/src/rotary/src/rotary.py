@@ -95,7 +95,7 @@ class CameraReceiver:
         # 정지 명령 관련 파라미터
         self.stop_topic = rospy.get_param(
             "~stop_topic",
-            "high_level/ackermann_cmd_mux/input/nav_0"
+            "high_level/ackermann_cmd_mux/input/nav_2"
         )
         self.stop_speed = rospy.get_param("~stop_speed", 0.0)
 
