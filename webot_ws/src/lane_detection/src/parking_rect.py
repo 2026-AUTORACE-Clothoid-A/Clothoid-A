@@ -32,9 +32,9 @@ temp2 = 80
 
 # 2025
 l_h = 20
-l_s = 70
-l_v = 100
-u_h = 35
+l_s = 165
+l_v = 50
+u_h = 60
 u_s = 255
 u_v = 255
 
@@ -216,6 +216,8 @@ class CameraReceiver:
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                    rospy.loginfo("Step 1")
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
@@ -225,8 +227,10 @@ class CameraReceiver:
         step_start_time = total_time
 
         if not self.is_sensor_step_done:
-            if self.min_angle < -1.5 or self.min_range < 0.32:
-                rospy.loginfo("DRIVE!!")
+            if self.min_angle < -1.5 or self.min_range < 0.31:
+                if self.is_debug:
+                    rospy.loginfo("Step 2")
+                
                 self.drive_info.drive.speed = 0.2
                 self.drive_info.drive.steering_angle = -0.34
                 self.drive_pub.publish(self.drive_info)
@@ -236,16 +240,19 @@ class CameraReceiver:
                 self.is_sensor_step_done = True
                 self.sensor_step_duration = dt - step_start_time
 
-                self.diff = self.min_range - 0.32
+                self.diff = self.min_range - 0.31
+                if self.is_debug:
+                    rospy.loginfo(f"Angle: {self.min_angle},\tRange: {self.min_range}")
+                    rospy.loginfo(f"Difference: {self.diff},\tSensor Step Duration: {self.sensor_step_duration}")
         total_time += self.sensor_step_duration
-
-        rospy.loginfo(f"{self.diff}")
 
         # 전진에서 후진 변경 시 급발진 방지용
         step_time = 0.5
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 3")
             self.drive_info.drive.speed = -0.195
             self.drive_info.drive.steering_angle = 0.085
             self.drive_pub.publish(self.drive_info)
@@ -256,6 +263,8 @@ class CameraReceiver:
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 4")
             self.drive_info.drive.speed = -0.2
             self.drive_info.drive.steering_angle = 0.085
             self.drive_pub.publish(self.drive_info)
@@ -266,6 +275,8 @@ class CameraReceiver:
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 5")
             self.drive_info.drive.speed = -0.2
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
@@ -276,28 +287,32 @@ class CameraReceiver:
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 6")
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
             return 
 
-        # 핸들 왼쪽으로 돌려서 전진 (주차 완료!)
-        step_time = 0.30
-        total_time += step_time
+        # # 핸들 왼쪽으로 돌려서 전진 (주차 완료!)
+        # step_time = 0.30
+        # total_time += step_time
 
-        if dt < total_time: 
-            self.drive_info.drive.speed = 0.2
-            self.drive_info.drive.steering_angle = 0.34
-            self.drive_pub.publish(self.drive_info)
-            return
+        # if dt < total_time: 
+        #     self.drive_info.drive.speed = 0.2
+        #     self.drive_info.drive.steering_angle = 0.34
+        #     self.drive_pub.publish(self.drive_info)
+        #     return
 
         # ========================================================
         
         # 전진에서 후진 변경 시 급발진 방지용
-        step_time = 0.5
+        step_time = 3.0
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 7: STOP")
             self.drive_info.drive.speed = -0.195
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
@@ -305,21 +320,23 @@ class CameraReceiver:
 
         # ========================================================
 
-        # 핸들 왼쪽으로 돌려서 후진
-        step_time = 0.30
-        total_time += step_time
+        # # 핸들 왼쪽으로 돌려서 후진
+        # step_time = 0.30
+        # total_time += step_time
 
-        if dt < total_time: 
-            self.drive_info.drive.speed = -0.2
-            self.drive_info.drive.steering_angle = 0.34
-            self.drive_pub.publish(self.drive_info)
-            return
+        # if dt < total_time: 
+        #     self.drive_info.drive.speed = -0.2
+        #     self.drive_info.drive.steering_angle = 0.34
+        #     self.drive_pub.publish(self.drive_info)
+        #     return
 
         # 후진에서 전진 변경 시 급발진 방지용
         step_time = 0.5
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 8")
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
@@ -330,6 +347,8 @@ class CameraReceiver:
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 9")
             self.drive_info.drive.speed = 0.2
             self.drive_info.drive.steering_angle = -0.34
             self.drive_pub.publish(self.drive_info)
@@ -340,6 +359,8 @@ class CameraReceiver:
         total_time += step_time
 
         if dt < total_time: 
+            if self.is_debug:
+                rospy.loginfo("Step 10")
             self.drive_info.drive.speed = 0.195
             self.drive_info.drive.steering_angle = 0.34
             self.drive_pub.publish(self.drive_info)
