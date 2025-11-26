@@ -153,7 +153,7 @@ class CameraReceiver:
         # /raw_obstacles 구독
         rospy.Subscriber("/raw_obstacles", Obstacles, self.obstacles_callback)
 
-        # 초기 상태(미션 미완료) 한 번 퍼블리시
+        # 상태 퍼블리시
         self.publish_mission_state()
 
     # ------------ 디버그용 윈도우 & 트랙바 생성 ------------
@@ -341,11 +341,9 @@ class CameraReceiver:
                 continue
 
             # 필요하다면 각도 제한도 걸 수 있음
-            # angle_rad = math.atan2(y, x)
-            # angle_deg = math.degrees(angle_rad)
-            # if x <= 1.1 and abs(angle_deg) <= 30.0:
-
-            if x <= 1.1:
+            angle_rad = math.atan2(y, x)
+            angle_deg = math.degrees(angle_rad)
+            if x <= 1.1 and abs(angle_deg) <= 30.0:
                 return True
 
         return False
@@ -364,8 +362,8 @@ class CameraReceiver:
 
     # ------------ 이미지 콜백 ------------
     def image_callback(self, msg):
-        # 로터리 미션이 이미 끝났다면 더 이상 환경을 판단할 필요 없음
-        if self.rotary_mission_finished:
+        # 로터리 미션이 이미 끝났거나 로터리 환경이라면 더 이상 환경을 판단할 필요 없음
+        if self.rotary_mission_finished or self.rotary_flag:
             return
 
         # ROS Image → OpenCV BGR

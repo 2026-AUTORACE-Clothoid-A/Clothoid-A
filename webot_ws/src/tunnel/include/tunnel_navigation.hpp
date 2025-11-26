@@ -1,7 +1,7 @@
 #pragma once
 
 #include <ros/ros.h>
-#include <laserline/LineSegmentArray.h>
+#include <obstacle_detector/Obstacles.h>
 
 #include <tf2_ros/transform_listener.h>
 #include <Eigen/Core>
@@ -20,7 +20,7 @@ public:
 
 private:
     // 콜백: line_segments 수신
-    void lineCallback(const laserline::LineSegmentArray::ConstPtr& msg);
+    void lineCallback(const obstacle_detector::Obstacles::ConstPtr& msg);
 
     // 원점(0,0)에서 p0-p1을 지나는 직선까지의 수직 거리 (무한 직선 기준)
     double perpendicularDistanceToLine(const Eigen::Vector2d& p0,

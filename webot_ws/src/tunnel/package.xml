@@ -77,7 +77,7 @@
   <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>ackermann_msgs</exec_depend>
 
-  <depend>laserline</depend>
+  <depend>obstacle_detector</depend>
 
   <!-- The export tag contains other, unspecified, tags -->
   <export>

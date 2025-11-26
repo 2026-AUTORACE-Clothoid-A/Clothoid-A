@@ -14,7 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
   sensor_msgs
   std_msgs
   visualization_msgs
-  laserline
+  obstacle_detector
   tf2_ros
   tf2_geometry_msgs
   ackermann_msgs
@@ -112,7 +112,7 @@ find_package(Eigen3 REQUIRED)
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES tunnel
-  CATKIN_DEPENDS geometry_msgs roscpp rospy sensor_msgs std_msgs visualization_msgs laserline tf2_ros tf2_geometry_msgs ackermann_msgs
+  CATKIN_DEPENDS geometry_msgs roscpp rospy sensor_msgs std_msgs visualization_msgs obstacle_detector tf2_ros tf2_geometry_msgs ackermann_msgs
 #  DEPENDS system_lib
 )
 
