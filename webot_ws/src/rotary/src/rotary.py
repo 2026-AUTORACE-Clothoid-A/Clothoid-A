@@ -74,15 +74,15 @@ class CameraReceiver:
         self.roi_x_max = rospy.get_param("~roi_x_max", 180)
 
         # HSV / Threshold 기본값
-        self.h_lower = rospy.get_param("~lower_h", 45)
-        self.s_lower = rospy.get_param("~lower_s", 30)
-        self.v_lower = rospy.get_param("~lower_v", 130)
+        self.h_lower = rospy.get_param("~lower_h", 40)
+        self.s_lower = rospy.get_param("~lower_s", 55)
+        self.v_lower = rospy.get_param("~lower_v", 110)
 
-        self.h_upper = rospy.get_param("~upper_h", 90)
-        self.s_upper = rospy.get_param("~upper_s", 100)
-        self.v_upper = rospy.get_param("~upper_v", 180)
+        self.h_upper = rospy.get_param("~upper_h", 100)
+        self.s_upper = rospy.get_param("~upper_s", 130)
+        self.v_upper = rospy.get_param("~upper_v", 150)
 
-        self.low_thresh  = rospy.get_param("~lower_thresh", 100)
+        self.low_thresh  = rospy.get_param("~lower_thresh", 110)
         self.high_thresh = rospy.get_param("~upper_thresh", 255)
 
         # START 사각형 조건

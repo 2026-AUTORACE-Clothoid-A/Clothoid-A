@@ -382,6 +382,13 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     pnh_.param("lfd",            lfd_,            0.6);  // m
     pnh_.param("centerline_ds",  centerline_ds_,  0.05); // 5 cm
 
+    // ★ 최대 조향 각도(21 deg)와 후진 속도 설정 ★
+    double max_steer_deg = 21.0;
+    pnh_.param("max_steer_deg", max_steer_deg, 21.0);
+    max_steer_rad_ = max_steer_deg * M_PI / 180.0;
+
+    pnh_.param("reverse_speed", reverse_speed_, -0.3);   // 기본 -0.3 m/s
+
     // 로컬 최소제곱 윈도우 크기 (홀수, 5 이상 권장)
     pnh_.param("lsq_window_size", lsq_window_size_, 5);
     if (lsq_window_size_ < 5)
@@ -484,7 +491,6 @@ void RubberConeNode::missionStateCallback(const std_msgs::Bool::ConstPtr& msg)
 }
 
 // ===== 메인 처리 =====
-
 void RubberConeNode::updateAndControl()
 {
     if (!mission_active_)
@@ -522,6 +528,25 @@ void RubberConeNode::updateAndControl()
             "[RubberConeNode] All boundaries stale. Skip control.");
         return;
     }
+
+    // ★★ 한쪽 경계만 보이는 경우 → 최대 조향으로 후진 ★★
+    // (부호 기준: +는 좌조향, -는 우조향이라고 가정)
+    if (!left_fresh && right_fresh)
+    {
+        // 왼쪽 경계가 비어 있음 → 최대 오른쪽 조향으로 후진
+        double steering = -max_steer_rad_;
+        publishReverseControl(steering);
+        return;
+    }
+    if (!right_fresh && left_fresh)
+    {
+        // 오른쪽 경계가 비어 있음 → 최대 왼쪽 조향으로 후진
+        double steering = +max_steer_rad_;
+        publishReverseControl(steering);
+        return;
+    }
+
+    // ★ 여기까지 왔으면 left_fresh && right_fresh 둘 다 true ★
 
     // 신선한 경계만 넘겨서 센터라인 생성
     std::vector<Eigen::Vector2d> left_for_center;
@@ -584,18 +609,18 @@ void RubberConeNode::buildCenterLine(const std::vector<Eigen::Vector2d>& left_li
     }
 
     // 한쪽 경계만 있을 때: 첫 점 y-대칭으로 가짜 반대편 추가 (안전장치)
-    if (has_left && !has_right)
-    {
-        const Eigen::Vector2d& p0 = left_line.front();
-        P.push_back(DTPoint{p0.x(), -p0.y()});
-        label.push_back(1);
-    }
-    else if (!has_left && has_right)
-    {
-        const Eigen::Vector2d& p0 = right_line.front();
-        P.push_back(DTPoint{p0.x(), -p0.y()});
-        label.push_back(0);
-    }
+    // if (has_left && !has_right)
+    // {
+    //     const Eigen::Vector2d& p0 = left_line.front();
+    //     P.push_back(DTPoint{p0.x(), -p0.y()});
+    //     label.push_back(1);
+    // }
+    // else if (!has_left && has_right)
+    // {
+    //     const Eigen::Vector2d& p0 = right_line.front();
+    //     P.push_back(DTPoint{p0.x(), -p0.y()});
+    //     label.push_back(0);
+    // }
 
     const int N = (int)P.size();
     if (N == 0)
@@ -842,10 +867,7 @@ double RubberConeNode::computeSteeringFromCenterLine(
     if (N == 0)
     {
         is_look_forward_point_ = false;
-
-        // 센터라인이 없으면: 이전 제어값 있으면 그대로, 없으면 0
-        if (has_last_steering_)
-            return last_steering_;
+        // 센터라인이 없으면: 조향 0 (직진)
         return 0.0;
     }
 
@@ -888,13 +910,11 @@ double RubberConeNode::computeSteeringFromCenterLine(
         if (N > closest_idx + 1)
         {
             target = center_line.back();
-            // is_look_forward_point_는 false로 둬도 되고, 여기서 true로 바꿔도 상관 없음
+            // is_look_forward_point_는 굳이 true로 안 바꿔도 됨
         }
         else
         {
-            // (2) 그것도 없으면 → 이전 제어값 사용, 없으면 0
-            if (has_last_steering_)
-                return last_steering_;
+            // (2) 그것도 없으면 → 이전 제어값 사용 X, 그냥 조향 0
             return 0.0;
         }
     }
@@ -924,6 +944,23 @@ void RubberConeNode::publishControl(double steering)
         "[RubberConeNode] mission active, steering = "
         << steering * 180.0 / M_PI << " deg.");
 }
+
+void RubberConeNode::publishReverseControl(double steering)
+{
+    ackermann_msgs::AckermannDriveStamped cmd;
+    cmd.header.stamp = ros::Time::now();
+    cmd.drive.speed  = reverse_speed_;      // 보통 -0.3
+    cmd.drive.steering_angle = steering;    // ±max_steer_rad_
+
+    control_pub_.publish(cmd);
+
+    ROS_WARN_STREAM_THROTTLE(
+        1.0,
+        "[RubberConeNode] Only one boundary detected. Reverse: speed="
+        << reverse_speed_ << " m/s, steering="
+        << steering * 180.0 / M_PI << " deg.");
+}
+
 
 // ===== Path 유틸 =====
 

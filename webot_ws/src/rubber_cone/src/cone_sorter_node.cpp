@@ -128,12 +128,36 @@ void ConeSorterNode::obstaclesCallback(const obstacle_detector::Obstacles::Const
     switch (mission_state_)
     {
     case MissionState::IDLE:
-        if (checkMissionStartCondition())
+    {
+        // 1) 영역 조건 먼저 체크
+        bool area_ok = checkMissionStartCondition();
+        if (!area_ok)
+            break;
+
+        // 2) 왼쪽/오른쪽 시작 콘을 찾아본다
+        int start_idx_left  = -1;
+        int start_idx_right = -1;
+
+        bool has_left_start  = selectFirstConeIndex(Side::LEFT,  start_idx_left);
+        bool has_right_start = selectFirstConeIndex(Side::RIGHT, start_idx_right);
+
+        if (has_left_start && has_right_start)
         {
             mission_state_ = MissionState::RUNNING;
-            ROS_INFO("[ConeSorterNode] Mission START");
+            ROS_INFO("[ConeSorterNode] Mission START (area OK + start cones found) "
+                     "left_idx=%d, right_idx=%d",
+                     start_idx_left, start_idx_right);
+        }
+        else
+        {
+            ROS_WARN_THROTTLE(
+                1.0,
+                "[ConeSorterNode] Start area OK, but cannot find BOTH left/right start cones "
+                "(has_left=%d, has_right=%d)",
+                (int)has_left_start, (int)has_right_start);
         }
         break;
+    }
 
     case MissionState::RUNNING:
         if (!checkMissionContinueCondition())
@@ -145,6 +169,7 @@ void ConeSorterNode::obstaclesCallback(const obstacle_detector::Obstacles::Const
         // 미션 진행 중일 때만 경계 생성 파이프라인 수행
         processOnce();
         break;
+
     default:
         break;
     }
@@ -154,6 +179,7 @@ void ConeSorterNode::obstaclesCallback(const obstacle_detector::Obstacles::Const
     m.data = (mission_state_ == MissionState::RUNNING);
     mission_state_pub_.publish(m);
 }
+
 
 // ===== 미션 상태 판정 =====
 bool ConeSorterNode::checkMissionStartCondition() const
@@ -1278,6 +1304,32 @@ void ConeSorterNode::processOnce()
             "[ConeSorterNode] No valid RIGHT starting cone (Rubber logic).");
     }
 
+    if (start_idx_left >= 0)
+    {
+        const auto& p = cones_.at(start_idx_left);
+        ROS_INFO_THROTTLE(0.5,
+            "[ConeSorterNode] LEFT  start cone: idx=%d, pos=(%.3f, %.3f)",
+            start_idx_left, p.x(), p.y());
+    }
+    else
+    {
+        ROS_INFO_THROTTLE(0.5,
+            "[ConeSorterNode] LEFT  start cone: NONE");
+    }
+
+    if (start_idx_right >= 0)
+    {
+        const auto& p = cones_.at(start_idx_right);
+        ROS_INFO_THROTTLE(0.5,
+            "[ConeSorterNode] RIGHT start cone: idx=%d, pos=(%.3f, %.3f)",
+            start_idx_right, p.x(), p.y());
+    }
+    else
+    {
+        ROS_INFO_THROTTLE(0.5,
+            "[ConeSorterNode] RIGHT start cone: NONE");
+    }
+
     // 시작점 둘 다 못 찾으면 → 어쩔 수 없이 종료
     if (start_idx_left < 0 && start_idx_right < 0)
     {
@@ -1309,9 +1361,9 @@ void ConeSorterNode::processOnce()
         return;
     }
 
-    ROS_INFO_THROTTLE(0.5,
-        "[Stage1] left_start_idx=%d, right_start_idx=%d",
-        start_idx_left, start_idx_right);
+    // ROS_INFO_THROTTLE(0.5,
+    //     "[Stage1] left_start_idx=%d, right_start_idx=%d",
+    //     start_idx_left, start_idx_right);
 
     // --- Stage2: 인접 행렬 + reachable ---
     Eigen::MatrixXi adjacency;
@@ -1360,10 +1412,10 @@ void ConeSorterNode::processOnce()
     if (start_idx_right >= 0)
         reachable_right = breadthFirstOrder(adjacency, start_idx_right);
 
-    ROS_INFO_THROTTLE(0.5,
-        "[Stage2] adjacency_size=%dx%d, reachable_left=%zu, reachable_right=%zu",
-        adjacency.rows(), adjacency.cols(),
-        reachable_left.size(), reachable_right.size());
+    // ROS_INFO_THROTTLE(0.5,
+    //     "[Stage2] adjacency_size=%dx%d, reachable_left=%zu, reachable_right=%zu",
+    //     adjacency.rows(), adjacency.cols(),
+    //     reachable_left.size(), reachable_right.size());
 
     // --- Stage3: end configurations 탐색 ---
     TraceSearchResult traces_left;
@@ -1385,9 +1437,9 @@ void ConeSorterNode::processOnce()
             Side::RIGHT);
     }
 
-    ROS_INFO_THROTTLE(0.5,
-        "[Stage3] left_candidates=%zu, right_candidates=%zu",
-        traces_left.end_configs.size(), traces_right.end_configs.size());
+    // ROS_INFO_THROTTLE(0.5,
+    //     "[Stage3] left_candidates=%zu, right_candidates=%zu",
+    //     traces_left.end_configs.size(), traces_right.end_configs.size());
 
     // --- Stage4: 각 후보에 대해 score 계산 후 최종 왼/오 경계 선택 ---
     std::vector<Eigen::Vector2d> left_boundary_pts;
@@ -1445,6 +1497,46 @@ void ConeSorterNode::processOnce()
     {
         // <<< 요기: RIGHT 후보 trace가 하나도 없을 때 시작점만이라도 보냄
         right_boundary_pts.push_back(cones_.at(start_idx_right));
+    }
+
+    if (!left_boundary_pts.empty())
+    {
+        std::ostringstream oss;
+        oss << "[ConeSorterNode] FINAL LEFT  boundary ("
+            << left_boundary_pts.size() << " pts):";
+        for (std::size_t i = 0; i < left_boundary_pts.size(); ++i)
+        {
+            const auto& p = left_boundary_pts[i];
+            oss << " [" << i << "]("
+                << std::fixed << std::setprecision(3)
+                << p.x() << ", " << p.y() << ")";
+        }
+        ROS_INFO_STREAM_THROTTLE(1.0, oss.str());
+    }
+    else
+    {
+        ROS_INFO_THROTTLE(1.0,
+            "[ConeSorterNode] FINAL LEFT  boundary: NONE");
+    }
+
+    if (!right_boundary_pts.empty())
+    {
+        std::ostringstream oss;
+        oss << "[ConeSorterNode] FINAL RIGHT boundary ("
+            << right_boundary_pts.size() << " pts):";
+        for (std::size_t i = 0; i < right_boundary_pts.size(); ++i)
+        {
+            const auto& p = right_boundary_pts[i];
+            oss << " [" << i << "]("
+                << std::fixed << std::setprecision(3)
+                << p.x() << ", " << p.y() << ")";
+        }
+        ROS_INFO_STREAM_THROTTLE(1.0, oss.str());
+    }
+    else
+    {
+        ROS_INFO_THROTTLE(1.0,
+            "[ConeSorterNode] FINAL RIGHT boundary: NONE");
     }
 
     if (!left_boundary_pts.empty())
