@@ -35,8 +35,8 @@ class SignDetectorNode(object):
 
         # --- 파라미터 ---
         self.camera_topic = rospy.get_param('~camera_topic', '/usb_cam/image_raw/calib')
-        self.resize_width  = rospy.get_param('~resize_width', 640)
-        self.resize_height = rospy.get_param('~resize_height', 480)
+        # self.resize_width  = rospy.get_param('~resize_width', 640)
+        # self.resize_height = rospy.get_param('~resize_height', 480)
 
         # 전처리 관련
         self.gamma_value = rospy.get_param('~gamma', 1.60)
@@ -60,8 +60,8 @@ class SignDetectorNode(object):
         #     self._set_wb_from_kelvin(self.wb_temp_k)
 
         # HSV 파란색 범위 (트랙바로 조정)
-        init_lower = rospy.get_param('~lower_blue', [77, 67, 105]) #[47, 14, 85]
-        init_upper = rospy.get_param('~upper_blue', [152, 223, 178]) #[132, 184, 142]
+        init_lower = rospy.get_param('~lower_blue', [68, 88, 90]) #[47, 14, 85] [77, 67, 105]
+        init_upper = rospy.get_param('~upper_blue', [120, 216, 160]) #[132, 184, 142] [152, 223, 178]
         self.lower_blue = np.array(init_lower, dtype=np.uint8)
         self.upper_blue = np.array(init_upper, dtype=np.uint8)
 
@@ -69,8 +69,8 @@ class SignDetectorNode(object):
         self.max_v_value = rospy.get_param('~max_v_value', 200)
 
         # 최소 컨투어 면적 / 원형성
-        self.min_area = rospy.get_param('~min_area', 300)
-        self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.8)
+        self.min_area = rospy.get_param('~min_area', 200)
+        self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.6)
 
         # 연속 프레임 안정화용
         self.frames_to_confirm = rospy.get_param('~frames_to_confirm', 5)
@@ -421,8 +421,16 @@ class SignDetectorNode(object):
         detected_sign = self.SIGN_NONE
 
         if contours:
-            # 면적 큰 순으로 정렬
-            contours = sorted(contours, key=cv2.contourArea, reverse=True)
+            # 이미지 크기
+            h_img, w_img = self.frame.shape[:2]
+
+            # ROI 중심점 계산
+            roi_cx = (self.roi_points[:, 0].min() + self.roi_points[:, 0].max()) / 2.0
+            roi_cy = (self.roi_points[:, 1].min() + self.roi_points[:, 1].max()) / 2.0
+
+            best_cnt = None
+            best_score = -1.0
+            best_circularity = 0.0
 
             for cnt in contours:
                 area = cv2.contourArea(cnt)
@@ -434,17 +442,53 @@ class SignDetectorNode(object):
                     continue
 
                 circularity = 4.0 * math.pi * area / (peri * peri)
-                if circularity < self.circularity_thresh:
+
+                x, y, w, h = cv2.boundingRect(cnt)
+                aspect = w / float(h + 1e-6)
+                aspect_dev = abs(aspect - 1.0)
+
+                cx = x + w / 2.0
+                cy = y + h / 2.0
+                center_dist = math.hypot(cx - roi_cx, cy - roi_cy) / (w_img + h_img)
+
+                # 너무 찌그러진건 컷
+                if aspect_dev > 0.6:
                     continue
 
-                # 바닥쪽에 있는지 y 위치 조건 (원하는 만큼 튜닝)
-                # x, y, w, h = cv2.boundingRect(cnt)
-                # cy = y + h / 2.0
-                # if cy < self.frame.shape[0] * 0.4:  # 너무 위에 있으면 조명 등으로 판단
-                #     continue
+                score = circularity - 0.5 * aspect_dev - 0.3 * center_dist
 
-                target_cnt = cnt
-                break
+                if score > best_score:
+                    best_score = score
+                    best_cnt = cnt
+                    best_circularity = circularity
+
+            best_cnt_for_debug = best_cnt
+
+
+            # ---- 여기서부터 "가장 유력한 후보" 디버그용 표시 ----
+            if self.is_debug and best_cnt is not None:
+                # best 후보 로그
+                best_area = cv2.contourArea(best_cnt)
+                bx, by, bw, bh = cv2.boundingRect(best_cnt)
+                best_aspect = bw / float(bh + 1e-6)
+
+                rospy.loginfo_throttle(
+                    0.1,
+                    "best cand: area=%.1f, circ=%.3f, aspect=%.2f, score=%.3f" %
+                    (best_area, best_circularity, best_aspect, best_score)
+                )
+
+                # 좌우 판정 성공/실패 상관없이 파란 박스
+                # cv2.rectangle(self.frame, (bx, by), (bx + bw, by + bh), (255, 0, 0), 2)
+
+            # ---- 하드 threshold 통과한 경우만 실제 표지판 후보로 사용 ----
+            if (
+                best_cnt is not None
+                and best_score >= 0.35
+                and best_circularity >= self.circularity_thresh
+            ):
+                target_cnt = best_cnt
+            
 
             if target_cnt is not None:
                 # 타깃 컨투어만 다시 마스크로 빼내기
@@ -479,6 +523,11 @@ class SignDetectorNode(object):
                     sign_str = "LEFT" if detected_sign == self.SIGN_LEFT else "RIGHT"
                     cv2.putText(self.frame, sign_str, (x, y - 10),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 2)
+
+            # if contours: 블록 제일 끝 부분, self.update_and_publish() 호출 전에
+            if self.is_debug and 'best_cnt_for_debug' in locals() and best_cnt_for_debug is not None: # and detected_sign == self.SIGN_NONE
+                bx, by, bw, bh = cv2.boundingRect(best_cnt_for_debug)
+                cv2.rectangle(self.frame, (bx, by), (bx + bw, by + bh), (255, 0, 0), 2)
 
         self.update_and_publish(detected_sign)
 
