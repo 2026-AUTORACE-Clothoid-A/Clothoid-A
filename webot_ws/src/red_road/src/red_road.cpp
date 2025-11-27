@@ -7,7 +7,7 @@
 
 // 상수 선언
 const double NORMAL_SPEED = 0.4;           // 일반 주행 속도
-const double RED_ROAD_SPEED = 0.3;         // 빨간 도로 감지 시 속도
+const double RED_ROAD_SPEED = 0.23;         // 빨간 도로 감지 시 속도
 const double BLUE_ROAD_SPEED = 0.8;         // 파란 도로 감지 시 속도
 const double STOP_SPEED = 0.0;             // 정지 속도
 const double DETECT_TIMEOUT = 0.2;         // 감지 타임아웃 시간 (초)
@@ -80,7 +80,7 @@ public:
             bool blue_detected = false;
 
             for (size_t i = 0; i < red_contours.size(); i++) {
-                if (cv::contourArea(red_contours[i]) > 1600) {
+                if (cv::contourArea(red_contours[i]) > 1800) {
                     red_detected = true;
 
                     std::vector<cv::Point> adjusted_contour;
