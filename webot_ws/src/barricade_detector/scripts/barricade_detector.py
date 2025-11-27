@@ -135,7 +135,7 @@ def main():
     global is_debug
 
     rospy.init_node("barricade_detector", anonymous=True)
-    control_pub = rospy.Publisher("/high_level/ackermann_cmd_mux/input/nav_3", AckermannDriveStamped, queue_size=10)
+    control_pub = rospy.Publisher("/high_level/ackermann_cmd_mux/input/nav_2", AckermannDriveStamped, queue_size=10)
     parking_pub = rospy.Publisher("/parking_flag", Bool, queue_size=1)
 
     rospy.Subscriber("/scan", LaserScan, lambda scan_data: lidar_callback(scan_data, control_pub, parking_pub))

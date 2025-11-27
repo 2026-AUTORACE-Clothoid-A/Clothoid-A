@@ -24,7 +24,7 @@ TunnelNavigationNode::TunnelNavigationNode()
     // 구독/발행
     line_sub_ = nh_.subscribe("scan_line_obstacles", 1,
                             &TunnelNavigationNode::lineCallback, this);
-    cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_2", 1);
+    cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_3", 1);
 
     ROS_INFO_STREAM("TunnelNavigationNode initialized. target_frame=" << target_frame_
                     << ", stanley_k_gain=" << stanley_k_gain_
