@@ -58,7 +58,7 @@
 		<param name="debug" value="false" />
 	</node> 
 	
-	<node name="sign_detector_node" pkg="lane_detection" type="sign_detector_node.py" output="screen">
+	<node name="sign_detector_node" pkg="lane_detection" type="sign_detector_node_nocanny.py" output="screen">
 		<param name="debug" value="false" />
 	</node>
 	<node name="choice_AB" pkg="lane_detection" type="choice_AB.py" output="screen">
