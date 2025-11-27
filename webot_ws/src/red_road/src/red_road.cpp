@@ -10,8 +10,8 @@ const double NORMAL_SPEED = 0.4;           // 일반 주행 속도
 const double RED_ROAD_SPEED = 0.3;         // 빨간 도로 감지 시 속도
 const double BLUE_ROAD_SPEED = 0.8;         // 파란 도로 감지 시 속도
 const double STOP_SPEED = 0.0;             // 정지 속도
-const double DETECT_TIMEOUT = 0.8;         // 감지 타임아웃 시간 (초)
-const double PUBLISH_TIMEOUT = 0.5;        // 발행 타임아웃 시간 (초)
+const double DETECT_TIMEOUT = 0.2;         // 감지 타임아웃 시간 (초)
+const double PUBLISH_TIMEOUT = 0.1;        // 발행 타임아웃 시간 (초)
 
 
 class RedRoadNode {
@@ -80,7 +80,7 @@ public:
             bool blue_detected = false;
 
             for (size_t i = 0; i < red_contours.size(); i++) {
-                if (cv::contourArea(red_contours[i]) > 1500) {
+                if (cv::contourArea(red_contours[i]) > 1600) {
                     red_detected = true;
 
                     std::vector<cv::Point> adjusted_contour;
@@ -135,7 +135,7 @@ public:
                 DetectFlag = false;
                 if ((ros::Time::now() - last_detect_time).toSec() > DETECT_TIMEOUT) {
                     if (is_debug)
-                        ROS_INFO("No Colored Road detected for 1 seconds!");
+                        ROS_INFO("No Colored Road detected for %.2f seconds", DETECT_TIMEOUT);
                     //drive_info.drive.speed = 0.0; // 2초 동안 감지 안된 경우 정지
                 }
                 cv::putText(frame_raw, "No Colored Road Detected", cv::Point(50, 50), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 255, 0), 2);
