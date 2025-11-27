@@ -42,19 +42,32 @@ class SignDetectorNode(object):
         self.camera_topic = rospy.get_param('~camera_topic', '/usb_cam/image_raw/calib')
         self.resize_width  = rospy.get_param('~resize_width', 320)
         self.resize_height = rospy.get_param('~resize_height', 240)
+        self.gamma_value = rospy.get_param('~gamma', 1.65)                 # 감마 보정(>1이면 저조도 보정 효과)
+        self.saturation_scale = rospy.get_param('~saturation_scale', 1.6) # 채도 스케일링
+        self.wb_r_scale = rospy.get_param('~wb_r_scale', 1.0)             # 화이트밸런스 보정용 R 채널 스케일
+        self.wb_g_scale = rospy.get_param('~wb_g_scale', 0.92)             # 화이트밸런스 보정용 G 채널 스케일
+        self.wb_b_scale = rospy.get_param('~wb_b_scale', 1.13)             # 화이트밸런스 보정용 B 채널 스케일
+        self.blur_enabled = rospy.get_param('~blur_enabled', True)        # 가우시안 블러 on/off
+        self.morph_enabled = rospy.get_param('~morph_enabled', False)      # 모폴로지 연산 on/off
+        self.wb_use_kelvin = rospy.get_param('~wb_use_kelvin', True)       # Kelvin 값 기반 화이트밸런스 사용 여부
+        self.wb_temp_k = rospy.get_param('~wb_temp_k', 4600)               # Kelvin 기반 화이트밸런스 목표값
+        self.wb_kelvin_ref = rospy.get_param('~wb_kelvin_ref', 4600)       # Kelvin 기준값(여기서는 녹화 시점 4600K)
+        self.gamma_table = self._build_gamma_table(self.gamma_value)
+        if self.wb_use_kelvin:
+            self._set_wb_from_kelvin(self.wb_temp_k)
 
         # HSV 파란색 범위 (초기값 – 트랙바로 실시간 변경)
-        init_lower = rospy.get_param('~lower_blue', [50, 45, 30]) #2차 #90, 80, 80 2024 #66, 53, 37 1차
-        init_upper = rospy.get_param('~upper_blue', [80, 130, 100]) #2차 #130, 255, 255 2024 #104, 121, 142 1차
+        init_lower = rospy.get_param('~lower_blue', [47, 14, 85]) #2차 #90, 80, 80 2024 #66, 53, 37 1차
+        init_upper = rospy.get_param('~upper_blue', [132, 184, 142]) #2차 #130, 255, 255 2024 #104, 121, 142 1차
         self.lower_blue = np.array(init_lower, dtype=np.uint8)
         self.upper_blue = np.array(init_upper, dtype=np.uint8)
-        self.max_v_value = rospy.get_param('~max_v_value', 220)  # [변경] 너무 밝은 ROI 제거를 위한 V 채널 한계
+        self.max_v_value = rospy.get_param('~max_v_value', 200)  # [변경] 너무 밝은 ROI 제거를 위한 V 채널 한계
 
         # 모폴로지 커널 크기
         self.morph_kernel_size = rospy.get_param('~morph_kernel', 2)
 
         # 최소 컨투어 면적 (노이즈 제거용, 픽셀단위)
-        self.min_area = rospy.get_param('~min_area', 20)
+        self.min_area = rospy.get_param('~min_area', 100)
 
         # 원형성(circularity) 임계값
         self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.7)
@@ -78,7 +91,7 @@ class SignDetectorNode(object):
                                self.morph_kernel_size), np.uint8)
         # ROI points (trapezoid) and mask placeholder
         self.roi_points = np.array(
-            [[200, 240], [440, 240], [480, 300], [160, 300]],
+            [[200, 250], [440, 250], [480, 290], [160, 290]],
             dtype=np.int32
         )
         self.roi_mask = None
@@ -87,7 +100,7 @@ class SignDetectorNode(object):
         self.sign_count = 0
 
         # --- OpenCV 윈도우 & 트랙바 설정 ---
-        self.l_t = 50
+        self.l_t = 50  
         self.u_t = 150
         if self.is_debug:
             self.init_hsv_trackbar(init_lower, init_upper, self.l_t, self.u_t)
@@ -146,6 +159,14 @@ class SignDetectorNode(object):
 
         cv2.createTrackbar('Lower Thresh', 'canny', l_t, 255, nothing)
         cv2.createTrackbar('Upper Thresh', 'canny', u_t, 255, nothing)
+        cv2.createTrackbar('Gamma_x100', 'mask', max(1, int(self.gamma_value * 100)), 300, nothing)
+        cv2.createTrackbar('Sat_x100', 'mask', max(1, int(self.saturation_scale * 100)), 300, nothing)
+        cv2.createTrackbar('WB_R_x100', 'mask', max(1, int(self.wb_r_scale * 100)), 300, nothing)
+        cv2.createTrackbar('WB_G_x100', 'mask', max(1, int(self.wb_g_scale * 100)), 300, nothing)
+        cv2.createTrackbar('WB_B_x100', 'mask', max(1, int(self.wb_b_scale * 100)), 300, nothing)
+        cv2.createTrackbar('WB_K', 'mask', int(self.wb_temp_k), 8000, nothing)  # Kelvin 기반 화밸
+        cv2.createTrackbar('Blur_On', 'mask', 1 if self.blur_enabled else 0, 1, nothing)
+        cv2.createTrackbar('Morph_On', 'mask', 1 if self.morph_enabled else 0, 1, nothing)
 
     def update_hsv_from_trackbar(self):
         """
@@ -200,6 +221,148 @@ class SignDetectorNode(object):
         if self.l_t > self.u_t:
             self.l_t, self.u_t = self.u_t, self.l_t
 
+    def update_preprocess_from_trackbar(self):
+        """감마/채도/화이트밸런스/블러/모폴로지를 트랙바로 실시간 업데이트"""
+        if os.getenv('DISPLAY') is None:
+            return
+        try:
+            gamma_raw = cv2.getTrackbarPos('Gamma_x100', 'mask')
+            sat_raw = cv2.getTrackbarPos('Sat_x100', 'mask')
+            wb_r_raw = cv2.getTrackbarPos('WB_R_x100', 'mask')
+            wb_g_raw = cv2.getTrackbarPos('WB_G_x100', 'mask')
+            wb_b_raw = cv2.getTrackbarPos('WB_B_x100', 'mask')
+            wb_k_raw = cv2.getTrackbarPos('WB_K', 'mask')
+            blur_raw = cv2.getTrackbarPos('Blur_On', 'mask')
+            morph_raw = cv2.getTrackbarPos('Morph_On', 'mask')
+        except cv2.error:
+            return
+
+        gamma_val = max(gamma_raw, 1) / 100.0   # 0 방지
+        sat_val = max(sat_raw, 1) / 100.0
+        wb_r_val = max(wb_r_raw, 1) / 100.0
+        wb_g_val = max(wb_g_raw, 1) / 100.0
+        wb_b_val = max(wb_b_raw, 1) / 100.0
+        wb_k_val = max(2000, min(wb_k_raw, 8000))  # Kelvin 값은 2000~8000K로 클램프
+        blur_val = bool(blur_raw)
+        morph_val = bool(morph_raw)
+
+        if abs(gamma_val - self.gamma_value) > 1e-3:
+            self.gamma_value = gamma_val
+            self.gamma_table = self._build_gamma_table(self.gamma_value)
+        if abs(sat_val - self.saturation_scale) > 1e-3:
+            self.saturation_scale = sat_val
+        if abs(wb_r_val - self.wb_r_scale) > 1e-3:
+            self.wb_r_scale = wb_r_val
+        if abs(wb_g_val - self.wb_g_scale) > 1e-3:
+            self.wb_g_scale = wb_g_val
+        if abs(wb_b_val - self.wb_b_scale) > 1e-3:
+            self.wb_b_scale = wb_b_val
+            self.wb_use_kelvin = False  # 채널별로 직접 만지면 Kelvin 모드 해제
+        if abs(wb_k_val - self.wb_temp_k) > 1e-3:
+            self.wb_temp_k = wb_k_val
+            self.wb_use_kelvin = True
+            self._set_wb_from_kelvin(self.wb_temp_k)
+        if blur_val != self.blur_enabled:
+            self.blur_enabled = blur_val
+        if morph_val != self.morph_enabled:
+            self.morph_enabled = morph_val
+
+    # ---------------------------------------------------------------------- #
+    # 영상 전처리 (감마 보정 + 채도 스케일링)
+    # ---------------------------------------------------------------------- #
+    def _build_gamma_table(self, gamma):
+        safe_gamma = max(gamma, 1e-6)
+        inv_gamma = 1.0 / safe_gamma
+        table = np.array([((i / 255.0) ** inv_gamma) * 255 for i in range(256)], dtype=np.uint8)
+        return table
+
+    def apply_white_balance_gain(self, frame_bgr):
+        """R/G/B 채널별 스케일 조정으로 화이트밸런스 보정"""
+        if (
+            abs(self.wb_r_scale - 1.0) < 1e-3
+            and abs(self.wb_g_scale - 1.0) < 1e-3
+            and abs(self.wb_b_scale - 1.0) < 1e-3
+        ):
+            return frame_bgr
+
+        frame = frame_bgr.astype(np.float32)
+        frame[:, :, 0] *= self.wb_b_scale
+        frame[:, :, 1] *= self.wb_g_scale
+        frame[:, :, 2] *= self.wb_r_scale
+        np.clip(frame, 0, 255, out=frame)
+        return frame.astype(np.uint8)
+
+    def _kelvin_to_rgb(self, kelvin):
+        """
+        Kelvin(대략 1000~40000) 값을 RGB(0~255)로 근사 변환.
+        참고: standard color temperature to RGB approximation.
+        """
+        k = kelvin / 100.0
+
+        # Red
+        if k <= 66:
+            r = 255
+        else:
+            r = 329.698727446 * ((k - 60) ** -0.1332047592)
+
+        # Green
+        if k <= 66:
+            g = 99.4708025861 * np.log(k) - 161.1195681661
+        else:
+            g = 288.1221695283 * ((k - 60) ** -0.0755148492)
+
+        # Blue
+        if k >= 66:
+            b = 255
+        elif k <= 19:
+            b = 0
+        else:
+            b = 138.5177312231 * np.log(k - 10) - 305.0447927307
+
+        return (
+            float(np.clip(r, 0, 255)),
+            float(np.clip(g, 0, 255)),
+            float(np.clip(b, 0, 255)),
+        )
+
+    def _set_wb_from_kelvin(self, kelvin):
+        """
+        Kelvin 목표값을 기반으로 채널 스케일을 산출.
+        기준 Kelvin(self.wb_kelvin_ref) 대비 상대 스케일을 취해 1.0을 중심으로 조정.
+        """
+        ref_r, ref_g, ref_b = self._kelvin_to_rgb(self.wb_kelvin_ref)
+        tgt_r, tgt_g, tgt_b = self._kelvin_to_rgb(kelvin)
+
+        def safe_scale(target, ref):
+            return target / max(ref, 1e-6)
+
+        self.wb_r_scale = safe_scale(tgt_r, ref_r)
+        self.wb_g_scale = safe_scale(tgt_g, ref_g)
+        self.wb_b_scale = safe_scale(tgt_b, ref_b)
+
+    def apply_gamma_correction(self, frame_bgr):
+        """저조도 환경에서 밝기를 끌어올리기 위해 감마 보정"""
+        if abs(self.gamma_value - 1.0) < 1e-3:
+            return frame_bgr
+        return cv2.LUT(frame_bgr, self.gamma_table)
+
+    def apply_saturation_boost(self, frame_bgr):
+        """명도 대비가 낮을 때 색상을 또렷하게 보이도록 채도 스케일링"""
+        if abs(self.saturation_scale - 1.0) < 1e-3:
+            return frame_bgr
+
+        hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+        s = hsv[:, :, 1].astype(np.float32) * self.saturation_scale
+        hsv[:, :, 1] = np.clip(s, 0, 255).astype(np.uint8)
+        return cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+
+    def preprocess_frame(self, frame_bgr):
+        # 화이트밸런스 → 감마 보정 → 채도 스케일링 순으로 적용
+        wb = self.apply_white_balance_gain(frame_bgr)
+        gamma_corrected = self.apply_gamma_correction(wb)
+        boosted = self.apply_saturation_boost(gamma_corrected)
+        return boosted
+
     # ---------------------------------------------------------------------- #
     # 콜백
     # ---------------------------------------------------------------------- #
@@ -218,7 +381,7 @@ class SignDetectorNode(object):
 
         # Apply ROI before any preprocessing (keep original frame clean)
         roi_frame = cv2.bitwise_and(base_frame, base_frame, mask=self.roi_mask)
-        proc_frame = roi_frame
+        proc_frame = self.preprocess_frame(roi_frame)
 
         # ROI visualization only (does not affect proc_frame)
         roi_points_for_draw = self.roi_points.reshape((-1, 1, 2))
@@ -228,12 +391,16 @@ class SignDetectorNode(object):
         if self.is_debug:
             self.update_hsv_from_trackbar()
             self.update_canny_from_trackbar()
+            self.update_preprocess_from_trackbar()
 
         # [변경] HSV 마스크 기반으로 사전에 파란 영역만 추려서 컨투어 후보를 제한
-        blurred = cv2.GaussianBlur(proc_frame, (5, 5), 0)
+        if self.blur_enabled:
+            blurred = cv2.GaussianBlur(proc_frame, (5, 5), 0)
+        else:
+            blurred = proc_frame
         hsv_frame = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
         blue_mask = cv2.inRange(hsv_frame, self.lower_blue, self.upper_blue)
-        if self.morph_kernel_size > 0:
+        if self.morph_enabled and self.morph_kernel_size > 0:
             blue_mask = cv2.morphologyEx(blue_mask, cv2.MORPH_CLOSE, self.kernel)
         self.mask = blue_mask.copy()
         self.mask_img = cv2.bitwise_and(proc_frame, proc_frame, mask=blue_mask)
