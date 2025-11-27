@@ -387,7 +387,7 @@ RubberConeNode::RubberConeNode(ros::NodeHandle& nh, ros::NodeHandle& pnh)
     pnh_.param("max_steer_deg", max_steer_deg, 21.0);
     max_steer_rad_ = max_steer_deg * M_PI / 180.0;
 
-    pnh_.param("reverse_speed", reverse_speed_, -0.3);   // 기본 -0.3 m/s
+    pnh_.param("reverse_speed", reverse_speed_, -0.2);   // 기본 -0.3 m/s
 
     // 로컬 최소제곱 윈도우 크기 (홀수, 5 이상 권장)
     pnh_.param("lsq_window_size", lsq_window_size_, 5);
