@@ -255,19 +255,19 @@ class CameraReceiver:
             if self.is_debug:
                 rospy.loginfo("Step 3")
             self.drive_info.drive.speed = -0.195
-            self.drive_info.drive.steering_angle = 0.085
+            self.drive_info.drive.steering_angle = 0.170
             self.drive_pub.publish(self.drive_info)
             return 
 
         # 핸들 정방향으로 후진
-        step_time = 2.3
+        step_time = 2.2
         total_time += step_time
 
         if dt < total_time: 
             if self.is_debug:
                 rospy.loginfo("Step 4")
             self.drive_info.drive.speed = -0.2
-            self.drive_info.drive.steering_angle = 0.085
+            self.drive_info.drive.steering_angle = 0.170
             self.drive_pub.publish(self.drive_info)
             return 
         
@@ -284,7 +284,7 @@ class CameraReceiver:
             return 
 
         # 핸들 오른쪽으로 돌려서 후진
-        step_time = 0.6
+        step_time = 0.8
         total_time += step_time
 
         if dt < total_time: 
@@ -356,7 +356,7 @@ class CameraReceiver:
             return 
 
         # 핸들 오른쪽으로 돌려서 전진
-        step_time = 1.2
+        step_time = 1.0
         total_time += step_time
 
         if dt < total_time: 
@@ -380,7 +380,7 @@ class CameraReceiver:
             return 
         
         # 핸들 정방향으로 후진
-        step_time = 2.1
+        step_time = 2.2
         total_time += step_time
 
         if dt < total_time: 
