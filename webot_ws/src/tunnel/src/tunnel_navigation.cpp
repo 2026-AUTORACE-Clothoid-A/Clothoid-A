@@ -22,8 +22,8 @@ TunnelNavigationNode::TunnelNavigationNode()
     private_nh_.param("tunnel_speed", command_speed_, 0.4);  // 터널에서 달릴 속도 [m/s]
 
     // 구독/발행
-    line_sub_ = nh_.subscribe("line_segments", 1,
-                              &TunnelNavigationNode::lineCallback, this);
+    line_sub_ = nh_.subscribe("scan_line_obstacles", 1,
+                            &TunnelNavigationNode::lineCallback, this);
     cmd_pub_  = nh_.advertise<ackermann_msgs::AckermannDriveStamped>("high_level/ackermann_cmd_mux/input/nav_2", 1);
 
     ROS_INFO_STREAM("TunnelNavigationNode initialized. target_frame=" << target_frame_
@@ -90,7 +90,7 @@ bool TunnelNavigationNode::isAlignedWithHeading(
     return (angle <= angle_thresh_rad);
 }
 
-void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::ConstPtr& msg)
+void TunnelNavigationNode::lineCallback(const obstacle_detector::Obstacles::ConstPtr& msg)
 {
     // 이전 데이터 초기화
     segments_base_.clear();
@@ -128,8 +128,8 @@ void TunnelNavigationNode::lineCallback(const laserline::LineSegmentArray::Const
         geometry_msgs::PointStamped p_start, p_end;
         p_start.header = msg->header;
         p_end.header   = msg->header;
-        p_start.point  = seg.start;
-        p_end.point    = seg.end;
+        p_start.point  = seg.first_point;
+        p_end.point    = seg.last_point;
 
         geometry_msgs::PointStamped p_start_bl, p_end_bl;
         tf2::doTransform(p_start, p_start_bl, tf);
