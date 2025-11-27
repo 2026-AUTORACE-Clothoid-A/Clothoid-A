@@ -29,7 +29,7 @@ y_l = 40
 nwindows = 20
 margin = 20
 minpix = 15 # 수정
-lane_width = 110
+lane_width = 103
 
 # 0:left, 1:right, 2:both
 lane_flag = 1
@@ -46,9 +46,9 @@ prev_lane = 1
 
 # 2025
 l_h = 20
-l_s = 165
-l_v = 50
-u_h = 60
+l_s = 215
+l_v = 0
+u_h = 40
 u_s = 255
 u_v = 255
 

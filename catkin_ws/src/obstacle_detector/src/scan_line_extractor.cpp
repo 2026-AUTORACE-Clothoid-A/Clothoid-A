@@ -49,8 +49,8 @@ void ScanLineExtractor::updateParams()
 
   // ROI: 필요하면 전방/주변 특정 영역만 보이게 필터링
   nh_private_.param<bool>("use_roi",    p_use_roi_,    true);
-  nh_private_.param<double>("roi_x_min", p_roi_x_min_, -0.5);
-  nh_private_.param<double>("roi_x_max", p_roi_x_max_,  0.5);
+  nh_private_.param<double>("roi_x_min", p_roi_x_min_, -1.0);
+  nh_private_.param<double>("roi_x_max", p_roi_x_max_,  1.0);
   nh_private_.param<double>("roi_y_min", p_roi_y_min_, -0.5);
   nh_private_.param<double>("roi_y_max", p_roi_y_max_,  0.5);
 
