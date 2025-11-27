@@ -79,15 +79,15 @@ class CameraReceiver:
         self.v_lower = rospy.get_param("~lower_v", 110)
 
         self.h_upper = rospy.get_param("~upper_h", 100)
-        self.s_upper = rospy.get_param("~upper_s", 130)
-        self.v_upper = rospy.get_param("~upper_v", 150)
+        self.s_upper = rospy.get_param("~upper_s", 150)
+        self.v_upper = rospy.get_param("~upper_v", 160)
 
         self.low_thresh  = rospy.get_param("~lower_thresh", 110)
         self.high_thresh = rospy.get_param("~upper_thresh", 255)
 
         # START 사각형 조건
-        self.min_width   = rospy.get_param("~min_rect_width", 90)
-        self.max_height  = rospy.get_param("~max_rect_height", 50)
+        self.min_width   = rospy.get_param("~min_rect_width", 95)
+        self.max_height  = rospy.get_param("~max_rect_height", 35)
 
         # 이미지 토픽
         image_topic = rospy.get_param("~image_topic", "/usb_cam/image_raw/calib")
