@@ -40,8 +40,8 @@
 
         <!-- 러버콘 스타일 첫 점 선택용 -->
         <param name="angle_from_left_first_cone" value="45.0" />
-        <param name="dist_from_left_first_cone"  value="1.0" />
-        <param name="dist_from_right_first_cone" value="1.0" />
+        <param name="dist_from_left_first_cone"  value="0.7" />
+        <param name="dist_from_right_first_cone" value="0.7" />
 
         <!-- 미션 판정 영역: start -->
         <param name="start_x_min"     value="0.0" />
@@ -52,9 +52,9 @@
 
         <!-- 미션 판정 영역: ing -->
         <param name="ing_x_min"       value="0.0" />
-        <param name="ing_x_max"       value="2.0" />
-        <param name="ing_y_min"       value="-2.0" />
-        <param name="ing_y_max"       value="2.0" />
+        <param name="ing_x_max"       value="1.0" />
+        <param name="ing_y_min"       value="-1.0" />
+        <param name="ing_y_max"       value="1.0" />
         <param name="ing_min_count"   value="4" />
 
     </node>
@@ -64,7 +64,7 @@
         <!-- 주행 관련 파라미터 -->
         <param name="speed"          value="0.3" />
         <param name="vehicle_length" value="0.25" />
-        <param name="lfd"            value="0.6" />
+        <param name="lfd"            value="0.3" />
         <param name="centerline_ds"  value="0.05" />
         <param name="approx_track_width"  value="0.7" />
         <param name="lsq_window_size"  value="9" />

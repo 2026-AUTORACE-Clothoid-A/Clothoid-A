@@ -39,6 +39,9 @@ private:
     double last_steering_;
     bool   has_last_steering_;
 
+    double max_steer_rad_;   // 최대 조향각 (rad)
+    double reverse_speed_;   // 후진 속도 (m/s)
+
     // ===== 파라미터 =====
     double speed_;          // 주행 속도
     double vehicle_length_; // 차량 휠베이스 근사
@@ -81,6 +84,7 @@ private:
     // ===== 스티어링 계산 & 퍼블리시 =====
     double computeSteeringFromCenterLine(const std::vector<Eigen::Vector2d>& center_line);
     void publishControl(double steering);
+    void publishReverseControl(double steering);
 
     // ===== Path 유틸 =====
     void fillPathMsg(const std::vector<Eigen::Vector2d>& pts,
