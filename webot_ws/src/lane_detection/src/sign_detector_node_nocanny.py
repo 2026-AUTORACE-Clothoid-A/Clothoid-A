@@ -60,8 +60,8 @@ class SignDetectorNode(object):
         #     self._set_wb_from_kelvin(self.wb_temp_k)
 
         # HSV 파란색 범위 (트랙바로 조정)
-        init_lower = rospy.get_param('~lower_blue', [68, 88, 90]) #[47, 14, 85] [77, 67, 105]
-        init_upper = rospy.get_param('~upper_blue', [120, 216, 160]) #[132, 184, 142] [152, 223, 178]
+        init_lower = rospy.get_param('~lower_blue', [82, 80, 68]) #[68, 60, 90]
+        init_upper = rospy.get_param('~upper_blue', [117, 185, 152]) #[120, 220, 180]
         self.lower_blue = np.array(init_lower, dtype=np.uint8)
         self.upper_blue = np.array(init_upper, dtype=np.uint8)
 
@@ -69,7 +69,7 @@ class SignDetectorNode(object):
         self.max_v_value = rospy.get_param('~max_v_value', 200)
 
         # 최소 컨투어 면적 / 원형성
-        self.min_area = rospy.get_param('~min_area', 200)
+        self.min_area = rospy.get_param('~min_area', 150)
         self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.6)
 
         # 연속 프레임 안정화용
@@ -473,7 +473,7 @@ class SignDetectorNode(object):
                 best_aspect = bw / float(bh + 1e-6)
 
                 rospy.loginfo_throttle(
-                    0.1,
+                    0.05,
                     "best cand: area=%.1f, circ=%.3f, aspect=%.2f, score=%.3f" %
                     (best_area, best_circularity, best_aspect, best_score)
                 )
