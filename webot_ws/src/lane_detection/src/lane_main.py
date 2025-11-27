@@ -452,7 +452,7 @@ def sliding_window(leftx_base, rightx_base, processed_img, lane_flag, is_debug):
         avex = int(np.array(lx).mean() + np.array(rx).mean())//2
         avey = int(np.array(ly).mean() + np.array(ry).mean())//2
     
-    if lefty == 0 and righty == 0: 
+    if lane_flag == 1 and len(good_right_inds) < 1500:
         is_lane = False
         avex = warp_img_w//2
         avey = warp_img_h//2
