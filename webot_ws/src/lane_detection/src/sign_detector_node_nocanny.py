@@ -60,7 +60,7 @@ class SignDetectorNode(object):
         #     self._set_wb_from_kelvin(self.wb_temp_k)
 
         # HSV 파란색 범위 (트랙바로 조정)
-        init_lower = rospy.get_param('~lower_blue', [82, 80, 68]) #[68, 60, 90]
+        init_lower = rospy.get_param('~lower_blue', [80, 75, 68]) #[68, 60, 90]
         init_upper = rospy.get_param('~upper_blue', [117, 185, 152]) #[120, 220, 180]
         self.lower_blue = np.array(init_lower, dtype=np.uint8)
         self.upper_blue = np.array(init_upper, dtype=np.uint8)
@@ -70,7 +70,7 @@ class SignDetectorNode(object):
 
         # 최소 컨투어 면적 / 원형성
         self.min_area = rospy.get_param('~min_area', 150)
-        self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.6)
+        self.circularity_thresh = rospy.get_param('~circularity_thresh', 0.65)
 
         # 연속 프레임 안정화용
         self.frames_to_confirm = rospy.get_param('~frames_to_confirm', 5)
@@ -484,7 +484,7 @@ class SignDetectorNode(object):
             # ---- 하드 threshold 통과한 경우만 실제 표지판 후보로 사용 ----
             if (
                 best_cnt is not None
-                and best_score >= 0.35
+                and best_score >= 0.5
                 and best_circularity >= self.circularity_thresh
             ):
                 target_cnt = best_cnt
