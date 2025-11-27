@@ -8,7 +8,7 @@
 // 상수 선언
 const double NORMAL_SPEED = 0.4;           // 일반 주행 속도
 const double RED_ROAD_SPEED = 0.3;         // 빨간 도로 감지 시 속도
-const double BLUE_ROAD_SPEED = 0.9;         // 파란 도로 감지 시 속도
+const double BLUE_ROAD_SPEED = 0.8;         // 파란 도로 감지 시 속도
 const double STOP_SPEED = 0.0;             // 정지 속도
 const double DETECT_TIMEOUT = 0.2;         // 감지 타임아웃 시간 (초)
 const double PUBLISH_TIMEOUT = 0.1;        // 발행 타임아웃 시간 (초)

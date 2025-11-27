@@ -843,16 +843,15 @@ double RubberConeNode::computeSteeringFromCenterLine(
     {
         is_look_forward_point_ = false;
 
-        // 센터라인도 없으면 이전 조향각 유지 (없으면 0.0)
+        // 센터라인이 없으면: 이전 제어값 있으면 그대로, 없으면 0
         if (has_last_steering_)
             return last_steering_;
         return 0.0;
     }
 
-    // 1) base_link(0,0)에서 가장 가까운 점 인덱스 찾기
+    // 1) base_link(0,0)에 가장 가까운 점 인덱스 찾기
     int    closest_idx = 0;
     double best_d2     = center_line[0].squaredNorm();
-
     for (int i = 1; i < N; ++i)
     {
         double d2 = center_line[i].squaredNorm();
@@ -863,73 +862,44 @@ double RubberConeNode::computeSteeringFromCenterLine(
         }
     }
 
+    // 기본 타겟은 일단 closest 위치
     Eigen::Vector2d target = center_line[closest_idx];
     is_look_forward_point_ = false;
 
-    // 2) 진행 방향 결정: center_line 상에서 +1 / -1 중,
-    //    차량 진행 방향 (+x)과 더 잘 맞는 쪽으로
-    Eigen::Vector2d car_dir(1.0, 0.0);   // base_link 기준 전방
-    int dir = 1;
-
-    double score_plus  = -1e9;
-    double score_minus = -1e9;
-
-    if (closest_idx + 1 < N)
+    // 2) closest_idx 기준으로 "앞쪽 인덱스(> closest_idx)" 방향으로 LfD만큼 찾기
+    double s_acc = 0.0;
+    for (int i = closest_idx + 1; i < N; ++i)
     {
-        Eigen::Vector2d v = center_line[closest_idx + 1] - center_line[closest_idx];
-        if (v.norm() > 1e-6)
-            score_plus = v.normalized().dot(car_dir);
-    }
-    if (closest_idx - 1 >= 0)
-    {
-        Eigen::Vector2d v = center_line[closest_idx - 1] - center_line[closest_idx];
-        if (v.norm() > 1e-6)
-            score_minus = v.normalized().dot(car_dir);
-    }
-
-    if (score_plus >= score_minus)
-        dir = +1;
-    else
-        dir = -1;
-
-    // 3) closest_idx에서 선택한 방향(dir)으로 LfD만큼 arc-length 누적
-    double s_acc  = 0.0;
-    int    cur_idx = closest_idx;
-
-    while (true)
-    {
-        int next_idx = cur_idx + dir;
-        if (next_idx < 0 || next_idx >= N)
-            break;
-
-        double ds = (center_line[next_idx] - center_line[cur_idx]).norm();
+        double ds = (center_line[i] - center_line[i - 1]).norm();
         s_acc += ds;
-        cur_idx = next_idx;
 
         if (s_acc >= lfd_)
         {
-            target = center_line[cur_idx];
+            target = center_line[i];
             is_look_forward_point_ = true;
             break;
         }
     }
 
-    // 4) LfD 지점을 못 찾았으면 이전 조향각 유지
+    // 3) LfD 지점을 못 찾았으면:
     if (!is_look_forward_point_)
     {
-        if (has_last_steering_)
+        // (1) closest_idx보다 큰 인덱스가 있으면 그 중 "끝점"을 타겟으로 사용
+        if (N > closest_idx + 1)
         {
-            // LfD 못 채울 정도로 센터라인이 짧으면
-            // 새로운 조향각 계산 대신 이전 값을 그대로 사용
-            return last_steering_;
+            target = center_line.back();
+            // is_look_forward_point_는 false로 둬도 되고, 여기서 true로 바꿔도 상관 없음
         }
-
-        // 첫 프레임 등: 이전 조향각도 없으면
-        // 최소한 base_link에 가장 가까운 점을 향해서 조향
-        target = center_line[closest_idx];
+        else
+        {
+            // (2) 그것도 없으면 → 이전 제어값 사용, 없으면 0
+            if (has_last_steering_)
+                return last_steering_;
+            return 0.0;
+        }
     }
 
-    // 5) Pure Pursuit 형식 조향각 계산 (변경 없음)
+    // 4) Pure Pursuit 형식 조향각 계산
     double theta = std::atan2(target.y(), target.x() + vehicle_length_);
     double steering = std::atan2(2.0 * vehicle_length_ * std::sin(theta), lfd_);
 
