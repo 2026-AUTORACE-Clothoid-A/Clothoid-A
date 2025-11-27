@@ -29,7 +29,7 @@ y_l = 40
 nwindows = 20
 margin = 20
 minpix = 15 # 수정
-lane_width = 95
+lane_width = 110
 
 # 0:left, 1:right, 2:both
 lane_flag = 1
@@ -452,15 +452,15 @@ def sliding_window(leftx_base, rightx_base, processed_img, lane_flag, is_debug):
         avex = int(np.array(lx).mean() + np.array(rx).mean())//2
         avey = int(np.array(ly).mean() + np.array(ry).mean())//2
     
-    if lane_flag == 1 and len(good_right_inds) < 1500:
+    # if lane_flag == 1 and len(good_right_inds) < 1500:
+    #     is_lane = False
+    #     avex = warp_img_w//2
+    #     avey = warp_img_h//2
+
+    if lefty == 0 or righty == 0:
         is_lane = False
         avex = warp_img_w//2
         avey = warp_img_h//2
-
-    #elif lefty == 0 or righty == 0:
-    #    is_lane = False
-    #    avex = warp_img_w//2
-    #    avey = warp_img_h//2
 
     else:
         is_lane = True
