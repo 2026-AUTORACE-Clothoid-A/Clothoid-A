@@ -1,0 +1,14 @@
+# YOLO node. No model exists yet: `backend: none` keeps the node running and publishing empty
+# DetectionArray messages. Switch to ultralytics and set model_path when a model is trained.
+# Never write an empty list in a ROS2 yaml: use [''] as below.
+yolo:
+  ros__parameters:
+    backend: none            # none | ultralytics
+    model_path: ''           # .pt / .onnx / .engine (weights are not stored in git)
+    imgsz: 640
+    device: ''               # '' = auto, 'cuda:0', 'cpu'
+    model_conf: 0.25         # threshold inside the model
+    min_confidence: 0.5      # threshold for what is published
+    # rename model classes to Detection.msg names, e.g. ['red:traffic_light_red']
+    class_aliases: ['']
+    debug: false             # true publishes /yolo/debug_image

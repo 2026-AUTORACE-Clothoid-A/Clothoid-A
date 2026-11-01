@@ -1,0 +1,51 @@
+# Rubber cone course (2025 rubber_cone / cone_sorter_node launch values) and the obstacle
+# extractor that replaces obstacle_detector. Retune on the LIMO: smaller body, +-110 deg
+# lidar, new cone spacing. Float parameters need a decimal point (0.4, not 0).
+obstacle_extractor:
+  ros__parameters:
+    target_frame: base_link
+    use_tf: true             # false = use lidar_x / lidar_y / lidar_yaw below
+    lidar_x: 0.0
+    lidar_y: 0.0
+    lidar_yaw: 0.0
+    range_min: 0.1
+    range_max: 2.0
+    angle_min_deg: -110.0
+    angle_max_deg: 110.0
+    cluster_gap: 0.08
+    min_points: 2
+    max_width: 0.15
+    cone_radius: 0.04
+
+cone_sorter:
+  ros__parameters:
+    max_dist_between_cones: 0.4
+    max_trace_length: 20
+    threshold_directional_angle_deg: 45.0
+    angle_from_left_first_cone: 45.0
+    dist_from_left_first_cone: 0.7
+    dist_from_right_first_cone: 0.7
+    # course start zone
+    start_x_min: 0.0
+    start_x_max: 1.3
+    start_y_min: -0.6
+    start_y_max: 0.6
+    start_min_count: 6
+    # course continue zone
+    ing_x_min: 0.0
+    ing_x_max: 1.0
+    ing_y_min: -1.0
+    ing_y_max: 1.0
+    ing_min_count: 4
+
+cone_follower:
+  ros__parameters:
+    speed: 0.3               # 2025 launch value
+    reverse_speed: -0.2
+    max_steer_deg: 21.0
+    vehicle_length: 0.25
+    lfd: 0.3
+    centerline_ds: 0.05
+    lsq_window_size: 9
+    boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
+    wheelbase: 0.2

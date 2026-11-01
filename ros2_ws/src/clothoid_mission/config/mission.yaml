@@ -1,0 +1,15 @@
+# Mission state logic, first draft from the 2026 rules summary. Values marked "rules" come from
+# the rule book, the rest are guesses to retune on the track. Floats need a decimal point.
+mission:
+  ros__parameters:
+    rate_hz: 20.0
+    input_timeout: 0.5          # detections / stop line older than this count as "not seen"
+    refresh_sec: 1.0            # direction / parking flag re-sent this often
+    slow_speed: 0.2             # rules: 0.2 m/s or less
+    slow_hold_sec: 4.0          # bump length not fixed in the rules yet
+    pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s
+    stop_on_yellow: true        # rules say nothing about yellow
+    arm_timeout_sec: 8.0
+    cooldown_sec: 15.0
+    fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
+    fork_right_direction: 1

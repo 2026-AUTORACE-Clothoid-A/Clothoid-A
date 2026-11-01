@@ -1,0 +1,50 @@
+# T-parking, ported from 2025 parking_rect.py. The step table is the 2025 open loop sequence
+# for the 2025 course; the 2026 T-parking (3 stages, parked LIMOs on both sides) needs new
+# rows: edit step_duration / step_speed / step_steer together (same length, one row per step).
+# Floats need a decimal point everywhere (0.5, not 0): ROS2 rejects integers in double arrays.
+#
+#   step  what (2025 comments)                         duration  speed   steer(rad, + left)
+#    0    forward, steer right                           0.5      0.195  -0.34
+#    1    LIDAR STEP: turn right until the closest        -       0.2    -0.34   (sensor_step: 1)
+#         point passes angle_limit / range_limit
+#    2    reverse, steer left (gap before direction)     0.5     -0.195   0.17
+#    3    reverse straight-ish                           2.2     -0.2     0.17
+#    4    reverse, steer right                           0.5     -0.195  -0.34
+#    5    reverse, steer right                           0.8     -0.2    -0.34
+#    6    forward, steer left                            0.5      0.195   0.34
+#    7    reverse, steer left (2025 label "STOP")        3.0     -0.195   0.34
+#    8    forward, steer right                           0.5      0.195  -0.34
+#    9    forward, steer right                           1.0      0.2    -0.34
+#   10    forward, steer left                            0.5      0.195   0.34
+#   11    forward, slight left                           2.2      0.2     0.17
+parking:
+  ros__parameters:
+    wheelbase: 0.2
+    rate_hz: 10.0
+    step_duration: [0.5, 0.0, 0.5, 2.2, 0.5, 0.8, 0.5, 3.0, 0.5, 1.0, 0.5, 2.2]
+    step_speed: [0.195, 0.2, -0.195, -0.2, -0.195, -0.2, 0.195, -0.195, 0.195, 0.2, 0.195, 0.2]
+    step_steer: [-0.34, -0.34, 0.17, 0.17, -0.34, -0.34, 0.34, 0.34, -0.34, -0.34, 0.34, 0.17]
+    sensor_step: 1                 # -1 disables the lidar step
+    # the Tmini Plus only sees +-110 deg (+-1.92 rad), so 2025's -2.0 rad can never trigger and
+    # only range_limit ends the lidar step. Check the lidar frame orientation, then retune.
+    angle_limit: -2.0
+    range_limit: 0.34
+    sensor_step_max_sec: 3.0       # new: stop waiting for the lidar after this long
+
+    # start line (2025 values, retune with lane.yaml's warp)
+    x_h: 70
+    x_l: 550
+    y_h: 70
+    y_l: 40
+    crop_x: 40
+    crop_y: 80
+    hsv_lower: [20, 165, 50]
+    hsv_upper: [60, 255, 255]
+    gray_low: 80
+    gray_high: 255
+    margin: 60
+    shift: 45
+    min_line_len: 20
+    trigger_row: 5
+
+    debug: false                   # true publishes /parking/debug_image and the closest-point marker

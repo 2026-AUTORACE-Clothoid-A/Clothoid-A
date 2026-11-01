@@ -1,0 +1,19 @@
+# Stop line / crosswalk stripes (2025 crosswalk). 2025 values, retune on the LIMO.
+# Keep the warp values equal to lane.yaml. Floats need a decimal point.
+stopline:
+  ros__parameters:
+    warp_x_h: 70
+    warp_x_l: 550
+    warp_y_h: 70
+    warp_y_l: 40
+    crop_x: 40
+    crop_y: 80
+    hsv_lower: [0, 0, 150]
+    hsv_upper: [180, 60, 255]
+    gray_low: 130
+    gray_high: 255
+    min_tall_w: 5
+    min_wide_w: 80
+    min_count: 4
+    min_white_ratio: 10.0
+    debug: false         # true publishes /stopline/debug_image

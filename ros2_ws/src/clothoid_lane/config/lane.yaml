@@ -1,0 +1,23 @@
+# Lane following parameters. Everything marked "retune" came from the 2025 car/camera
+# (640x480 usb_cam, yellow lane) and must be re-tuned on the LIMO (DaBai DC1).
+lane_main:
+  ros__parameters:
+    base_speed: 0.3            # rules recommend 0.3~0.4 m/s
+    lost_hold_sec: 0.0         # >0 keeps the last heading when the lane is lost
+    initial_side: 1            # 0 left lane, 1 right lane, 2 both
+    lane_width: 103            # px in the warped image (retune)
+    parking_lane_width: 140    # px (retune)
+
+    # warp: perspective corners (retune with the real camera mounting)
+    warp_x_h: 70
+    warp_x_l: 550
+    warp_y_h: 70
+    warp_y_l: 40
+
+    # lane color mask (HSV) and Canny (retune)
+    hsv_lower: [20, 215, 0]
+    hsv_upper: [40, 255, 255]
+    canny_low: 50
+    canny_high: 100
+
+    debug: false               # true publishes /lane/debug_image

@@ -1,0 +1,15 @@
+# Floor-mark slow zone (2025 red_road). Values are from the 2025 red/blue road and must be
+# re-tuned on the real 2026 track mark. Float parameters must be written with a decimal
+# point (0.2, not 0): ROS2 rejects an integer for a double parameter.
+speed_zone:
+  ros__parameters:
+    roi_x0: 0.25
+    roi_x1: 0.75
+    roi_y0: 0.75
+    roi_y1: 1.0
+    # groups of 6 integers: h_lo s_lo v_lo h_hi s_hi v_hi, OR-ed (this is 2025 red)
+    hsv_ranges: [0, 100, 100, 10, 255, 255, 170, 100, 0, 180, 255, 255]
+    min_area: 1800.0
+    slow_speed: 0.2      # rules: 0.2 m/s or less
+    hold_sec: 1.0        # keep slowing after the mark is gone
+    debug: false         # true publishes /speed_zone/debug_image

@@ -1,0 +1,22 @@
+# Linux host (Ubuntu):
+#   xhost +local:root
+#   LOCAL_USER_ID=$(id -u) docker compose -f docker/docker-compose.yml run --rm dev
+# See docker/README.md for Windows (Docker Desktop + WSL2).
+services:
+  dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: clothoid-a/dev:humble
+    container_name: clothoid-dev
+    network_mode: host
+    stdin_open: true
+    tty: true
+    working_dir: /home/user/Clothoid-A/ros2_ws
+    environment:
+      - DISPLAY=${DISPLAY}
+      - LOCAL_USER_ID=${LOCAL_USER_ID:-1000}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+    volumes:
+      - ..:/home/user/Clothoid-A
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw

@@ -1,0 +1,28 @@
+# Single source of truth for topic names. Pass this file to every mission node:
+#   parameters=[os.path.join(bringup_share, 'config', 'topics.yaml'), ...]
+# The `/**` wildcard applies to all nodes; parameters a node does not declare are ignored.
+# If the platform topics change again, edit this file only.
+/**:
+  ros__parameters:
+    # sensors
+    image_topic: /camera/color/image_raw
+    scan_topic: /scan
+    odom_topic: /odom
+    imu_topic: /imu
+
+    # lidar obstacle centres in base_link (geometry_msgs/PoseArray), shared by the cone and
+    # static obstacle missions
+    obstacles_topic: /lidar/obstacles
+
+    # perception output (clothoid_interfaces/DetectionArray)
+    detections_topic: /detections
+
+    # mission signals
+    direction_topic: /direction_flag      # std_msgs/Int32, 0 left lane, 1 right lane
+    parking_topic: /parking_flag          # std_msgs/Bool
+    speed_limit_topic: /speed_limit       # std_msgs/Float32, <=0 releases the limit
+    stopline_topic: /stopline_detected    # std_msgs/Bool, stop line / crosswalk stripes ahead
+    parking_done_topic: /parking_done     # std_msgs/Bool, true once after the parking sequence ends
+
+# Each mission node publishes to its own twist_mux input (cmd_topic parameter in its own yaml),
+# see twist_mux.yaml for the names and priorities.

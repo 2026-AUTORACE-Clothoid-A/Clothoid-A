@@ -1,279 +1,34 @@
-# 대회 정보
+# Clothoid-A — Autorace 2026
 
-# 후기
-## 미션 1
-### 미션 정보
-- 차로의 색깔이 구분된 구간으로, 차로의 색깔로 감/가속 주행해야 함
-### 패키지 설명
-패키지명: red_road  
-- ROI내의 빨간색/파란색의 컨투어 면적을 통해 도로 진입여부를 인지함.  
-- 인지 후 해당 색상에 맞는 속도(0.25,0.4)로 속도 명령을 내리며 조향은 차선인지에서 보내는 값을 받아 사용함.  
-### 기술적 난관 & 해결 전략
-- 조명관련하여 대회장과 E8-8의 환경이 매우 다르므로 현장 도착 후 카메라 config파일을 수정하여 노출과 화이트밸런스 수정 필.
-### 올해 새롭게 적용한 점 / 개선점
-- 파란 도로 감지를 추가함.  
-- 빨간 도로를 우선시하여 판단.  
-- 표지판 색출 시 hsv등 전처리는 러프하게 한 후 원형성이나 색상등에 대한 임계값을 타이트하게 가져가야 인식률이 높았음.
+ROS 2 Humble code for the WeGo LIMO (Jetson Orin NX). The 2025 ROS1 code is on the `ros1-2025` branch
+and the 2025 write-up is in `docs/2025_retrospective.md`.
 
-## 미션 2
-### 미션 정보
-- 횡단 보도 구간으로, 차로의 횡단 보도 표시를 보고 정지 후 출발해야 함
-### 패키지 설명
-### 기술적 난관 & 해결 전략
-### 올해 새롭게 적용한 점 / 개선점
+## Layout
+```
+ros2_ws/src/
+  clothoid_interfaces/   shared messages (Detection, DetectionArray)
+  clothoid_common/       small shared helpers (image conversion)
+  clothoid_bringup/      bring-up launch, topics.yaml, twist_mux.yaml
+  clothoid_lane/         lane following, floor-mark slow zone, stop line (OpenCV)
+  clothoid_yolo/         YOLO inference -> /detections
+  clothoid_lidar/        obstacle extraction, rubber cone course
+  clothoid_parking/      T-parking
+  clothoid_mission/      mission state logic (stop / slow / direction / parking signals)
+docker/                  dev image for laptops (Humble, amd64)
+scripts/env_jetson.sh    environment for the LIMO
+docs/                    MIGRATION_PLAN.md, INTERFACES.md, PORTING_GUIDE.md
+```
 
-## 미션 3
-### 미션 정보
-- 라바콘이 설치되는 구간으로, 차선 인식이 아닌 라이다를 통해 회피 주행해야 함
-### 패키지 설명
-패키지명: rubber_cone
+## Where to start
+1. Read `docs/INTERFACES.md` (topics, messages, who publishes what), `docs/PACKAGES.md` (what each
+   package does, who owns it, what is still a draft) and `docs/PORTING_GUIDE.md`.
+2. Laptop: build the dev image (`docker/README.md`), then `colcon build --symlink-install` in `ros2_ws`.
+3. LIMO: `source scripts/env_jetson.sh`, build in `ros2_ws`, then
+   `ros2 launch clothoid_bringup bringup.launch.py` and `ros2 launch clothoid_lane lane.launch.py`.
 
-#### 노드 2개로 구성
-- cone_sorter_node : 라이다(장애물) 기반으로 좌/우 러버콘 경계 추정
-- rubber_cone_node : 추정된 좌/우 경계로 센터라인 생성 + 조향/속도 제어
-- 입력(센서), 처리 로직, 출력(제어명령) 흐름
-- 입력: /raw_obstacles (obstacle_detector/Obstacles)
-- circles.center(x,y)를 base_link 기준 콘 좌표로 사용
+Plan and status: `docs/MIGRATION_PLAN.md`.
 
-#### 처리 흐름
-1. cone_sorter_node
-    - 미션 구간 판정(IDLE/RUNNING) 후 RUNNING일 때만 경계 생성
-    - 시작 콘(좌/우)을 찾고, 콘들을 그래프로 연결한 뒤 DFS로 경계 후보(trace)를 생성
-    - 후보들을 비용함수로 평가해 최종 좌/우 경계를 선택
-    - left_boundary_path, right_boundary_path로 퍼블리시
-    - cone_mission_active로 미션 활성 여부 퍼블리시
-
-2. rubber_cone_node
-    - 좌/우 경계를 받아 “신선도(timeout)” 검사
-    - 양쪽 경계가 모두 신선하면 센터라인 생성 → Pure Pursuit로 조향 계산
-    - 한쪽 경계만 유효하면 최대 조향 + 후진으로 탈출(경계 재획득)
-
-3. 출력(제어)
-    - high_level/ackermann_cmd_mux/input/nav_1 (AckermannDriveStamped)에 속도/조향 퍼블리시
-    - 디버그/시각화로 rubber_cone_centerline (nav_msgs/Path) 퍼블리시
-
-4. 핵심 알고리즘 또는 기술 스택
-    1. 경계 추정(cone_sorter_node)
-        - k-NN 기반 인접 그래프 + 거리 제한 + BFS(reachable)
-        - DFS로 경계 후보(trace) 확장(타원 게이트, 각도 제약, 차량 교차 방지)
-        - 비용함수 기반 후보 선택(각도/간격/길이/초기방향/방향변화/측면콘 분포/잘못된 회전 벌점)
-
-    2. 센터라인 생성/스무딩(rubber_cone_node)
-        - Bowyer–Watson Delaunay Triangulation
-        - 좌/우 라벨이 다른 엣지의 중점(midpoint) 수집
-        - MST 구성 후 **최장 경로(diameter)**로 center point ordering
-        - 로컬 3차 최소제곱(Savitzky–Golay 스타일) 스무딩 + tk::spline arc-length 보간/재샘플
-
-    3. 제어
-        - Pure Pursuit 기반 조향각 계산 + Ackermann 제어 명령 출력
-        - 경계 timeout 기반 “신뢰도/유효성” 관리
-
-### 기술적 난관 & 해결 전략
-#### 문제 상황(현장/센서 특성)
-- 콘 누락/오검출로 인해 좌/우 경계가 한쪽만 잡히는 상황
-- 콘 간격 불균일로 그래프 연결이 끊겨 경계 후보가 생성되지 않는 상황
-- 탐색 중 잘못된 연결(자기 교차, 급격한 방향 전환)로 경계가 비정상적으로 뽑히는 상황
-- 최신 경계가 끊기면 제어가 불안정해지는 문제(“경계 stale”)
-
-#### 직접 해결한 부분(초기 로직 → 개선 로직)
-- 미션 구간에서만 동작하도록 상태머신 도입
-- IDLE에서 불필요한 경계 생성/제어를 막고, start/ing 영역 조건을 만족할 때만 RUNNING
-- 경계 후보 생성 시 기하 제약을 넣어 ‘비정상 경계’ 제거
-- 로컬 타원 게이트(진행 방향 기반 후보 제한)
-- 방향성 각도/절대 각도 제한으로 급회전/역방향 후보 억제
-- 차량(근사 선분)과 후보 경계 선분 교차 체크로 충돌/자기교차 가능성 제거
-- 후보 다중 생성 → 비용 기반 최적 선택
-- 단순 최근접 연결이 아니라, 여러 후보(trace)를 만들고 “가장 그럴듯한 경계”를 선택
-- 경계 입력 신선도(timeout) 체크 + 안전 동작(후진) 추가
-- 한쪽 경계가 끊긴 상태에서 계속 전진하면 더 큰 오차가 나므로 → 한쪽만 유효할 때는 최대 조향 + 후진으로 재획득 전략 적용
-
-### 올해 새롭게 적용한 점 / 개선점
-#### 작년 대비 업그레이드(핵심 변화로 설명 가능)
-1. “경계 → 센터라인” 생성에서 단순 평균/중점 연결 대신 Delaunay + 라벨-다른-엣지 중점 + MST ordering으로 구조적으로 센터라인을 만들도록 개선
-2. 센터라인을 그대로 쓰지 않고 로컬 3차 최소제곱 스무딩 + spline arc-length 재샘플링으로 조향 안정성 향상
-3. 미션 활성 토픽(cone_mission_active)을 분리해 미션 구간에서만 제어가 동작하도록 전체 시스템을 안정화
-
-#### 대회 현장에서 수정한 최종 팁(운영 노하우로 남길 것)
-- 시작 콘 각도/거리 필터(angle_from_left_first_cone, dist_from_*_first_cone)는 트랙 폭/카메라-라이다 세팅에 따라 실패율이 크게 달라짐 → 현장에서 가장 먼저 튜닝
-- max_dist_between_cones가 실제 콘 간격보다 작으면 그래프가 끊겨 trace가 안 나옴 → 여유 있게 설정
-
-#### 내년에 넘겨줄 노하우(계승 포인트)
-- “한쪽 경계만 보이면 무조건 후진”은 급격한 속도 전환을 만들 수 있음
-- 후진 진입/복귀에 “0 속도 유지 딜레이” 같은 FSM을 넣으면 오버슈팅이 줄어듦
-- 그래프 인접행렬이 “양방향 AND”라 연결이 쉽게 끊길 수 있음
-- 현장 누락이 심하면 OR 조건/보조 edge 추가 같은 완화 옵션을 준비
-- 비용함수 가중치(w_*)는 트랙/센서 상태에 따라 “정답 경계”를 바꾸므로 로그로 각 항목의 cost를 분해해서(terms 출력) 튜닝하는 루틴을 남겨두는 게 좋음
-
-## 미션 4
-### 미션 정보
-- 차선 변경 구간으로, 앞에 놓인 마커를 보고 왼쪽 또는 오른쪽으로 주행해야 함
-### 패키지 설명
-### 기술적 난관 & 해결 전략
-### 올해 새롭게 적용한 점 / 개선점
-
-## 미션 5
-### 미션 정보
-- 회전 교차로 구간으로, 회전 주행하는 차량과 충돌하지 않고 주행해야 함
-
-### 패키지 설명
-패키지명: rotary
-
-#### 노드 구성
-- 단일 노드 구성: rotary_node (Python, ROS)
-
-#### 입력(센서), 처리 로직, 출력(제어명령) 흐름
-- 입력(센서)
-    - 카메라 이미지: /usb_cam/image_raw/calib (sensor_msgs/Image)
-    - 라이다 장애물: /raw_obstacles (obstacle_detector/Obstacles, 원형 장애물)
-
-#### 처리 로직
-1. rotary_node
-    - 카메라 기반 환경 인식(로터리 진입 트리거): 원근 변환(버드아이 뷰)으로 전방 바닥 영역을 평면화, HSV 색상 필터 + 그레이스케일 threshold를 AND 결합, 중앙 ROI 영역에서 컨투어 검출. “가로로 긴 직사각형”이 특정 크기 조건을 만족하면 START 표식으로 판단(rect_detected = True)
-    - 라이다 기반 로터리 환경 판별: START 표식이 감지된 이후에만 /raw_obstacles 사용, 전방 1.35 m 이내 & ±30° 범위의 원형 장애물 개수 계산. 장애물 개수가 1~5개일 경우 로터리 환경 진입으로 판단
-    - 로터리 미션 중 동작: 로터리 환경(rotary_flag=True)에서는 차량 정지 명령 유지, 동시에 전방 1.1 m 이내 장애물 존재 여부를 지속 감시
-    - 미션 종료 판정: 전방 1.1 m 이내 장애물이 더 이상 존재하지 않으면 로터리 미션 종료(rotary_mission_finished=True), 이후 로터리 관련 로직 비활성화
-
-2. 출력(제어명령)
-    - 차량 정지 명령: high_level/ackermann_cmd_mux/input/nav_2 (speed = 0.0, steering = 0.0)
-    - 미션 상태 알림: /rotary_mission_done (std_msgs/Bool) (True: 로터리 미션 종료, False: 진행 중)
-
-3. 핵심 알고리즘 또는 기술 스택
-    - OpenCV 기반 영상 처리: Perspective Warp (Bird’s-eye View), HSV 색상 필터링 + 명암 threshold 결합, ROI 제한 + Contour 기반 사각형 검출
-    - 라이다 기반 장애물 판단: 거리(x) + 각도(atan2) 조건 필터링
-    - ROS 통신 구조: 이미지/장애물 토픽 비동기 결합, 상태 플래그 기반 미션 FSM(진입–유지–종료)
-
-### 기술적 난관 & 해결 전략
-#### 문제 상황
-- 조명 변화에 따라 START 표식 색상이 달라져 색상 기반 인식이 불안정
-- 카메라만으로는 로터리와 유사한 도로 패턴을 오인식할 가능성
-- 라이다 장애물 개수가 순간적으로 튀는 경우(노이즈, 누락)
-- 로터리 내부에서 차량이 언제 다시 출발해야 하는지 판단이 어려움
-
-#### 직접 해결한 부분(초기 로직 → 개선 로직)
-- 단일 센서 의존 → 카메라 + 라이다 융합 판단: 초기에는 카메라로 START 표식만 보고 로터리 진입 판단하였으나, 개선 후 START 표식 감지 이후에만 라이다 장애물 개수 조건을 적용
-- 색상 필터 단독 → 색상 + 명암 이중 조건: HSV 마스크와 grayscale threshold를 AND 결합해 조명 변화에 따른 오검출 감소
-- 즉시 판단 → 상태 플래그 기반 단계적 FSM: rect_detected → rotary_flag → rotary_mission_finished로 미션 진입/유지/종료를 명확히 분리
-
-### 올해 새롭게 적용한 점 / 개선점
-#### 작년 대비 업그레이드
-- 단순 영상 기반 미션 판별에서 영상(START 표식) + 라이다(장애물 분포) 결합형 로터리 판단 구조로 발전
-- 로터리 종료 조건을 명확히 정의: “전방 1.1 m 이내 장애물 소멸”을 기준으로 자동 종료
-
-#### 대회 현장에서 수정한 최종 팁
-- HSV/threshold 값은 트랙마다 크게 달라짐 → debug=True 트랙바를 적극 활용해 현장에서 바로 튜닝
-- ROI 범위를 너무 넓게 잡으면 노이즈 컨투어가 급증 → 중앙 세로 ROI 제한이 오검출 감소에 매우 효과적
-- 장애물 개수 조건(1~5개)은 콘 배치 밀도에 따라 반드시 현장 조정 필요
-
-#### 내년에 넘겨줄 노하우
-- START 표식이 잠깐만 보여도 rect_detected가 True로 남기 때문에 필요하면 “연속 프레임 검증” 조건을 추가해 안정성 강화 가능
-- 로터리 내부에서 차량을 완전히 정지시키는 전략은 가장 안전하지만 향후에는 저속 크리핑(creeping) 주행으로 확장 가능
-- 미션 종료 Bool 토픽을 다른 주행 노드와 명확히 연동하면 미션 간 전환이 훨씬 깔끔해짐
-
-## 미션 6
-### 미션 정보
-- 터널 구간으로, 암실에서 충돌 없이 주행해야 함
-
-### 패키지 설명
-패키지명: tunnel
-
-#### 노드 구성
-- 단일 노드 구성: tunnel_navigation_node
-
-#### 입력(센서), 처리 로직, 출력(제어명령) 흐름
-- 입력(센서)
-    - /scan_line_obstacles (obstacle_detector/Obstacles)
-    - 라이다 포인트를 선분으로 추출한 결과(벽 라인 세그먼트)
-
-#### 처리 로직
-1. tunnel_navigation_node
-    - 좌표 변환: tf2를 이용해 라인 세그먼트를 센서 프레임(laser) → base_link로 변환
-    - 라인 전처리 및 분류: 선분의 x 좌표 기준으로 시작/끝점 정렬, y 부호를 기준으로 좌측 벽 / 우측 벽 / unknown 분류
-    - 터널 환경 판정: 좌·우 각각에서 차량 진행 방향과 ±10° 이내로 정렬된 선분만 사용, 차량(원점)과의 유클리디안 거리가 가장 가까운 선분을 대표 벽으로 선택. 좌·우 벽이 모두 검출될 경우에만 “터널 환경”으로 판단
-    - 조향각 계산(Stanley 기반): 선택된 좌/우 벽에 대해 원점 기준 수직 거리 계산, 두 벽 간 거리 차이로 횡방향 오차(cross-track error) 추정, 벽 방향 평균으로 터널 진행 방향(heading error) 계산, Stanley 제어식으로 최종 조향각 산출
-
-2. 출력(제어명령)
-    - high_level/ackermann_cmd_mux/input/nav_3 (ackermann_msgs/AckermannDriveStamped)
-    - 터널 전용 속도(tunnel_speed)와 계산된 조향각 퍼블리시
-
-3. 핵심 알고리즘 또는 기술 스택
-    - obstacle_detector 기반 라인 세그먼트 추출 결과 활용
-    - tf2를 이용한 실시간 좌표계 변환
-    - Stanley Controller 기반 횡방향 오차 보정
-    - 기하 연산(Euclidean distance, perpendicular distance)을 이용한 벽–차량 거리 계산
-
-### 기술적 난관 & 해결 전략
-#### 문제 상황
-- 라이다 노이즈로 인해 벽 라인이 여러 개로 쪼개지거나 잘못 검출되는 문제
-- 터널이 아닌 구간에서도 일부 벽 세그먼트가 인식되어 오동작 가능성
-- 벽 방향이 차량 진행 방향과 크게 어긋난 경우, 잘못된 조향각이 계산되는 문제
-
-#### 직접 해결한 부분(초기 로직 → 개선 로직)
-- 터널 환경 판정 로직 추가: 초기에는 라인이 들어오면 항상 제어 수행하였으나, 개선 후 좌·우 벽이 모두 존재하고 진행 방향과 정렬된 경우에만 제어 발행
-- 대표 벽 선분 선택 기준 강화: 단순 거리 기준이 아니라 “차량 진행 방향과 각도 제한(±10°)” + “원점과의 최소 거리”를 동시에 만족하는 선분만 사용
-- 직선/선분 거리 구분 사용: 제어에는 수직 거리(perpendicular distance)를 사용해 벽과의 횡오차를 안정적으로 계산, 벽 선택에는 선분 거리(euclidean distance)를 사용해 노이즈 영향을 감소
-
-### 올해 새롭게 적용한 점 / 개선점
-#### 작년 대비 업그레이드
-- 단순 벽 따라가기 제어에서 좌·우 벽을 동시에 고려한 Stanley 기반 터널 중앙 주행 로직으로 고도화
-- 센서 좌표계 의존 제거(tf2 활용)로 시뮬레이터/실차 전환 시 재사용성 향상
-
-#### 대회 현장에서 수정한 최종 팁
-- stanley_k_gain은 터널 폭과 속도에 따라 민감하게 달라짐. 값이 크면 진동, 작으면 중앙 복귀가 느림 → 현장 튜닝 필수
-- isAlignedWithHeading의 각도 임계값(기본 10°)은 곡선 터널에서는 약간 완화해야 벽을 놓치지 않음
-
-#### 내년에 넘겨줄 노하우
-- 터널 환경 판정이 너무 엄격하면 “제어 미발행 구간”이 생길 수 있음. 필요 시 unknown 라인도 보조 정보로 활용하는 확장 가능
-- 벽이 한쪽만 인식되는 구간에 대비해 러버콘 패키지와 유사한 fallback(속도 감소 또는 완만한 조향 유지) 전략을 추가하면 안정성 향상
-- 터널 진입 직후에는 라인 세그먼트가 불안정하므로 첫 몇 프레임은 조향을 완만하게 제한하는 로직을 두는 것이 효과적
-
-## 미션 7
-### 미션 정보
-- 차단기 구간으로, 차단기 앞에서 정지 후 차단기가 올라가면 주행해야 함
-
-### 패키지 설명
-패키지명: barricade_detector
-
-#### 노드 구성
-- 노드명: barricade_detector (Python, rospy 기반)
-
-#### 입력(센서), 처리 로직, 출력(제어명령) 흐름
-- 입력(센서)
-    - /scan : sensor_msgs/LaserScan (2D LiDAR 데이터)
-    - LiDAR/scan 데이터 수신 (전방 ±30도 범위만 사용)
-
-#### 처리 로직
-1. barricade_detector
-    - process_scan_data: 거리 0.1 ~ 0.4 m 범위의 포인트만 사용, LiDAR 극좌표(r, θ)를 차량 기준 (x, y) 좌표로 변환
-    - detect_tunnel: 오른쪽·왼쪽 특정 인덱스 구간에서 일정 개수 이상의 포인트가 있으면 터널로 판단, 터널이면 이후 바리케이드 검출 로직을 건너뜀
-    - detect_line: RANSAC으로 직선 피팅, inlier 수와 선분 폭(0.1 ~ 0.6 m)을 기준으로 직선형 바리케이드 여부 판별
-
-2. 출력(제어명령)
-    - /high_level/ackermann_cmd_mux/input/nav_3 ackermann_msgs/AckermannDriveStamped
-    - 바리케이드로 판단되면 AckermannDriveStamped 생성하여 drive.speed = 0.0 설정 후 publish
-
-3. 핵심 알고리즘 또는 기술 스택
-    - 기술 스택: ROS 1 (rospy), numpy, 메시지(LaserScan, AckermannDriveStamped)
-    - 핵심 알고리즘: 전방 LiDAR 포인트 필터링 (각도·거리 기반), RANSAC 직선 검출로 바리케이드 인식, LiDAR 인덱스 기반 터널 구간 인식 후 터널에서는 정지 로직 비활성화
-
-### 기술적 난관 & 해결 전략
-#### 문제 상황
-- 센서 에러, 조명 변화, 장애물 인식 등 문제 상황
-- 직접 해결한 부분(초기 로직 → 개선 로직)
-
-### 올해 새롭게 적용한 점 / 개선점
-#### 작년 대비 업그레이드
-- 차단기 전 차단기라는 토픽이 5번 이상 발행 후 차단기 코드 실행
-- 주차의 용이성을 위해 차선 중앙으로 이동하다가 차단기 지나고 난 후 왼쪽 차선에 붙도록 변경
-
-#### 대회 현장에서 수정한 최종 팁
-- 차단기 ~ 주차까지 최대한 많이 해보고 확률 높은것으로 코드 실행, 심사위원한테 미리 통과 정도 검사 받기
-
-#### 내년에 넘겨줄 노하우
-- (내용 없음)
-
-## 미션 8
-### 미션 정보
-- 주차 구간으로, 정해진 주차 구역 내에 주차하여야 함
-### 패키지 설명
-### 기술적 난관 & 해결 전략
-### 올해 새롭게 적용한 점 / 개선점
+## Rules for working in this repo
+- One package per mission, one owner per package. Branch per person, merge by pull request.
+- Do not commit rosbags, model weights or datasets (`.gitignore`); share them outside git.
+- Files use LF line endings (`.gitattributes`). On Windows set `git config core.autocrlf input`.

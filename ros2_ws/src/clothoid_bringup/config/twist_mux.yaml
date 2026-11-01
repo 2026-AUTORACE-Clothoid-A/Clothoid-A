@@ -1,0 +1,26 @@
+# Higher priority wins while its topic is active (a message arrived within `timeout`).
+# The camera runs at ~12 Hz with up to 0.16 s gaps, so lane timeout must be above that.
+twist_mux:
+  ros__parameters:
+    use_stamped: false
+    topics:
+      teleop:
+        topic: cmd_vel_teleop
+        timeout: 0.5
+        priority: 200
+      state:                 # signal / pedestrian stop-wait-go, sign reactions
+        topic: cmd_vel_state
+        timeout: 0.3
+        priority: 100
+      parking:
+        topic: cmd_vel_parking
+        timeout: 0.3
+        priority: 90
+      avoid:                 # static obstacle avoidance, rubber cones
+        topic: cmd_vel_avoid
+        timeout: 0.3
+        priority: 80
+      lane:
+        topic: cmd_vel_lane
+        timeout: 0.3
+        priority: 10
