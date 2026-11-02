@@ -63,9 +63,16 @@
   오류 없이 `backend: none`으로 돌아 빈 결과만 나온다. 고칠 때까지는 yaml을 직접 고치거나,
   디버그는 `ros2 param set /lane_main debug true`를 쓴다(이 방법은 동작 확인함).
 - **`twist_mux` 설치(limo2 완료, limo1 미설치):** `ros-humble-twist-mux`와 함께 `ros-humble-diagnostic-updater`를 4.0.7로 올려야 한다. 4.0.6에는 `libdiagnostic_updater.so`가 없는데 패키지 의존성에 버전이 없어 apt가 올려 주지 않고, 실행할 때 라이브러리 오류가 난다. 2026-11-02 limo2에서 우리 `twist_mux.yaml`로 입력 5개의 우선순위를 드라이버 없이 확인했고, 입력이 모두 끊기면 `/cmd_vel`이 나오지 않는다.
-  이번에는 `.deb`를 임시 폴더에 풀어 시험했고, 시스템에는 설치하지 않았다.
 - **`scripts/env_jetson.sh`의 기본 경로:** `~/Clothoid-A/ros2_ws`를 가정한다. 다른 경로에 clone했으면
-  `CLOTHOID_WS`를 지정해야 워크스페이스가 source된다.
+  `CLOTHOID_WS`를 지정해야 워크스페이스가 source된다. limo2는 `~/2026-autorace`에 있으므로 다음과 같이 실행한다.
+  ```bash
+  export CLOTHOID_WS=$HOME/2026-autorace/ros2_ws
+  source ~/2026-autorace/scripts/env_jetson.sh
+  ```
+- **어느 `limo_base`가 뜨는가:** 위처럼 우리 워크스페이스까지 source해야 수정 드라이버가 뜬다. `~/wego_ws`만 source한 터미널에서는 공장 드라이버가 뜨고, 애커만 모드에서 `/odom`이 안 나온다. `ros2 pkg prefix limo_base`로 확인한다.
+- **로봇별 반영 상태(2026-11-02):**
+  - limo2: 커밋 `c2ed19a`를 번들로 받아 `limo_base`만 빌드했다. 명령 없이 띄워 `/odom` 49.9Hz, `motion_mode` 1을 확인했다. 전체 bringup은 같은 코드를 임시 폴더에서 빌드해 시험했고, 저장소 빌드로는 아직 띄우지 않았다. GitHub 인증이 없어 `git pull`은 안 되고 번들로 받는다.
+  - limo1: 반영하지 않았다. 저장소, `twist_mux`, 수정 드라이버가 없고 차동 모드다.
 - **카메라 로그:** 시작할 때마다 `Failed to setup devices`가 나오지만 영상은 정상 발행된다. 원인은 미확인.
 
 **아직 확인하지 못한 것**
