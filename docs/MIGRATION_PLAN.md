@@ -31,7 +31,7 @@
 
 ### 하드웨어/소프트웨어
 - AgileX LIMO(WeGo 수정판), Jetson Orin NX, JetPack 6(Ubuntu 22.04 기반, **arm64**), ROS2 Humble
-- 구동: `limo_base`. `limo_base`는 `/cmd_vel`(Twist), `limo_ackerman_base`는 `ack_cmd`(AckermannDrive)를 구독. 발행: `/odom`, `/imu`, `/limo_status`. odom→base_link TF는 기본 꺼짐(`pub_odom_tf=False`)
+- 구동: 공장 `limo_base` 패키지. 실행 파일 `limo_base`는 `/cmd_vel`(Twist), WeGo가 추가한 `limo_ackerman_base`는 `/limo/ack_cmd`(AckermannDrive)를 구독(`wego_ws`에서 쓰는 곳 없음). 발행: `/odom`, `/imu`, `/limo_status`. odom→base_link TF는 기본 꺼짐(`pub_odom_tf=False`)
 - 라이다: YDLidar **Tmini Plus**(모델 코드 151), 10Hz, 샘플레이트 4K → 1회전 약 410포인트(각분해능 약 0.88°), `angle_min/max ±110°`, `inverted: true`, 프레임 `laser_link`(yaml과 URDF 일치). `laser_frame`은 쓰이지 않는 `open_ydlidar_launch.py`에만 있는 이름
 - 카메라: Orbbec **DaBai DC1**(PID 0x0657, **USB2.0 연결**, 펌웨어 RD1001). 실제로는 `astra_stereo_u3.launch.py`로 구동 중이며 컬러 640x480@30(MJPG), 뎁스 640x400, IR 켜짐. 기동 로그에 `Failed to setup devices: Request failed, device response with unknown error!` 오류가 나지만 스트림은 올라옴. `/camera/color/image_raw`(+`/compressed`)
 - **센서/구동 시작 경로 (`wego/launch/teleop_launch.py`)**: `limo_description/load_urdf.launch.py`(robot_state_publisher, 기본 모델 `limo_four_diff.xacro`) → `wego/camera_tilt_launch.py`(카메라 정적 TF) → `limo_base/limo_base.launch.py` → `orbbec_camera/astra_stereo_u3.launch.py` → `ydlidar_ros2_driver/ydlidar.launch.py` → `robot_localization/limo_ekf_launch.py`(`/odom`+`/imu` 융합) → (선택) rviz2
@@ -47,7 +47,7 @@
   - 노드: `/limo/limo_base`(네임스페이스 `/limo`), `/camera/camera`, `/ydlidar_ros2_driver_node`, `/ekf_filter_node_odom`, `/robot_state_publisher`, `/joint_state_publisher`, 카메라 정적 TF 3개
   - 구동 입력: `/cmd_vel`(Twist)을 `limo_base`가 구독(발행자 0). 발행: `/odom`, `/odometry/filtered`(EKF), `/imu`, `/limo_status`, `/joint_states`
   - `/limo_status`, `/odom`, `/imu`는 측정 시 모두 미발행. Jetson만 켜고 **LIMO 본체 전원이 꺼진 상태**에서 측정한 것으로 보이며(시리얼 포트 `/dev/ttylimo`는 열림, 본체 데이터가 없음), 구동 모드(`motion_mode`)는 본체 전원을 켠 뒤 재측정 필요
-  - 카메라 `/camera/color/image_raw`: 요청 30fps인데 **실측 약 12.2~12.5Hz**, 간격 최대 0.16s(지터). **USB2.0 대역폭**에 컬러(MJPG)+뎁스+IR+포인트클라우드를 같이 보내는 것이 원인으로 추정 → 우리 launch에서 `enable_depth`, `enable_ir`, `enable_point_cloud`, `enable_colored_point_cloud`를 끄고 컬러만 켜서 개선 여부 확인(안 되면 12Hz 기준으로 제어 주기 설계)
+  - 카메라 `/camera/color/image_raw`: 요청 30fps인데 **실측 약 12.2~12.5Hz**, 간격 최대 0.16s(지터). **USB2.0 대역폭**에 컬러(MJPG)+뎁스+IR+포인트클라우드를 같이 보내는 것이 원인으로 추정 → 우리 launch에서 `enable_depth`, `enable_ir`, `enable_point_cloud`, `enable_colored_point_cloud`를 끄고 컬러만 켜서 개선 여부 확인(안 되면 12Hz 기준으로 제어 주기 설계). **2026-11-02 정정:** 밝은 곳에서는 전체 스트림을 켜도 컬러 29.3Hz가 나왔다. USB2.0 대역폭이 아니라 어두울 때의 노출 시간이 원인으로 보인다
   - 라이다 `/scan`: 10.04Hz로 안정
   - TF `base_link→laser_link`: translation (0.103, 0, -0.034), 회전 없음(identity). 작년 코드의 `base_link→laser`(-0.15, 0, 0.20, yaw π)와 완전히 다르므로 라이다 기반 코드는 좌표 가정을 모두 재확인. 180° 반전은 드라이버 `inverted: true`가 처리하는 것으로 추정
   - `ros2 pkg list`(limo/wego 필터): `limo_base`, `limo_description`, `limo_msgs`, `limo_ros2_application`, `wego`, `wego_2d_nav`, `wego_msgs`
@@ -56,7 +56,7 @@
   - 카메라 드라이버가 발행하는 `camera_link→color` TF는 translation `29.89, 0.07, 0.215`로 **단위 변환 오류(mm로 추정)**가 있어 믿을 수 없음. TF 기반 투영은 쓰지 않고 우리 정적 TF를 쓴다
   - `/camera/color/camera_info`: 640x480, `rational_polynomial`, fx=fy=489.5, cx=319.9, **cy=214.6**(480 높이 중심 240과 차이가 커 신뢰도 의심), 왜곡 `d=[0.0628, -0.0841, 0.00027, -0.00033, 0...]`로 작년 카메라(-0.29)보다 훨씬 약함. 수평 화각 약 66°(규정집은 약 71°). `image_undistort`는 불필요할 가능성이 높고, 필요하면 `camera_calibration`으로 직접 재보정
   - 기동 로그: EKF가 `odom0_differential`과 `odom0_relative`를 동시에 true로 설정해 differential로 동작한다는 오류 메시지(무해), URDF material 경고(무해), `limo_base`의 "odom topic name: 0" 출력(표기 오류)
-- 차체: 휠베이스 0.2m, 트랙 0.172m, 최대 조향 28°, 최소 회전반경 약 0.46m(애커만)
+- 차체: 휠베이스 0.2m, 트랙 0.172m, 최대 조향 28°, 최소 회전반경 약 0.46m(애커만). 공식 코드 값이며, 눈으로 본 실제 각도는 더 작아 보였다(C2). 바닥에서 재서 정한다
 - YOLO 예제(WeGo): `yolo_object_detect`(ultralytics) → `/yolo_bounding_boxes` → `dl_control`. 라벨링·학습·TensorRT 변환 도구 포함. 기존 모델은 3클래스뿐이라 대회용 재학습 필요
 
 ### 백업 README에서 확인한 추가 사항
@@ -96,7 +96,7 @@
 출처: `Autorace2026_규정집.pdf`(10/8, 초안 수정본), `Autorace2026_mission_detail_draft.pdf`(9/28). 텍스트만 추출했고 도면(트랙 레이아웃, 표지판)은 미확인. 두 문서의 미션 번호와 개수가 달라(초안 9종, 규정집 8종) **규정집 기준**으로 정리.
 
 ### 대회 일반
-- 트랙 10m x 6m, 차선 폭 550mm, 곡률 R600/650, 시계방향 1바퀴, 2회 시도 중 높은 점수, 제한시간 10분
+- 트랙 10m x 6m, 차선 폭 550mm, 곡률 안쪽 선 R600/바깥쪽 선 R650(차로 중앙 약 0.875m), 시계방향 1바퀴, 2회 시도 중 높은 점수, 제한시간 10분
 - 기본 속도 0.3~0.4m/s 권고, 서행 구간 최대 0.2m/s 이하
 - 차로 이탈 1회당 -1점(재시작 없음), 시설물 충돌 -1점, 미션 진입/재발진 15초 초과 시 해당 미션 0점
 - 카메라 화각 약 71°, 차량 지상고 약 24mm, 판정 기준점은 앞바퀴
@@ -164,7 +164,7 @@
 
 ### Phase 2 — 플랫폼 bring-up (미션 코드보다 먼저)
 카메라/라이다/구동/mux/teleop이 `ros2 topic echo`로 확인되는 상태를 먼저 만든다.
-- 우리 레포에 자체 bring-up 패키지(가칭 `clothoid_bringup`)를 만든다. 기준은 `wego/launch/teleop_launch.py`(1-2절)이며 여기서 미션에 불필요한 것(rviz, 필요 시 EKF)을 빼고 `twist_mux`와 파라미터 yaml을 추가한다. 구성: `limo_description`(URDF/TF), 카메라 정적 TF(`degree` 값 기록), `limo_base`(애커만 모드면 `limo_base_ackerman`), Orbbec `astra_stereo_u3`, `ydlidar_ros2_driver`, `robot_localization` EKF(odom 필요 시). 기존 `open_ydlidar_launch.py`의 `limo_bringup` 참조는 쓰지 않는다.
+- 우리 레포에 자체 bring-up 패키지(가칭 `clothoid_bringup`)를 만든다. 기준은 `wego/launch/teleop_launch.py`(1-2절)이며 여기서 미션에 불필요한 것(rviz, 필요 시 EKF)을 빼고 `twist_mux`와 파라미터 yaml을 추가한다. 구성: `limo_description`(URDF/TF), 카메라 정적 TF(`degree` 값 기록), `limo_base`, Orbbec `astra_stereo_u3`, `ydlidar_ros2_driver`, `robot_localization` EKF(odom 필요 시). 기존 `open_ydlidar_launch.py`의 `limo_bringup` 참조는 쓰지 않는다.
 
 | 패키지 | 대응 |
 |---|---|
@@ -206,7 +206,7 @@
 
 ## 2-2. v0 체크리스트 (팀에 배포하는 기반 버전)
 
-`ros2-bootstrap` 브랜치 기준. `[x]`는 파일을 작성했다는 뜻이고, **ROS2나 Docker가 없는 Windows PC에서 작성**해서 아래 "확인" 항목은 아직 한 번도 실행하지 않았다. `[x]` 중 실제로 돌려본 것은 `pytest`뿐이다.
+`ros2-bootstrap` 브랜치 기준. **ROS2나 Docker가 없는 Windows PC에서 작성**했고, "확인" 항목은 2026-11-02 limo2(커밋 `f9e422d`)에서 처음 실행했다. "확인"이 붙지 않은 `[x]`는 파일을 작성했다는 뜻이다. 상세 결과는 `docs/PACKAGES.md`의 "실행 확인 현황".
 
 ### 레포와 환경
 - [x] ROS1 코드는 `ros1-2025` 브랜치에 보존, `ros2-bootstrap`에서 ROS2 구조로 정리(`catkin_ws`, `webot_ws`, `wego_ws`, 구 docker 삭제)
@@ -218,20 +218,27 @@
 - [ ] **확인:** 팀원 1명이 처음부터 pull해서 같은 결과가 나옴
 - [ ] 이미지를 레지스트리에 푸시(태그 `humble-v0`)
 - [x] `scripts/env_jetson.sh`
-- [ ] `scripts/setup_jetson.sh`, `requirements-jetson.txt`(Jetson에 `ros-humble-twist-mux` 설치 포함)
+- [ ] `scripts/setup_jetson.sh`, `requirements-jetson.txt`(Jetson에 `ros-humble-twist-mux` 설치와 `ros-humble-diagnostic-updater` 4.0.7 업그레이드 포함, 이전 버전에는 `twist_mux`가 찾는 라이브러리가 없다). limo2는 2026-11-02 손으로 설치함, limo1은 미설치
 
 ### 기반 패키지 (`ros2_ws/src`)
 - [x] `clothoid_interfaces`: `Detection`, `DetectionArray`
 - [x] `clothoid_bringup`: `bringup.launch.py`, `topics.yaml`, `twist_mux.yaml`
-- [ ] **확인:** Jetson에서 `ros2 launch clothoid_bringup bringup.launch.py`가 뜨고, 카메라 컬러 단독 fps(USB2.0 가설), TF, `/cmd_vel` 흐름이 정상
+- [x] **확인:** Jetson에서 `ros2 launch clothoid_bringup bringup.launch.py`가 뜨고, TF, `/cmd_vel` 흐름이 정상(`twist_mux`는 임시 폴더에서 실행)
+- [x] 카메라 fps와 USB2.0 가설: 어두운 곳에서는 컬러 단독 12.3Hz, 전체 스트림 12.4Hz로 차이가 없고, 밝은 곳에서는 전체 스트림을 켠 채 29.3Hz가 나와 가설을 기각했다. 어두울 때의 노출 시간이 원인으로 보인다(limo2, 2026-11-02)
+- [ ] 트랙 조명에서 컬러 fps 측정과 노출 고정 여부 결정. 밝은 곳 30Hz 입력에서 미션 노드 전체의 CPU 부하 재측정(지금 수치는 10.9Hz 입력 기준)
 - [ ] 카메라 높이와 피치 실측 후 `camera_pitch` 반영
-- [ ] LIMO 본체 전원을 켠 상태에서 `/limo_status`(`motion_mode`), `/odom`, `/imu` 확인
-- [ ] `/cmd_vel`이 끊기면 차가 서는지, `Twist(0,0)`에서 조향이 튀지 않는지 확인(`INTERFACES.md` 열린 항목). 차체가 움직이는 확인이라 **LIMO에 물리적으로 접근할 수 있을 때** 한다(지금은 Jetson 원격 접속만 가능)
+- [x] LIMO 본체 전원을 켠 상태에서 `/limo_status`(`motion_mode`), `/odom`, `/imu` 확인. 2026-11-02 limo2: `/imu` 100.2Hz, `/odom` 50.0Hz, `/limo_status` 2.0Hz, 배터리 12.1V, `motion_mode` 0(4륜 차동). 그 전까지 응답이 없던 원인은 모터 배터리 미연결이었다
+- [x] limo2 애커만 전환(앞쪽 양옆 핀을 뽑아 긴 선을 정면으로, 표시등 초록, `motion_mode` 1). `limo_base`와 `/cmd_vel` 경로의 조향값은 전진·후진 모두 명령과 같은 방향이고 0.197에서 잘린다. 조향값 + 왼쪽, - 오른쪽을 눈으로 확인했다(2026-11-02)
+- [x] 애커만 모드 구동 드라이버: 공장 `limo_base`를 저장소로 복사해 수정(`ros2_ws/src/limo_base`, `~/wego_ws`는 그대로). 애커만 `/odom`, 입력 끊김 시 정지, NaN 방지를 넣었다. 조향 스케일과 한계는 공식 값이고 launch 인자로 바꿀 수 있다. `limo_ackerman_base`와 변환 노드 방식은 시험 후 버렸다
+- [x] 수정한 `limo_base`를 `twist_mux`와 연결해 바퀴를 돌려 확인(2026-11-02, 바퀴를 띄운 상태). 입력을 끊으면 0.55초에 바퀴 정지
+- [ ] 바닥에서 원 주행으로 회전 반경을 재서 `steering_scale`과 `max_inner_angle` 결정(공식 약 0.46m, 눈대중 기준 약 0.83m, 차로 중앙에 필요한 약 0.875m와 비교). 후보 값은 조향각 ÷ 1.215. `/odom` yaw를 실제 회전과 비교
+- [ ] `/cmd_vel`이 끊기면 차가 서는지 **바닥에서** 확인. 바퀴를 띄운 상태에서는 0.55초에 서고, 드라이버 없이 프레임이 끊겨도 본체가 0.57초에 바퀴를 세우지만 조향은 꺾인 채 남는다(2026-11-02)
 
 ### `lane_main` 포팅
 - [x] `clothoid_lane`: ROS-free `lane_detector.py` + `lane_main.py` 노드 + `lane.yaml` + launch
 - [x] 합성 이미지 `pytest` 통과(이 PC에서 실행, `clothoid_lane` 전체 21개)
-- [ ] **확인:** `colcon build`와 노드 기동(rclpy), `/lane/debug_image`로 결과 확인
+- [x] **확인:** `colcon build`와 노드 기동(rclpy), 합성 이미지로 `/cmd_vel`까지 흐름 확인
+- [ ] **확인:** 실제 차선 영상에서 `/lane/debug_image`로 결과 확인(2026-11-02 영상이 거의 검은색이었음). `debug:=true`가 전달되지 않는 버그가 있어 지금은 `ros2 param set /lane_main debug true`로 켠다
 
 ### 미션 패키지 뼈대와 2025 이식 (구조 결정: 담당자별 패키지, 2-3절)
 - [x] `clothoid_common`(이미지 변환), `clothoid_lane`에 `speed_zone`(red_road)·`stopline`(crosswalk) 추가
@@ -240,8 +247,9 @@
 - [x] `clothoid_yolo`: 추론 노드와 후처리(모델 없이 `backend: none`)
 - [x] `clothoid_mission`: 초안
 - [x] 로직 `pytest` 73개 통과(lane 21, lidar 19, parking 14, yolo 7, mission 12), 노드 파라미터와 yaml 타입 점검(스텁)
-- [ ] **확인:** `colcon build` 전체 통과(특히 `clothoid_interfaces` 메시지를 쓰는 yolo/mission)
-- [ ] **확인:** 노드별 기동과 launch (rclpy 첫 실행), `clothoid_common` 이미지 테스트
+- [x] **확인:** `colcon build` 전체 통과(특히 `clothoid_interfaces` 메시지를 쓰는 yolo/mission). 테스트 78개 통과
+- [x] **확인:** 노드별 기동과 launch (rclpy 첫 실행), `clothoid_common` 이미지 테스트
+- [ ] launch 인자(`debug`, `backend`, `model_path`)가 패키지 yaml 값에 밀려 노드에 전달되지 않는 버그 수정
 - [ ] **확인:** 바닥 마크·정지선·콘이 실제 카메라/라이다에서 잡히는지(2025 값 그대로라 튜닝 필수)
 - [ ] 각 담당자에게 `docs/PACKAGES.md`의 "할 일"을 배분
 - [ ] Jetson에서 실제 카메라로 HSV, warp, `lane_width` 재튜닝(지금 값은 2025 그대로)
@@ -252,7 +260,7 @@
 - [ ] 미션 담당 배분표와 인터페이스 변경 절차
 
 ### v0 태그를 찍는 기준
-위의 **확인** 항목 중 Docker 빌드, `colcon build`, Jetson bring-up, `lane_main` 기동 네 가지가 통과하면 `v0` 태그를 찍고 팀에 공유한다.
+위의 **확인** 항목 중 Docker 빌드, `colcon build`, Jetson bring-up, `lane_main` 기동 네 가지가 통과하면 `v0` 태그를 찍고 팀에 공유한다. 2026-11-02 기준 Docker 빌드만 남았다(Jetson bring-up은 `twist_mux` 설치 전제).
 
 ## 2-3. 패키지 구조 결정과 2025 코드 이식 현황
 
@@ -310,8 +318,8 @@
 |---|---|---|---|---|
 | B1 | **원근 변환 값이 전부 2025 것**: 카메라 높이·피치·화각(약 71°)이 다르면 차선 폭(`lane_width`), 정지선, 주차 시작선의 기하가 모두 틀어진다. 지상고 24 mm라 시점이 낮아 근거리 차선이 잘리기 쉽다 | [코드] | `lane.yaml`, `stopline.yaml`, `parking.yaml`의 `warp_*` 세 곳 | 세 파일의 warp를 **같은 값으로** 맞춰 재튜닝. `/lane/debug_image`로 평행선이 평행한지 확인 |
 | B2 | 왜곡 보정 빠짐: 2025 노드는 `image_undistort`의 `/usb_cam/image_raw/calib`을 구독했는데 지금은 원본 | [코드] | 모든 카메라 노드 | 직선이 휘어 보이는지 확인. 필요하면 보정 토픽을 쓰도록 `topics.yaml`만 바꾼다 |
-| B3 | 프레임레이트 ~12 Hz(실측, 깊이 스트림 켠 상태), 최대 간격 0.16 s. 조향 갱신이 느려지고 `twist_mux`의 lane 타임아웃(0.3 s)에 가깝다. 어두워 자동 노출이 길어지면 더 떨어질 수 있다 | [실측]/[미확인] | `lane_main`, `twist_mux.yaml`, `speed_zone`(`hold_sec`) | 컬러만 켠 fps 재측정, 노출 고정 여부 확인. 끊기면 차가 어떻게 되는지는 차체 접근 후 확인 |
-| B4 | USB 2.0 대역폭이 fps를 제한할 가설. 컬러 단독이면 오를 수 있음 | [미확인] | `bringup` | 컬러 단독 fps 측정 |
+| B3 | 프레임레이트가 조명에 따라 달라진다. 어두운 곳 ~12 Hz(최대 간격 0.16 s), 밝은 곳 29.3 Hz(최대 간격 0.07 s). 어두우면 조향 갱신이 느려지고 `twist_mux`의 lane 타임아웃(0.3 s)에 가깝다 | [실측] | `lane_main`, `twist_mux.yaml`, `speed_zone`(`hold_sec`) | 트랙 조명에서 fps 측정, 노출 고정 여부 확인. 끊기면 차가 어떻게 되는지는 차체 접근 후 확인 |
+| B4 | USB 2.0 대역폭이 fps를 제한할 가설. 밝은 곳에서 전체 스트림을 켜도 29.3 Hz가 나와 기각 | [실측] | `bringup` | 없음 |
 | B5 | 색 순서: Orbbec은 `rgb8`일 수 있고 2025는 `bgr8`. 변환은 `encoding` 필드로 하지만 실제 값을 확인하지 않았다. 틀리면 노랑/빨강 HSV가 뒤바뀐다 | [미확인] | `clothoid_common/image_utils.py`, 모든 HSV | `ros2 topic echo --once /camera/color/image_raw --field encoding` |
 | B6 | 자동 노출·화이트밸런스, 모션 블러로 HSV 임계값이 흔들린다. 2025 HSV는 다른 카메라 값 | [코드] | `lane.yaml`, `speed_zone.yaml`, `stopline.yaml`, `parking.yaml` | 트랙 조명에서 bag 녹화 후 튜닝, 가능하면 노출·WB 고정 |
 | B7 | 지연: 카메라+YOLO 지연이 크면 ±5 cm 정지가 어렵다. 0.3 m/s에서 100 ms면 3 cm | [코드] | `clothoid_yolo`, `clothoid_mission` | 추론 지연을 측정해 정지 트리거를 앞당기거나 거리 기반으로 |
@@ -320,9 +328,9 @@
 | # | 위험 | 근거 | 영향 코드 | 대응·확인 |
 |---|---|---|---|---|
 | C1 | 2025는 조향각을 직접 보냈고 지금은 `Twist`를 `limo_base`가 조향각으로 되돌린다. 휠베이스 0.2 m가 2025 차와 달라서 같은 차선 오차에 대한 반응이 다르다. 차선 이득 `-atan(x/y)/(π/2)`는 2025 차 튜닝값 | [코드] | `lane_main` | 주행하며 과조향/저조향을 보고 이득 재튜닝 |
-| C2 | 조향 한계: 안쪽 바퀴 28° 클램프, 애커만 최소 회전 반경 약 0.46 m. 트랙 곡률 R600/650 mm와 거의 같아 여유가 작다 | [코드] | `lane_main`, 콘 코스 | 급커브에서 조향이 포화하는지 `ros2 topic echo /cmd_vel` |
+| C2 | 조향 한계: 공식 값은 안쪽 28°(조향값 0.197, 반경 약 0.46 m)인데, 2026-11-02 바퀴를 띄우고 눈으로 보니 0.196에서 약 15°(반경 약 0.83 m)였다. 그렇다면 조향은 요청의 절반쯤이다. 규정집의 "안쪽 R600 / 바깥쪽 R650"은 주행 경로가 아니라 안쪽 선과 바깥쪽 선의 반경이고, 도면상 두 원호의 중심이 약 0.7m 떨어져 있다. 차로 중앙은 안쪽 선 중심에서 직선 끝 약 0.875m, 곡선 정점 약 0.975m이므로 필요한 회전 반경은 약 0.875m다(도면 치수에서 계산). 0.83m면 여유가 약 0.05m다. 눈대중이라 공식 값을 유지하고 바닥에서 재서 launch 인자로 조정한다. 조향값 0.33까지는 소리 없이 꺾이는 것을 봤다 | [실측]/[미확인] | `lane_main`, 콘 코스 | 원 주행으로 반경 측정, 급커브에서 조향이 포화하는지 확인 |
 | C3 | 속도 의미와 모터 데드밴드 미확인. 서행 0.2 m/s에서 멈추거나 떨 수 있다 | [미확인] | `speed_zone`, `mission` | **차체 접근 후** 최저 구동 속도 측정 |
-| C4 | `Twist(0,0)`의 NaN 조향, `/cmd_vel`이 끊겼을 때 정지 여부, 후진 시 조향 부호 | [미확인] | `mission`, `cone_follower`, `parking` | `INTERFACES.md` 열린 항목, **차체 접근 후** |
+| C4 | `/cmd_vel`이 끊겼을 때 정지 여부는 미확인. `Twist(0,0)`은 조향 0·속도 0 프레임으로 나가고, 후진 조향값은 전진과 같은 부호다(limo2, 바퀴를 띄운 상태) | [미확인]/[실측] | `mission`, `cone_follower`, `parking` | `INTERFACES.md` 열린 항목, **차체 접근 후** |
 
 #### D. 라이다
 | # | 위험 | 근거 | 영향 코드 | 대응·확인 |
@@ -338,7 +346,7 @@
 #### E. 오도메트리·기타
 | # | 위험 | 근거 | 영향 코드 | 대응·확인 |
 |---|---|---|---|---|
-| E1 | `/odom`, `/imu`는 LIMO 본체 전원이 켜져야 나온다. 애커만 모드 오도메트리의 정확도와 바퀴 슬립은 모른다. ±5 cm 정지 거리 추정에 쓰려면 검증이 필요 | [미확인] | `mission`(정지 위치) | **차체 접근 후** 일정 거리 주행 후 오차 측정 |
+| E1 | `/odom`, `/imu`는 LIMO 본체 배터리가 연결돼야 나온다. 애커만 모드 `/odom`은 공장 `limo_base`에 없어 우리 사본에서 되살렸고 50Hz다(실측, 바퀴를 띄운 상태). 오도메트리의 정확도와 바퀴 슬립은 모른다. ±5 cm 정지 거리 추정에 쓰려면 검증이 필요 | [실측]/[미확인] | `mission`(정지 위치) | **차체 접근 후** 일정 거리 주행 후 오차 측정 |
 | E2 | 공장 `.bashrc`는 `ROS_LOCALHOST_ONLY=1`. 노트북의 rviz에서 토픽이 안 보인다 | [실측] | 개발 환경 | `CLOTHOID_REMOTE=1`(`scripts/env_jetson.sh`) |
 
 #### 점검 순서
@@ -348,9 +356,9 @@
 
 ## 4. 확인 필요 정보
 - **LIMO 본체 전원을 켠 상태**에서 `/limo_status`(`motion_mode`), `/odom`, `/imu` 주기 재측정
-- 카메라 컬러 단독 구동 시 fps(USB2.0 가설 검증), 카메라 물리 장착 높이·각도, `cy=214.6` 신뢰도(직접 보정 여부)
+- 트랙 조명에서 카메라 컬러 fps, 카메라 물리 장착 높이·각도, `cy=214.6` 신뢰도(직접 보정 여부)
 - 규정집 도면(트랙 레이아웃, 표지판 모양) 확인, 황색 신호 처리 규칙, 갈림길 표지 형태, 서행 판정 기준 시간
-- 제어 방식(잠정 결정): `/cmd_vel`(Twist) + `twist_mux`. 플랫폼 기본 스택이 `limo_base`의 `/cmd_vel`을 쓰고 드라이버가 애커만 모드에서 Twist를 조향각으로 변환(최대 조향각 제한 포함)하기 때문. 우리 노드는 `angular.z = v·tan(δ)/0.2`로 변환. `motion_mode` 확인 후 확정
+- 제어 방식: `/cmd_vel`(Twist) + `twist_mux` + 우리 `limo_base`. 우리 노드는 `angular.z = v·tan(δ)/0.2`로 보내고 드라이버가 δ를 되찾는다. apt에 애커만용 mux가 없어 Twist를 유지한다
 - 카메라 왜곡 보정: 2025 노드는 보정된 `/usb_cam/image_raw/calib`을 썼고, 이식한 노드는 `/camera/color/image_raw` 원본을 쓴다. DaBai 렌즈 왜곡이 차선 직선성에 영향을 주는지 확인(필요하면 `image_proc` 정류 토픽 사용)
 - 라이다 좌표 규약: `laser_link`의 0도 방향(주차 라이다 스텝의 각도 조건), 콘의 실제 크기(`cone_radius`, `max_width`)
 - 후진 시 `limo_base`의 조향 부호(콘 후진, 주차), `ultralytics`가 Jetson `dl_env`에서 동작하는지

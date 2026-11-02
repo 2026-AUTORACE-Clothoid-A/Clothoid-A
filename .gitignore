@@ -22,3 +22,6 @@ bag*/
 *.engine
 *.onnx
 *.pt
+
+# Local-only reference files (not shared)
+local_archive/

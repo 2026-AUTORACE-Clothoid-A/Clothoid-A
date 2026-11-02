@@ -9,6 +9,7 @@ ros2_ws/src/
   clothoid_interfaces/   shared messages (Detection, DetectionArray)
   clothoid_common/       small shared helpers (image conversion)
   clothoid_bringup/      bring-up launch, topics.yaml, twist_mux.yaml
+  limo_base/             patched copy of the factory base driver (see its README.md)
   clothoid_lane/         lane following, floor-mark slow zone, stop line (OpenCV)
   clothoid_yolo/         YOLO inference -> /detections
   clothoid_lidar/        obstacle extraction, rubber cone course

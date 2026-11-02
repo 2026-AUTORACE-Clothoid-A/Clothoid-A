@@ -6,10 +6,11 @@ Change it only by agreement; topic names live in `ros2_ws/src/clothoid_bringup/c
 ## Sensors (from the LIMO)
 | Topic | Type | Notes |
 |---|---|---|
-| `/camera/color/image_raw` | `sensor_msgs/Image` | 640x480, `frame_id: camera_color_optical_frame`. ~12 Hz measured with all streams on (USB2.0); bringup enables color only |
+| `/camera/color/image_raw` | `sensor_msgs/Image` | 640x480, `rgb8`, `frame_id: camera_color_optical_frame`. Rate depends on light, measured on limo2 on 2026-11-02: 29.3 Hz in a lit room with all streams on; in the dark 12.3 Hz alone, 12.4 Hz with all streams, 10.9 Hz with all mission nodes. Bringup enables color only |
 | `/scan` | `sensor_msgs/LaserScan` | YDLidar Tmini Plus, 10 Hz, ±110°, ~410 points per turn, frame `laser_link` |
-| `/odom` | `nav_msgs/Odometry` | from `limo_base` (needs the LIMO body powered) |
-| `/imu` | `sensor_msgs/Imu` | from `limo_base` |
+| `/odom` | `nav_msgs/Odometry` | from our `limo_base` (needs the LIMO body and motor battery connected). 50 Hz measured in Ackermann mode, frames `odom` → `base_link`. The factory `limo_base` publishes none in that mode |
+| `/imu` | `sensor_msgs/Imu` | from the base driver. 100 Hz measured, frame `imu_link`. Yaw and gyro respond to the chassis being turned by hand; 90° accuracy and sign not confirmed (see `PACKAGES.md`) |
+| `/limo_status` | `limo_msgs/LimoStatus` | from the base driver. 2 Hz measured; `motion_mode`: 0 four-wheel differential, 1 Ackermann, 2 mecanum |
 
 TF: `base_link → laser_link` is (0.103, 0, -0.034) with no rotation (URDF).
 `base_link → camera_link` comes from `clothoid_bringup` (`camera_pitch` argument, measure the real mounting).
@@ -50,21 +51,23 @@ Every node publishes `geometry_msgs/Twist` to **its own** `twist_mux` input, nev
 | `/cmd_vel_avoid` | 80 | `clothoid_lidar` `cone_follower`; static obstacle avoidance goes here too |
 | `/cmd_vel_lane` | 10 | `lane_main` |
 
-`twist_mux` writes the winner to `/cmd_vel`, which `limo_base` reads. Priorities and timeouts:
+`twist_mux` writes the winner to `/cmd_vel`, which `limo_base` reads. `twist_mux` goes silent when all its inputs time
+out, and `limo_base` then sends a stop after 0.5 s. Priorities and timeouts:
 `ros2_ws/src/clothoid_bringup/config/twist_mux.yaml`. Add a new input there, not in your node.
 
 Steering: compute a steering angle δ (rad, positive = left) and send
-`linear.x = v`, `angular.z = v * tan(δ) / 0.2` (wheelbase 0.2 m). In Ackermann mode `limo_base`
-turns this back into a steering angle and clamps it at 28°.
+`linear.x = v`, `angular.z = v * tan(δ) / 0.2` (wheelbase 0.2 m). `limo_base` turns this into a steering value with the
+official scale (inner wheel angle / 2.47, cut at 28°, value 0.197). With `linear.x = 0` the steering centres. Real wheel
+angles still need measuring, see Open points.
 
 ## Open points
-- In Ackermann mode `limo_base` computes `r = linear.x / angular.z`. A `Twist(0, 0)` gives NaN there.
-  Check what the car does when you publish a zero command.
-- Check that the car stops when `/cmd_vel` stops arriving (all inputs timed out). If it keeps rolling,
-  add a zero-velocity heartbeat.
+- **Base driver:** bringup runs our copy of `limo_base` (`ros2_ws/src/limo_base`, changes in its `README.md`), which replaces the one in `~/wego_ws` once this workspace is sourced. It adds Ackermann `/odom`, a stop on silence and a NaN guard. The steering scale and limit are the official values (2.47, 28°), as launch arguments `steering_scale` and `max_inner_angle`.
+  - **Steering scale to measure by driving:** at the official limit (body value 0.197) the inner wheel looked like about 15° on limo2, not 28°, which would make the radius about 0.83 m instead of the official 0.46 m. The lane centre needs about 0.875 m (R600/R650 in the rules are the inner and outer lines, with centres about 0.7 m apart in the drawing), so either value can take the curve, but 0.83 m leaves about 0.05 m. Those angles were read by eye with the car lifted, so the official values stay until a circle on the floor is measured. WeGo's unused `limo_ackerman_base` uses δ / 1.215, a candidate to try (tried once with the wheels in the air: straight distance within 2% of the body's wheel count, requests cut at 0.33).
+  - Still open: `/odom` yaw is computed from the steering value, so it inherits that scale; check it against real rotation.
+- **Stop:** `limo_base` sends a stop after `cmd_timeout` (0.5 s) without `/cmd_vel`. Measured with the wheels in the air at 0.1 m/s: stop frame at 0.44 s, steering centred at 0.47 s, wheels under 0.01 m/s at 0.55 s. With no frames at all, as when the driver dies, the body stopped the wheels by itself at 0.57 s but **kept the steering where it was**.
 - **Reversing:** `cone_follower` and `clothoid_parking` send a negative `linear.x` with
-  `angular.z = v * tan(δ) / 0.2`. Whether `limo_base` steers the right way while reversing in
-  Ackermann mode is not verified; test it with the wheels off the ground first.
+  `angular.z = v * tan(δ) / 0.2`. δ > 0 gives the same steering sign forward and in reverse.
+  A positive value was seen turning the front wheels left, a negative one right, at zero speed.
 - **Lidar angle convention:** `clothoid_parking` compares the closest point's angle in the scan frame
   (2025 used `-2.0 rad`, which the ±110° Tmini Plus can never reach). Check which way the lidar's
   zero angle points before retuning `angle_limit`.

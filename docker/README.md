@@ -3,7 +3,7 @@
 For writing and testing code on a laptop. The LIMO (Jetson) does **not** use this image: it runs
 the repo natively, see `scripts/env_jetson.sh`.
 
-The hardware packages (`limo_base`, `orbbec_camera`, `ydlidar_ros2_driver`) are not in this image, so
+The hardware packages (`limo_msgs`, `orbbec_camera`, `ydlidar_ros2_driver`) are not in this image, and our `limo_base` skips itself without `limo_msgs`, so
 `clothoid_bringup` cannot start here. Use it for the mission nodes, offline tests and rosbag playback.
 
 ## Ubuntu host
