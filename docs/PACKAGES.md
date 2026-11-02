@@ -62,6 +62,9 @@
   패키지 yaml의 노드 전용 값이 launch 인자보다 우선하는 것으로 보인다. 그래서 `clothoid_yolo` README 방식으로 실행해도
   오류 없이 `backend: none`으로 돌아 빈 결과만 나온다. 고칠 때까지는 yaml을 직접 고치거나,
   디버그는 `ros2 param set /lane_main debug true`를 쓴다(이 방법은 동작 확인함).
+  - 이 관찰은 limo2(Jetson, Ubuntu 22.04, Humble)에서 나온 것이다. 코드를 읽어 보면 `lane.launch.py`와 `yolo.launch.py` 모두 launch 인자
+    딕셔너리를 `parameters` 목록의 **맨 뒤**에 두므로 뒤의 값이 이겨야 하고, 그래서 원인은 확정하지 못했다. Windows PC에는 ROS가 없어
+    직접 재현해 본 적이 없다. **22.04 + Humble에서 재현해 확인해야 한다**(아래 "아직 확인하지 못한 것" 참고).
 - **`twist_mux` 설치(limo2 완료, limo1 미설치):** `ros-humble-twist-mux`와 함께 `ros-humble-diagnostic-updater`를 4.0.7로 올려야 한다. 4.0.6에는 `libdiagnostic_updater.so`가 없는데 패키지 의존성에 버전이 없어 apt가 올려 주지 않고, 실행할 때 라이브러리 오류가 난다. 2026-11-02 limo2에서 우리 `twist_mux.yaml`로 입력 5개의 우선순위를 드라이버 없이 확인했고, 입력이 모두 끊기면 `/cmd_vel`이 나오지 않는다.
 - **`scripts/env_jetson.sh`의 기본 경로:** `~/Clothoid-A/ros2_ws`를 가정한다. 다른 경로에 clone했으면
   `CLOTHOID_WS`를 지정해야 워크스페이스가 source된다. limo2는 `~/2026-autorace`에 있으므로 다음과 같이 실행한다.
@@ -73,6 +76,7 @@
 - **로봇별 반영 상태(2026-11-02):**
   - limo2: 커밋 `c2ed19a`를 번들로 받아 `limo_base`만 빌드했다. 명령 없이 띄워 `/odom` 49.9Hz, `motion_mode` 1을 확인했다. 전체 bringup은 같은 코드를 임시 폴더에서 빌드해 시험했고, 저장소 빌드로는 아직 띄우지 않았다. GitHub 인증이 없어 `git pull`은 안 되고 번들로 받는다.
   - limo1: 반영하지 않았다. 저장소, `twist_mux`, 수정 드라이버가 없고 차동 모드다.
+  - 호차 번호: 대회 차량은 7호차와 8호차이고, 팀이 push/pull로 공유하는 현재 코드는 **7호차 기준**이다. 이 문서의 limo1, limo2가 몇 호차인지는 적혀 있지 않으므로 확인해서 여기에 적는다.
 - **카메라 로그:** 시작할 때마다 `Failed to setup devices`가 나오지만 영상은 정상 발행된다. 원인은 미확인.
 
 **아직 확인하지 못한 것**
@@ -90,6 +94,11 @@
 - 남은 차체 시험: 실제 주행.
 - limo1: 2026-11-02 저녁부터 네트워크에 있음(`192.168.1.82`). 본체 신호 정상, 오류 0, `motion_mode` 0(차동), 배터리 10.9V로 limo2(11.7V)보다 낮다. 저장소와 `twist_mux`가 없고 `diagnostic_updater`는 4.0.6이다. 구동, 센서, 조향은 시험하지 않았다.
 - `motion_mode` 순간 변화: limo2가 애커만 모드인데 2026-11-02 21:22:00에 `/limo_status`가 0을 한 번 보고했다. 이후 전체 bringup 5분 동안 599회 모두 1이어서 재발은 없었고, 원인은 미확인. `limo_base`는 보고된 모드로 명령을 보내므로 주행 중 발생하면 그동안 차동 명령이 나가고 조향이 0이 된다.
+  - **제안(미적용):** `parseFrame`의 `MSG_SYSTEM_STATE_ID` 처리에서 `motion_mode_`를 프레임 하나로 바로 바꾸지 말고, 같은 값이 연속 2회 이상(`/limo_status` 2Hz 기준 약 1초) 보고될 때만 바꾼다. 처음 한 번은 모드가 정해지기 전이므로 즉시 받아들인다(시작 때 최대 0.5초 대기를 피함). 모드는 앞쪽 핀을 뽑는 물리 전환이라 주행 중에 실제로 바뀔 일이 없어서 디바운스의 부작용이 없다. 위 현상이 재발하는지 먼저 로그로 확인하고, 재발하면 적용한다(`limo_driver.cpp`, 변경하면 패키지 `README.md`에도 기록).
+- launch 인자와 yaml의 우선순위(22.04 + Humble에서 재현 필요): `ros2 launch clothoid_lane lane.launch.py debug:=true` 실행 후
+  `ros2 param get /lane_main debug`가 `True`인지, `ros2 launch clothoid_yolo yolo.launch.py backend:=ultralytics` 실행 후
+  `ros2 param get /yolo backend`가 `ultralytics`인지 본다. 안 바뀌면 `ros2 node info`와 `ros2 param dump`로 어느 값이 남는지 확인한다.
+  확실한 해결책은 launch가 정하는 키(`debug`, `backend`, `model_path`)를 각 yaml에서 지우는 것이다(노드 기본값은 `debug: false`, `backend: none`).
 - `clothoid_parking`: 노드 기동만 확인. 시작선과 스텝 시퀀스는 `pytest`로만 확인.
 - `clothoid_lidar`: 장애물 추출만 실제 라이다로 확인. 콘 코스는 `pytest`로만 확인.
 - Docker 개발 이미지 빌드.
@@ -120,6 +129,13 @@
   비용 함수를 가져와 확장한다.
 - `cone_follower`: 중심선(Delaunay → MST → 최소제곱 → 스플라인)과 pure pursuit은 2025 그대로.
   경계가 한쪽만 보이면 후진(2025 동작). 후진 시 조향 부호는 실차 확인 전.
+- 튜닝 필요(실차 값으로만 정할 수 있다. 시험 순서는 `docs/FIELD_TEST.md`):
+  - `lfd`(0.3, 목표점까지 거리): 2025 값 그대로다. 작으면 콘을 바짝 따르지만 흔들리고, 크면 부드럽지만 코너를 안쪽으로 지른다.
+    LIMO의 `wheelbase`(0.2)로 조향 이득이 2025와 달라졌으므로 2025에서 맞춘 감각이 그대로 맞지 않는다.
+  - `reverse_steer_deg`(21°): **한쪽 경계만 보여 중심선을 못 만들 때 후진하며 꺾는 각도**다(라바콘 진입·탈출에서 회전각이 안 나올 때).
+    평소 전진 조향은 이 값으로 자르지 않는다(자르는 곳은 `limo_base`의 28°). 최소 회전 반경 실측과 조향 스케일(`steering_scale`) 실측이
+    끝난 뒤에 조정한다. 실제 바퀴가 요청의 절반만 꺾이면 21°는 바퀴로 훨씬 작은 각이다.
+  - `rear_axle_x`(0.1): URDF 값(`base_link`가 차축 사이 중앙)이고 줄자로 잰 값이 아니다.
 - 할 일: 정적 장애물 회피(3차선 차선 변경) 신규 — `/lidar/obstacles`와 `/cmd_vel_avoid`를 쓰면 된다.
   라바콘 속도·간격 재튜닝, 2025에서 속도를 줄여 탈출각을 만들던 부분(`speed`, `reverse_speed`) 재확인.
 

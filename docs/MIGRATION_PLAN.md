@@ -309,7 +309,7 @@
 | A4 | 라이다 `laser_link`를 TF로 `base_link`에 옮기는데, TF가 없으면 `obstacle_extractor`가 스캔을 버린다(경고만). 콘 코스·장애물 회피가 **조용히 멈춤** | [코드] | `clothoid_lidar` 전체 | `ros2 run tf2_ros tf2_echo base_link laser_link`(URDF: 0.103, 0, -0.034) |
 | A5 | URDF는 라이다 회전 0을 가정. 실제 장착 방향이 다르면 콘의 좌우·전후가 뒤집힌다 | [미확인] | `obstacle_extractor`, 주차 라이다 스텝 | 앞에 물체를 두고 `/lidar/obstacles`의 x가 양수인지 확인 |
 | A6 | TF 부모 중복: URDF(robot_state_publisher), 우리 정적 TF, 옵션 EKF, `limo_base`가 같은 프레임을 둘 이상 발행하면 TF가 깜빡이거나 거부된다. 특히 `odom → base_link`를 EKF와 `limo_base`가 둘 다 낼 수 있다 | [미확인] | `use_ekf:=true`일 때 | `ros2 run tf2_tools view_frames`로 프레임마다 부모가 하나인지 확인. EKF는 필요할 때만 켠다 |
-| A7 | `base_link` 원점이 뒷차축인지 알 수 없다. pure pursuit의 `vehicle_length: 0.25`는 2025 차 기준이라 조향 이득이 틀어진다. 규정의 정지 판정 기준점은 **앞바퀴**라 `base_link`·카메라와 오프셋이 있다 | [코드]/[미확인] | `cone_follower`, ±5 cm 정지 | URDF에서 `base_link` 위치와 앞바퀴 위치를 확인하고 오프셋을 파라미터화 |
+| A7 | URDF 확인 결과 `base_link`는 차축 사이 중앙이고 뒷차축은 −0.1 m, 앞차축은 +0.1 m다(바퀴 `x = ±wheelbase/2`). pure pursuit의 2025 `vehicle_length: 0.25`는 뒷차축 오프셋과 휠베이스 두 역할을 하던 2025 차 값이라 `wheelbase: 0.2`와 `rear_axle_x: 0.1`로 나눴다(`cone_follower`). 단위 테스트만 했고 실차 주행은 안 했다. 규정의 정지 판정 기준점은 **앞바퀴**라 `base_link`(+0.1 m)·카메라와 오프셋이 있다 | [코드]/[미확인] | `cone_follower`, ±5 cm 정지 | 정지 판정 기준점 오프셋을 파라미터화(`mission`), 라바콘 주행에서 조향 이득 확인 |
 | A8 | 시계: Jetson과 노트북 시계가 어긋나면 rviz에서 TF 외삽 오류. 대회장에 인터넷이 없으면 시계가 틀어진다. 우리 노드는 수신 시각을 써서 영향이 작지만 rosbag 재생·rviz는 영향 | [코드] | 개발·디버깅 | bag 재생은 `use_sim_time`, 노트북 rviz는 시계 동기화 확인 |
 | A9 | `limo_base`가 `/limo` 네임스페이스로 뜬다. 토픽·프레임 이름에 접두어가 붙는지 확인되지 않았다 | [실측]/[미확인] | `topics.yaml` | `ros2 topic list`와 `view_frames`의 이름을 `topics.yaml`·`lidar.yaml`과 대조 |
 

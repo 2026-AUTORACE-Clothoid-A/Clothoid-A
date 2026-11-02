@@ -35,11 +35,11 @@ class ConeFollowerNode(Node):
         self.declare_parameter('centerline_topic', '/cone/centerline')
 
         d = FollowerParams()
-        self.declare_parameter('wheelbase', 0.2)
+        self.declare_parameter('wheelbase', d.wheelbase)
+        self.declare_parameter('rear_axle_x', d.rear_axle_x)
         self.declare_parameter('speed', d.speed)
         self.declare_parameter('reverse_speed', d.reverse_speed)
-        self.declare_parameter('max_steer_deg', d.max_steer_deg)
-        self.declare_parameter('vehicle_length', d.vehicle_length)
+        self.declare_parameter('reverse_steer_deg', d.reverse_steer_deg)
         self.declare_parameter('lfd', d.lfd)
         self.declare_parameter('centerline_ds', d.centerline_ds)
         self.declare_parameter('lsq_window_size', d.lsq_window_size)
@@ -67,8 +67,8 @@ class ConeFollowerNode(Node):
     def _build(value) -> FollowerParams:
         return FollowerParams(
             speed=value('speed'), reverse_speed=value('reverse_speed'),
-            max_steer_deg=value('max_steer_deg'), vehicle_length=value('vehicle_length'),
-            lfd=value('lfd'), centerline_ds=value('centerline_ds'),
+            reverse_steer_deg=value('reverse_steer_deg'), wheelbase=value('wheelbase'),
+            rear_axle_x=value('rear_axle_x'), lfd=value('lfd'), centerline_ds=value('centerline_ds'),
             lsq_window_size=value('lsq_window_size'), boundary_timeout=value('boundary_timeout'))
 
     def on_parameters(self, params):
@@ -120,7 +120,7 @@ class ConeFollowerNode(Node):
         cmd = Twist()
         cmd.linear.x = float(result.speed)
         cmd.angular.z = float(
-            result.speed * math.tan(result.steering) / self.get_parameter('wheelbase').value)
+            result.speed * math.tan(result.steering) / self.follower.p.wheelbase)
         self.cmd_pub.publish(cmd)
 
         if len(result.center):

@@ -155,6 +155,26 @@ def test_left_curve_steers_left_and_right_curve_steers_right():
     assert compute_steering(build_center_line(left, right, params), params) < -0.05
 
 
+def test_pure_pursuit_uses_rear_axle_offset_and_wheelbase_separately():
+    # straight diagonal line; the look-ahead (0.3 m of path) lands on (0.3, 0.15)
+    center = np.array([[0.1 * i, 0.05 * i] for i in range(8)])
+    target = np.array([0.3, 0.15])
+
+    def expected(rear_axle_x, wheelbase, lfd=0.3):
+        theta = np.arctan2(target[1], target[0] + rear_axle_x)
+        return np.arctan2(2.0 * wheelbase * np.sin(theta), lfd)
+
+    base = FollowerParams(rear_axle_x=0.1, wheelbase=0.2)
+    assert compute_steering(center, base) == pytest.approx(expected(0.1, 0.2))
+    # each parameter moves the result on its own
+    assert compute_steering(center, FollowerParams(rear_axle_x=0.25, wheelbase=0.2)) \
+        == pytest.approx(expected(0.25, 0.2))
+    assert compute_steering(center, FollowerParams(rear_axle_x=0.1, wheelbase=0.25)) \
+        == pytest.approx(expected(0.1, 0.25))
+    assert expected(0.1, 0.2) != pytest.approx(expected(0.25, 0.2))
+    assert expected(0.1, 0.2) != pytest.approx(expected(0.1, 0.25))
+
+
 def test_decide_drives_when_both_boundaries_are_fresh():
     left, right = gate([0.3, 0.65, 1.0, 1.35, 1.7])
     result = ConeFollower(FollowerParams(speed=0.3)).decide(left, right, True, True)
@@ -165,7 +185,7 @@ def test_decide_drives_when_both_boundaries_are_fresh():
 
 def test_decide_reverses_with_full_lock_when_one_boundary_is_missing():
     left, right = gate([0.3, 0.65, 1.0])
-    follower = ConeFollower(FollowerParams(reverse_speed=-0.2, max_steer_deg=21.0))
+    follower = ConeFollower(FollowerParams(reverse_speed=-0.2, reverse_steer_deg=21.0))
     only_right = follower.decide(left, right, False, True)
     only_left = follower.decide(left, right, True, False)
     assert only_right.reverse and only_right.speed == -0.2

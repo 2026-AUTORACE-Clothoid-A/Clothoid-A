@@ -24,8 +24,13 @@ except ImportError:  # scipy < 1.8 (older JetPack / apt images)
 class FollowerParams:
     speed: float = 0.3            # m/s (2025 launch value, node default was 0.4)
     reverse_speed: float = -0.2   # m/s, used when only one boundary is visible
-    max_steer_deg: float = 21.0   # 2025 value (LIMO hardware limit is 28 deg inner wheel)
-    vehicle_length: float = 0.25  # m, pure pursuit rear axle offset (2025 value)
+    # deg, steering while backing off when only one boundary is visible (2025 `max_steer_deg`, 21).
+    # Forward pure pursuit is not cut by this; the LIMO hardware limit is 28 deg inner wheel.
+    reverse_steer_deg: float = 21.0
+    # The 2025 car had one `vehicle_length` (0.25) for both of these. On the LIMO they differ:
+    # base_link sits midway between the axles (URDF wheels at x = +-wheelbase/2).
+    wheelbase: float = 0.2        # m, front to rear axle (steering gain of pure pursuit)
+    rear_axle_x: float = 0.1      # m, rear axle behind base_link (origin of the look-ahead angle)
     lfd: float = 0.3              # m, look-ahead distance
     centerline_ds: float = 0.05   # m, resampling step
     lsq_window_size: int = 9      # odd, >= 5
@@ -182,8 +187,8 @@ def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
         else:
             return 0.0
 
-    theta = np.arctan2(target[1], target[0] + params.vehicle_length)
-    return float(np.arctan2(2.0 * params.vehicle_length * np.sin(theta), params.lfd))
+    theta = np.arctan2(target[1], target[0] + params.rear_axle_x)
+    return float(np.arctan2(2.0 * params.wheelbase * np.sin(theta), params.lfd))
 
 
 class ConeFollower:
@@ -194,14 +199,14 @@ class ConeFollower:
                left_fresh: bool, right_fresh: bool) -> Optional[FollowResult]:
         """None means "publish nothing" (no fresh boundary, or no centre line)."""
         p = self.p
-        max_steer = np.deg2rad(p.max_steer_deg)
+        reverse_steer = np.deg2rad(p.reverse_steer_deg)
         if not left_fresh and not right_fresh:
             return None
         # one boundary only: back off with full lock away from the visible side (2025)
         if not left_fresh:
-            return FollowResult(p.reverse_speed, -max_steer, reverse=True)
+            return FollowResult(p.reverse_speed, -reverse_steer, reverse=True)
         if not right_fresh:
-            return FollowResult(p.reverse_speed, +max_steer, reverse=True)
+            return FollowResult(p.reverse_speed, +reverse_steer, reverse=True)
 
         center = build_center_line(left, right, p)
         if len(center) == 0:

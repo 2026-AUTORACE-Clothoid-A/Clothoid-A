@@ -42,10 +42,10 @@ cone_follower:
   ros__parameters:
     speed: 0.3               # 2025 launch value
     reverse_speed: -0.2
-    max_steer_deg: 21.0
-    vehicle_length: 0.25
+    reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
+    wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
+    rear_axle_x: 0.1         # rear axle behind base_link (base_link is midway between the axles)
     lfd: 0.3
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
-    wheelbase: 0.2
