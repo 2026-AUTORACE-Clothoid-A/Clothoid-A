@@ -51,7 +51,9 @@ ros2 bag record -o ~/bags/run1 /camera/color/image_raw /camera/color/camera_info
 
 ## 4. 조향 스케일과 최소 회전 반경
 
-공식 값은 안쪽 바퀴 28°(조향값 0.197, 반경 약 0.46 m)인데 바퀴를 띄우고 눈으로 보니 0.197에서 약 15°(반경 약 0.83 m)였다. 눈대중이다.
+공식 값은 안쪽 바퀴 28°(조향값 0.197, 후축 중심 반경 약 0.46 m)다. 바퀴를 띄우고 눈으로 보니 0.197에서 약 15°였지만 눈대중이다.
+
+**측정 (2026-11-03, 조종기 RC):** 후축 중심(`base_link` 기준 축) 최소 회전 **지름 82.5~83 cm → 반경 약 0.41 m**. 공식 0.46 m보다 약 10% 작고, 규정 트랙에 필요한 0.875 m에는 충분하다. RC는 `/cmd_vel`과 `limo_base`의 스케일을 거치지 않으므로 이것은 **차체의 최대 조향 능력**이다. 아래 `/cmd_vel` 경로의 `steering_scale`, 28° 제한이 실제로 이 반경까지 나오는지는 아직 확인 전이다. 보낸 `angular.z`·`linear.x`, 좌우 차이는 기록하지 않았다.
 
 - `limo_base`만 따로 띄우고(`ros2 launch limo_base limo_base.launch.py steering_scale:=… max_inner_angle:=…`) `/cmd_vel`을 직접 보낸다.
   `bringup`은 `limo_base`에 인자를 넘기지 않는다.
