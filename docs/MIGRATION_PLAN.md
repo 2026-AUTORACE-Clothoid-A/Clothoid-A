@@ -218,7 +218,7 @@
 - [x] **확인:** 팀원 1명이 처음부터 pull해서 같은 결과가 나옴(2026-11-03, pull로 받은 클론에서 위 결과 재현)
 - [ ] 이미지를 레지스트리에 푸시(태그 `humble-v0`)
 - [x] `scripts/env_jetson.sh`
-- [ ] `scripts/setup_jetson.sh`, `requirements-jetson.txt`(Jetson에 `ros-humble-twist-mux` 설치와 `ros-humble-diagnostic-updater` 4.0.7 업그레이드 포함, 이전 버전에는 `twist_mux`가 찾는 라이브러리가 없다). limo2는 2026-11-02 손으로 설치함, limo1은 미설치
+- [x] `scripts/setup_jetson.sh`, `requirements-jetson.txt` 작성(2026-11-03, Jetson 실행 전). 내용: (Jetson에 `ros-humble-twist-mux` 설치와 `ros-humble-diagnostic-updater` 4.0.7 업그레이드 포함, 이전 버전에는 `twist_mux`가 찾는 라이브러리가 없다). limo2는 2026-11-02 손으로 설치함, limo1은 미설치
 
 ### 기반 패키지 (`ros2_ws/src`)
 - [x] `clothoid_interfaces`: `Detection`, `DetectionArray`

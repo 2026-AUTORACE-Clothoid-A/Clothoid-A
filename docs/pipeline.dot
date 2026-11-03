@@ -1,0 +1,65 @@
+// Sensor and package pipeline. Render: dot -Tpng -Gdpi=160 docs/pipeline.dot -o docs/pipeline.png
+digraph pipeline {
+  rankdir=LR;
+  graph [fontname="Helvetica", fontsize=12, nodesep=0.35, ranksep=0.9, newrank=true, splines=true, pad=0.3, labelloc=t];
+  node  [fontname="Helvetica", fontsize=11, shape=box, style="rounded,filled", fillcolor="#ffffff", color="#555555"];
+  edge  [fontname="Helvetica", fontsize=9, color="#777777"];
+  label="Clothoid-A (LIMO, ROS2 Humble) - sensor / package / cmd_vel pipeline";
+
+  subgraph cluster_sensors {
+    label="Sensors (clothoid_bringup)"; style="rounded,filled"; fillcolor="#eef3fb"; color="#9db4d8";
+    cam   [label="Orbbec DaBai DC1\n/camera/color/image_raw\n640x480 rgb8, 12~29 Hz"];
+    lidar [label="YDLidar Tmini Plus\n/scan  10 Hz, +-110 deg"];
+    
+  }
+
+  subgraph cluster_percep {
+    label="Perception"; style="rounded,filled"; fillcolor="#eef8ee"; color="#9fcf9f";
+    yolo  [label="clothoid_yolo\nsigns + traffic lights"];
+    lane  [label="clothoid_lane\nlane_main"];
+    zone  [label="clothoid_lane\nspeed_zone (floor mark)"];
+    stop  [label="clothoid_lane\nstopline"];
+    ext   [label="clothoid_lidar\nobstacle_extractor"];
+    sort  [label="clothoid_lidar\ncone_sorter"];
+  }
+
+  subgraph cluster_mission {
+    label="Decision / behaviour"; style="rounded,filled"; fillcolor="#fdf6e8"; color="#e0c47a";
+    mission [label="clothoid_mission\n(reactive: slow, stop-wait-go,\nfork, parking trigger)"];
+    cone    [label="clothoid_lidar\ncone_follower"];
+    park    [label="clothoid_parking\nstep table"];
+    avoid   [label="static obstacle avoidance\n(TODO, new node)", style="rounded,dashed,filled", fillcolor="#fff0f0", color="#cc6666"];
+  }
+
+  mux  [label="twist_mux\npriority + timeout", shape=box, style="filled", fillcolor="#ffe3e3", color="#cc4444", penwidth=1.6];
+  base [label="limo_base (our copy) -> LIMO body\nstops after 0.5 s of silence\npublishes /odom 50 Hz, /imu, /limo_status", fillcolor="#eef3fb"];
+
+  // sensors -> perception
+  cam -> yolo; cam -> lane; cam -> zone; cam -> stop; cam -> park;
+  lidar -> ext; lidar -> park;
+  ext -> sort [label="/lidar/obstacles"];
+  ext -> avoid [style=dashed, label="/lidar/obstacles"];
+
+  // perception -> decision
+  yolo -> mission [label="/detections"];
+  stop -> mission [label="/stopline_detected"];
+  sort -> cone [label="/cone/*_boundary\n/cone/mission_active"];
+  park -> mission [label="/parking_done"];
+
+  // mission signals
+  mission -> lane [label="/direction_flag, /parking_flag,\n/speed_limit (slow sign)", constraint=false];
+  zone -> lane [label="/speed_limit"];
+  mission -> zone [style=invis];
+  mission -> park [label="/parking_flag"];
+
+  // cmd_vel inputs
+  lane    -> mux [label="cmd_vel_lane  (10)", color="#2a7f2a", fontcolor="#2a7f2a"];
+  cone    -> mux [label="cmd_vel_avoid  (80)", color="#2a7f2a", fontcolor="#2a7f2a"];
+  avoid   -> mux [label="cmd_vel_avoid  (80)", style=dashed, color="#cc6666", fontcolor="#cc6666"];
+  park    -> mux [label="cmd_vel_parking  (90)", color="#2a7f2a", fontcolor="#2a7f2a"];
+  mission -> mux [label="cmd_vel_state  (100)\nzero Twist while stopped", color="#2a7f2a", fontcolor="#2a7f2a"];
+  tele [label="joystick / keyboard", style="rounded,dashed,filled", fillcolor="#f5f5f5"];
+  tele -> mux [label="cmd_vel_teleop  (200)", color="#2a7f2a", fontcolor="#2a7f2a"];
+
+  mux -> base [label="/cmd_vel", penwidth=1.8, color="#cc4444", fontcolor="#cc4444"];
+}
