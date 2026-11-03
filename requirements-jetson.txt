@@ -1,0 +1,6 @@
+# pip packages for the conda env `dl_env` on the Jetson (YOLO node only).
+# torch / torchvision are NOT listed: they must be the JetPack 6 builds already in dl_env, a plain
+# `pip install torch` would replace them with a CPU or wrong-arch build.
+#   source scripts/env_jetson.sh dl_env
+#   pip install -r requirements-jetson.txt
+ultralytics
