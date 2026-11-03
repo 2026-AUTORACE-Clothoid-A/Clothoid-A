@@ -16,4 +16,4 @@ stopline:
     min_wide_w: 80
     min_count: 4
     min_white_ratio: 10.0
-    debug: false         # true publishes /stopline/debug_image
+    # debug (default false) is set by the launch argument `debug:=true`: true publishes /stopline/debug_image

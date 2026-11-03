@@ -74,8 +74,8 @@ ros2 bag record -o ~/bags/run1 /camera/color/image_raw /camera/color/camera_info
 
 ## 6. 차선 인식
 
-- `ros2 launch clothoid_lane lane.launch.py debug:=true`. `debug:=true`가 안 먹는 문제가 있어(`PACKAGES.md` 참고) 안 되면
-  `ros2 param set /lane_main debug true`를 쓴다.
+- `ros2 launch clothoid_lane lane.launch.py debug:=true`. `debug:=true`는 2026-11-03에 고쳤지만 Jetson에서는
+  아직 확인하지 않았다(`PACKAGES.md` 참고). 안 되면 `ros2 param set /lane_main debug true`를 쓴다.
 - 바닥 마크 색(서행 구간), 정지선, 차선이 실제 트랙에서 잡히는지, `/lane/debug_image`로 확인한다.
 - 조명이 어두우면 프레임 간격이 최대 0.16 s까지 늘어 `twist_mux`의 lane 타임아웃(0.3 s)에 가까워진다.
 

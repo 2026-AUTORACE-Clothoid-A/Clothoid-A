@@ -20,4 +20,4 @@ lane_main:
     canny_low: 50
     canny_high: 100
 
-    debug: false               # true publishes /lane/debug_image
+    # debug (default false) is set by the launch argument `debug:=true`: true publishes /lane/debug_image

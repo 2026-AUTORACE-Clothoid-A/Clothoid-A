@@ -238,7 +238,7 @@
 - [x] `clothoid_lane`: ROS-free `lane_detector.py` + `lane_main.py` 노드 + `lane.yaml` + launch
 - [x] 합성 이미지 `pytest` 통과(이 PC에서 실행, `clothoid_lane` 전체 21개)
 - [x] **확인:** `colcon build`와 노드 기동(rclpy), 합성 이미지로 `/cmd_vel`까지 흐름 확인
-- [ ] **확인:** 실제 차선 영상에서 `/lane/debug_image`로 결과 확인(2026-11-02 영상이 거의 검은색이었음). `debug:=true`가 전달되지 않는 버그가 있어 지금은 `ros2 param set /lane_main debug true`로 켠다
+- [ ] **확인:** 실제 차선 영상에서 `/lane/debug_image`로 결과 확인(2026-11-02 영상이 거의 검은색이었음). `debug:=true`는 2026-11-03에 고쳤다(Docker에서 확인, Jetson 재확인 전)
 
 ### 미션 패키지 뼈대와 2025 이식 (구조 결정: 담당자별 패키지, 2-3절)
 - [x] `clothoid_common`(이미지 변환), `clothoid_lane`에 `speed_zone`(red_road)·`stopline`(crosswalk) 추가
@@ -249,7 +249,7 @@
 - [x] 로직 `pytest` 73개 통과(lane 21, lidar 19, parking 14, yolo 7, mission 12), 노드 파라미터와 yaml 타입 점검(스텁)
 - [x] **확인:** `colcon build` 전체 통과(특히 `clothoid_interfaces` 메시지를 쓰는 yolo/mission). 테스트 78개 통과(Docker에서는 79개)
 - [x] **확인:** 노드별 기동과 launch (rclpy 첫 실행), `clothoid_common` 이미지 테스트
-- [ ] launch 인자(`debug`, `backend`, `model_path`)가 패키지 yaml 값에 밀려 노드에 전달되지 않는 버그 수정
+- [x] launch 인자(`debug`, `backend`, `model_path`)가 패키지 yaml 값에 밀려 노드에 전달되지 않는 버그 수정(2026-11-03, 해당 키를 yaml에서 삭제, Docker에서 확인. Jetson 재확인 전)
 - [ ] **확인:** 바닥 마크·정지선·콘이 실제 카메라/라이다에서 잡히는지(2025 값 그대로라 튜닝 필수)
 - [ ] 각 담당자에게 `docs/PACKAGES.md`의 "할 일"을 배분
 - [ ] Jetson에서 실제 카메라로 HSV, warp, `lane_width` 재튜닝(지금 값은 2025 그대로)

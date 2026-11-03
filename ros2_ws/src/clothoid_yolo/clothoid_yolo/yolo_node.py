@@ -21,7 +21,7 @@ class YoloNode(Node):
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('detections_topic', '/detections')
         self.declare_parameter('debug_image_topic', '/yolo/debug_image')
-        self.declare_parameter('backend', 'ultralytics')   # ultralytics | none
+        self.declare_parameter('backend', 'none')   # ultralytics | none
         self.declare_parameter('model_path', '')           # .pt / .onnx / .engine
         self.declare_parameter('imgsz', 640)
         self.declare_parameter('device', '')               # '' = auto, 'cuda:0', 'cpu'

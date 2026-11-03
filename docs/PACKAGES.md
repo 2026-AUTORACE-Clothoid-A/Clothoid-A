@@ -34,7 +34,7 @@
 | `clothoid_bringup` | 주영 | 센서/드라이버 launch, `topics.yaml`, `twist_mux.yaml` | `wego/teleop_launch` 대체 | Jetson 기동 확인, limo2에 `twist_mux` 설치 완료. 새 `limo_base`로 bringup 전체는 미실행 |
 | `limo_base` | 주영 | 본체 드라이버. 공장 `limo_base` 사본을 수정(애커만 `/odom`, 조향 스케일과 한계, 입력 끊김 시 정지), 변경 내용은 패키지 `README.md` | `~/wego_ws`의 공장 패키지를 대신함 | limo2에서 `twist_mux`와 연결해 바퀴를 띄운 채 확인, 바닥 미확인 |
 | `clothoid_lane` | 차선·서행 담당 | `lane_main`, `speed_zone`, `stopline` | `lane_main`, `red_road`, `crosswalk` | 이식 완료, 노드 기동 확인, 실제 차선 미확인, 튜닝 필요 |
-| `clothoid_yolo` | YOLO 담당 | 추론 노드, 후처리 | 신규 | 뼈대(모델 없음), 노드 기동 확인, launch 인자 버그 |
+| `clothoid_yolo` | YOLO 담당 | 추론 노드, 후처리 | 신규 | 뼈대(모델 없음), 노드 기동 확인 |
 | `clothoid_lidar` | 라이다 담당 | `obstacle_extractor`, `cone_sorter`, `cone_follower` | `rubber_cone`, `obstacle_detector` 대체 | 이식, 소터는 단순화, 노드 기동 확인, 실제 콘 미확인 |
 | `clothoid_parking` | 주영 | T자 주차 스텝 표 + 시작선 | `parking_rect` | 2025 시퀀스 이식, 노드 기동 확인, 2026용 재작성 필요 |
 | `clothoid_mission` | 주영 | 정지·서행·방향·주차 신호 로직 | 신규(2025는 mux 우선순위로 처리) | 초안, 가짜 입력으로 ROS 동작 확인 |
@@ -55,16 +55,20 @@
 - `twist_mux` 우선순위와 타임아웃 복귀: 9/9 통과.
 - `clothoid_mission`에 가짜 `/detections`, `/stopline_detected` 입력: 13/13 통과(서행, 좌우 표지판, 적색·녹색, 보행자 대기 3.45초, 주차 신호).
 - `lane_main`에 합성 차선 이미지 입력: `/cmd_vel`까지 전달, 조향 부호, `/speed_limit` 적용과 만료, 차선 소실 시 발행 중단 확인.
-  디버그 이미지 1건은 아래 launch 인자 버그로 실패했다.
+  디버그 이미지 1건은 launch 인자 버그로 실패했다(2026-11-03 수정, 아래 "발견한 문제").
 
 **발견한 문제**
-- **launch 인자가 노드에 전달되지 않는다.** `debug:=true`, `backend:=`, `model_path:=`를 넘겨도 값이 바뀌지 않는다.
-  패키지 yaml의 노드 전용 값이 launch 인자보다 우선하는 것으로 보인다. 그래서 `clothoid_yolo` README 방식으로 실행해도
-  오류 없이 `backend: none`으로 돌아 빈 결과만 나온다. 고칠 때까지는 yaml을 직접 고치거나,
-  디버그는 `ros2 param set /lane_main debug true`를 쓴다(이 방법은 동작 확인함).
-  - 이 관찰은 limo2(Jetson, Ubuntu 22.04, Humble)에서 나온 것이다. 코드를 읽어 보면 `lane.launch.py`와 `yolo.launch.py` 모두 launch 인자
-    딕셔너리를 `parameters` 목록의 **맨 뒤**에 두므로 뒤의 값이 이겨야 하고, 그래서 원인은 확정하지 못했다. Windows PC에는 ROS가 없어
-    직접 재현해 본 적이 없다. **22.04 + Humble에서 재현해 확인해야 한다**(아래 "아직 확인하지 못한 것" 참고).
+- **launch 인자가 노드에 전달되지 않던 문제(2026-11-03 수정, Jetson 재확인 전).** `debug:=true`, `backend:=`, `model_path:=`를 넘겨도
+  값이 바뀌지 않았다. 원인은 패키지 yaml에 같은 키(`debug`, `backend`, `model_path`)가 적혀 있으면 launch 인자 딕셔너리가
+  `parameters` 목록의 맨 뒤에 있어도 이기지 못하는 것이다. 2026-11-03 Docker dev 이미지(Humble)에서 재현해 확인했다.
+  `parking`, `stopline`, `speed_zone`도 같은 문제였다.
+  - **수정:** 해당 키를 5개 yaml(`lane`, `speed_zone`, `stopline`, `parking`, `yolo`)에서 지웠고(주석만 남김),
+    `yolo_node.py`의 `backend` 기본값을 `ultralytics`에서 `none`으로 바꿨다(기존 기본값은 yaml이 가리고 있었다).
+    Docker에서 `debug:=true`가 4개 노드에 모두 전달되고, 인자 없이 실행하면 `False`이며, `model_path:=`가 전달되는 것을 확인했다.
+  - **주의:** 앞으로 launch 인자로 정하는 키를 yaml에 다시 적지 않는다. `yolo`에는 `debug` launch 인자가 없어
+    `ros2 param set /yolo debug true`를 쓴다.
+  - Jetson(limo2)에서는 수정 후 다시 확인하지 않았다. 같은 Ubuntu 22.04 + Humble이므로 같은 결과일 것이다.
+
 - **`twist_mux` 설치(limo2 완료, limo1 미설치):** `ros-humble-twist-mux`와 함께 `ros-humble-diagnostic-updater`를 4.0.7로 올려야 한다. 4.0.6에는 `libdiagnostic_updater.so`가 없는데 패키지 의존성에 버전이 없어 apt가 올려 주지 않고, 실행할 때 라이브러리 오류가 난다. 2026-11-02 limo2에서 우리 `twist_mux.yaml`로 입력 5개의 우선순위를 드라이버 없이 확인했고, 입력이 모두 끊기면 `/cmd_vel`이 나오지 않는다.
 - **`scripts/env_jetson.sh`의 기본 경로:** `~/Clothoid-A/ros2_ws`를 가정한다. 다른 경로에 clone했으면
   `CLOTHOID_WS`를 지정해야 워크스페이스가 source된다. limo2는 `~/2026-autorace`에 있으므로 다음과 같이 실행한다.
@@ -95,10 +99,8 @@
 - limo1: 2026-11-02 저녁부터 네트워크에 있음(`192.168.1.82`). 본체 신호 정상, 오류 0, `motion_mode` 0(차동), 배터리 10.9V로 limo2(11.7V)보다 낮다. 저장소와 `twist_mux`가 없고 `diagnostic_updater`는 4.0.6이다. 구동, 센서, 조향은 시험하지 않았다.
 - `motion_mode` 순간 변화: limo2가 애커만 모드인데 2026-11-02 21:22:00에 `/limo_status`가 0을 한 번 보고했다. 이후 전체 bringup 5분 동안 599회 모두 1이어서 재발은 없었고, 원인은 미확인. `limo_base`는 보고된 모드로 명령을 보내므로 주행 중 발생하면 그동안 차동 명령이 나가고 조향이 0이 된다.
   - **제안(미적용):** `parseFrame`의 `MSG_SYSTEM_STATE_ID` 처리에서 `motion_mode_`를 프레임 하나로 바로 바꾸지 말고, 같은 값이 연속 2회 이상(`/limo_status` 2Hz 기준 약 1초) 보고될 때만 바꾼다. 처음 한 번은 모드가 정해지기 전이므로 즉시 받아들인다(시작 때 최대 0.5초 대기를 피함). 모드는 앞쪽 핀을 뽑는 물리 전환이라 주행 중에 실제로 바뀔 일이 없어서 디바운스의 부작용이 없다. 위 현상이 재발하는지 먼저 로그로 확인하고, 재발하면 적용한다(`limo_driver.cpp`, 변경하면 패키지 `README.md`에도 기록).
-- launch 인자와 yaml의 우선순위(22.04 + Humble에서 재현 필요): `ros2 launch clothoid_lane lane.launch.py debug:=true` 실행 후
-  `ros2 param get /lane_main debug`가 `True`인지, `ros2 launch clothoid_yolo yolo.launch.py backend:=ultralytics` 실행 후
-  `ros2 param get /yolo backend`가 `ultralytics`인지 본다. 안 바뀌면 `ros2 node info`와 `ros2 param dump`로 어느 값이 남는지 확인한다.
-  확실한 해결책은 launch가 정하는 키(`debug`, `backend`, `model_path`)를 각 yaml에서 지우는 것이다(노드 기본값은 `debug: false`, `backend: none`).
+- launch 인자 수정(2026-11-03, Docker에서 확인)을 Jetson에서도 한 번 확인한다: `ros2 launch clothoid_lane lane.launch.py debug:=true` 후
+  `ros2 param get /lane_main debug`가 `True`인지 본다.
 - `clothoid_parking`: 노드 기동만 확인. 시작선과 스텝 시퀀스는 `pytest`로만 확인.
 - `clothoid_lidar`: 장애물 추출만 실제 라이다로 확인. 콘 코스는 `pytest`로만 확인.
 

@@ -12,4 +12,4 @@ speed_zone:
     min_area: 1800.0
     slow_speed: 0.2      # rules: 0.2 m/s or less
     hold_sec: 1.0        # keep slowing after the mark is gone
-    debug: false         # true publishes /speed_zone/debug_image
+    # debug (default false) is set by the launch argument `debug:=true`: true publishes /speed_zone/debug_image

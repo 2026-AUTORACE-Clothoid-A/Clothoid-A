@@ -47,4 +47,4 @@ parking:
     min_line_len: 20
     trigger_row: 5
 
-    debug: false                   # true publishes /parking/debug_image and the closest-point marker
+    # debug (default false) is set by the launch argument `debug:=true`: true publishes /parking/debug_image and the closest-point marker
