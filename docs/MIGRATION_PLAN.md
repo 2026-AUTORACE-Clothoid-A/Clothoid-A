@@ -214,8 +214,8 @@
 - [x] 새 `README.md`, 2025 후기는 `docs/2025_retrospective.md`로 이동
 - [ ] `ros2-bootstrap`을 커밋·푸시, `main` 브랜치 정책 결정(팀장과)
 - [x] `docker/Dockerfile`, `docker-compose.yml`, `entrypoint.sh`, `README.md` 작성
-- [ ] **확인:** dev 이미지가 빌드되고 `colcon build --symlink-install`이 통과
-- [ ] **확인:** 팀원 1명이 처음부터 pull해서 같은 결과가 나옴
+- [x] **확인:** dev 이미지가 빌드되고 `colcon build --symlink-install`이 통과(2026-11-03, Ubuntu 24.04 호스트의 Docker, 패키지 9개 빌드, `colcon test` 79개 통과)
+- [x] **확인:** 팀원 1명이 처음부터 pull해서 같은 결과가 나옴(2026-11-03, pull로 받은 클론에서 위 결과 재현)
 - [ ] 이미지를 레지스트리에 푸시(태그 `humble-v0`)
 - [x] `scripts/env_jetson.sh`
 - [ ] `scripts/setup_jetson.sh`, `requirements-jetson.txt`(Jetson에 `ros-humble-twist-mux` 설치와 `ros-humble-diagnostic-updater` 4.0.7 업그레이드 포함, 이전 버전에는 `twist_mux`가 찾는 라이브러리가 없다). limo2는 2026-11-02 손으로 설치함, limo1은 미설치
@@ -247,7 +247,7 @@
 - [x] `clothoid_yolo`: 추론 노드와 후처리(모델 없이 `backend: none`)
 - [x] `clothoid_mission`: 초안
 - [x] 로직 `pytest` 73개 통과(lane 21, lidar 19, parking 14, yolo 7, mission 12), 노드 파라미터와 yaml 타입 점검(스텁)
-- [x] **확인:** `colcon build` 전체 통과(특히 `clothoid_interfaces` 메시지를 쓰는 yolo/mission). 테스트 78개 통과
+- [x] **확인:** `colcon build` 전체 통과(특히 `clothoid_interfaces` 메시지를 쓰는 yolo/mission). 테스트 78개 통과(Docker에서는 79개)
 - [x] **확인:** 노드별 기동과 launch (rclpy 첫 실행), `clothoid_common` 이미지 테스트
 - [ ] launch 인자(`debug`, `backend`, `model_path`)가 패키지 yaml 값에 밀려 노드에 전달되지 않는 버그 수정
 - [ ] **확인:** 바닥 마크·정지선·콘이 실제 카메라/라이다에서 잡히는지(2025 값 그대로라 튜닝 필수)
@@ -260,7 +260,7 @@
 - [ ] 미션 담당 배분표와 인터페이스 변경 절차
 
 ### v0 태그를 찍는 기준
-위의 **확인** 항목 중 Docker 빌드, `colcon build`, Jetson bring-up, `lane_main` 기동 네 가지가 통과하면 `v0` 태그를 찍고 팀에 공유한다. 2026-11-02 기준 Docker 빌드만 남았다(Jetson bring-up은 `twist_mux` 설치 전제).
+위의 **확인** 항목 중 Docker 빌드, `colcon build`, Jetson bring-up, `lane_main` 기동 네 가지가 통과하면 `v0` 태그를 찍고 팀에 공유한다. 2026-11-03 기준 Docker 빌드와 `colcon build`는 통과했다(Jetson bring-up은 `twist_mux` 설치 전제).
 
 ## 2-3. 패키지 구조 결정과 2025 코드 이식 현황
 

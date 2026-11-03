@@ -42,7 +42,7 @@
 ## 실행 확인 현황 (2026-11-02, limo2, 커밋 `f9e422d`)
 
 **확인한 것**
-- `colcon build`: 8개 패키지 모두 성공. 테스트 78개 모두 통과(`clothoid_common` 이미지 테스트 5개 포함).
+- `colcon build`: 8개 패키지 모두 성공. 테스트 78개 모두 통과(`clothoid_common` 이미지 테스트 5개 포함). 2026-11-03 Docker dev 이미지(Ubuntu 24.04 호스트)에서도 9개 패키지 빌드, 테스트 79개 통과.
 - `bringup.launch.py` 기동: 카메라 640x480 `rgb8`, 라이다 10.0Hz·±110°, TF 2개, `limo_base` 시리얼 연결.
   명령 노드 없이 띄웠을 때 `/cmd_vel`은 0건.
 - 미션 노드 9개 동시 기동(실제 카메라·라이다 입력, `limo_base` 없음): 오류 없음, CPU 유휴 약 65%.
@@ -101,7 +101,6 @@
   확실한 해결책은 launch가 정하는 키(`debug`, `backend`, `model_path`)를 각 yaml에서 지우는 것이다(노드 기본값은 `debug: false`, `backend: none`).
 - `clothoid_parking`: 노드 기동만 확인. 시작선과 스텝 시퀀스는 `pytest`로만 확인.
 - `clothoid_lidar`: 장애물 추출만 실제 라이다로 확인. 콘 코스는 `pytest`로만 확인.
-- Docker 개발 이미지 빌드.
 
 로직 모듈은 처음에 Windows PC에서 ROS 없이 `pytest`로 작성·확인했다.
 
