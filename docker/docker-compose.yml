@@ -10,6 +10,7 @@ services:
     image: clothoid-a/dev:humble
     container_name: clothoid-dev
     network_mode: host
+    ipc: host
     stdin_open: true
     tty: true
     working_dir: /home/user/Clothoid-A/ros2_ws
@@ -17,6 +18,15 @@ services:
       - DISPLAY=${DISPLAY}
       - LOCAL_USER_ID=${LOCAL_USER_ID:-1000}
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - ..:/home/user/Clothoid-A
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

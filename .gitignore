@@ -22,9 +22,15 @@ bag*/
 *.engine
 *.onnx
 *.pt
-
 # Local-only reference files (not shared)
 local_archive/
 
 # Orbbec camera SDK log (written to the directory the launch ran in; capital L, not matched by log/)
 Log/
+
+# YOLO datasets & training runs
+**/dataset/train/
+**/dataset/val/
+**/dataset/valid/
+**/dataset/test/
+runs/

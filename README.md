@@ -17,7 +17,7 @@ ros2_ws/src/
   clothoid_mission/      mission state logic (stop / slow / direction / parking signals)
 docker/                  dev image for laptops (Humble, amd64)
 scripts/env_jetson.sh    environment for the LIMO
-docs/                    MIGRATION_PLAN.md, INTERFACES.md, PACKAGES.md, FIELD_TEST.md, PORTING_GUIDE.md
+docs/                    MIGRATION_PLAN.md, INTERFACES.md, PACKAGES.md, FIELD_TEST.md, PORTING_GUIDE.md, YOLO_GUIDE.md
 ```
 
 ## Where to start

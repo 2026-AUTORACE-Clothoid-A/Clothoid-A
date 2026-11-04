@@ -1,0 +1,19 @@
+# Clothoid-A 2026 Target Dataset YAML
+# Put your dataset here (train/, valid/, test/ folders).
+# If downloaded from Roboflow, simply replace this file or keep this structure.
+
+path: .  # relative to this data.yaml
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 8
+names:
+  0: traffic_light_red
+  1: traffic_light_yellow
+  2: traffic_light_green
+  3: sign_left
+  4: sign_right
+  5: sign_pedestrian
+  6: sign_slow
+  7: sign_parking
