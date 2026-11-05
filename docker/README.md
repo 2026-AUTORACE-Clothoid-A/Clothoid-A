@@ -53,6 +53,22 @@ ros2 bag play ~/Clothoid-A/bag/<bag folder> --clock
 ```
 See `ros2_ws/src/clothoid_debug/README.md` for what is on the screen.
 
+## Run the competition simulator
+The image has what the simulator needs. The simulator itself (`simul/`) is not in git: copy it from the team
+SSD to the repo root, it is about 13 MB. `simul/run.sh` and `adapter.sh` need Conda, so start it with Python
+here. Run these in three terminals (use `--mission` track, slow, crosswalk, obstacle, fork, cone, signal or parking):
+```bash
+cd ~/Clothoid-A/simul && export PYTHONPATH=$PWD/src/limo_parking_sim:$PYTHONPATH && python3 -m limo_parking_sim.app --mission track --view follow
+ros2 launch clothoid_debug bag.launch.py
+ros2 run twist_mux twist_mux --ros-args --params-file ~/Clothoid-A/ros2_ws/src/clothoid_bringup/config/twist_mux.yaml -r cmd_vel_out:=/cmd_vel -p use_sim_time:=true
+```
+Keep `$PYTHONPATH` in the first command, or ROS is lost. Keys and options are in `simul/README.md`. The simulator
+publishes its own `odom -> base_link`, which clashes with `track -> base_link` from `decision_viz`, so positions
+in `decision.rviz` are not reliable here.
+
+Without a GPU the simulator is very slow: 7.5% of real time on the CPU, measured. It uses simulated time, so the
+nodes slow down with it. To use a GPU, add `/dev/dri` under `devices` in a compose override.
+
 ## Notes
 - The container shares the host network and takes `ROS_DOMAIN_ID` from the host shell (42 if unset). When
   replaying a bag, use a different number from any robot running `twist_mux`, or the replayed commands can reach it.
