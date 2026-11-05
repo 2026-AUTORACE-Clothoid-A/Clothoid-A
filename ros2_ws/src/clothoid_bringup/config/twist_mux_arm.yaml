@@ -1,0 +1,21 @@
+# Arm lock for twist_mux, loaded on top of twist_mux.yaml when `require_arm:=true` (the default).
+#
+# twist_mux (humble) counts a lock as locked when its data is true OR it has not been refreshed
+# within `timeout`, and it starts out locked because nothing has arrived yet. While locked, every input
+# with priority below the lock's is ignored. So autonomy moves only while somebody keeps publishing
+# `false`:
+#
+#   ros2 topic pub -r 10 /estop std_msgs/msg/Bool "{data: false}"     # armed while this runs
+#   Ctrl+C on that command                                            # disarm -> stop
+#   ros2 topic pub -r 10 /estop std_msgs/msg/Bool "{data: true}"      # hard stop
+#
+# teleop (200) stays above the lock, so manual driving still works while disarmed.
+# Stop delay after disarming: lock timeout (0.3 s) + limo_base cmd_timeout (0.5 s), at most ~0.8 s
+# (about 0.24 m at 0.3 m/s). twist_mux goes silent, it does not send a zero command.
+twist_mux:
+  ros__parameters:
+    locks:
+      estop:
+        topic: estop
+        timeout: 0.3
+        priority: 150
