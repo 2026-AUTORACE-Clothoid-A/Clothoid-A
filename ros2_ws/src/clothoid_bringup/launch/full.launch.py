@@ -45,7 +45,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
-        DeclareLaunchArgument('steering_scale', default_value='2.47'),
+        DeclareLaunchArgument('steering_scale', default_value='1.06'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
 
         # sensors, TF, limo_base, twist_mux

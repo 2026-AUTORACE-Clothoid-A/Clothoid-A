@@ -60,7 +60,7 @@ out, and `limo_base` then sends a stop after 0.5 s. Priorities and timeouts:
 
 Steering: compute a steering angle δ (rad, positive = left) and send
 `linear.x = v`, `angular.z = v * tan(δ) / 0.2` (wheelbase 0.2 m). `limo_base` turns this into a steering value with the
-official scale (inner wheel angle / 2.47, cut at 28°, value 0.197). With `linear.x = 0` the steering centres. Real wheel
+measured scale (inner wheel angle / 1.06, cut at 28°, value 0.46; official 2.47 turned half as much, see `FIELD_TEST.md` 4). With `linear.x = 0` the steering centres. Real wheel
 angles still need measuring, see Open points.
 
 ## Open points

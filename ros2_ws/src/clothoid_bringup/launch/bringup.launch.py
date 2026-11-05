@@ -48,8 +48,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false',
                               description='fuse /odom and /imu into /odometry/filtered'),
-        DeclareLaunchArgument('steering_scale', default_value='2.47',
-                              description='limo_base: inner wheel angle per body value (official 2.47)'),
+        DeclareLaunchArgument('steering_scale', default_value='1.06',
+                              description='limo_base: inner wheel angle per body value (measured, official 2.47)'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
                               description='limo_base: inner wheel limit in rad (official 28 deg)'),
 

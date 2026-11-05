@@ -70,6 +70,11 @@ Visualization Manager:
       Enabled: true
       Topic:
         Value: /viz/markers
+    - Class: rviz_default_plugins/Marker
+      Name: Trail
+      Enabled: true
+      Topic:
+        Value: /viz/trail
     - Class: rviz_default_plugins/Image
       Name: Overlay
       Enabled: true

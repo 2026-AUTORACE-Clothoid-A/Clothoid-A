@@ -86,6 +86,7 @@ class DecisionViz(Node):
 
         self.overlay_pub = self.create_publisher(Image, '/viz/overlay', 1)
         self.marker_pub = self.create_publisher(MarkerArray, '/viz/markers', 1)
+        self.trail_pub = self.create_publisher(Marker, '/viz/trail', 1)   # its own RViz display
         self.tf_pub = TransformBroadcaster(self)
 
         self.create_subscription(Image, '/camera/color/image_raw', self.on_image,
@@ -296,7 +297,7 @@ class DecisionViz(Node):
             color = rgba(COLORS[b[2]])
             trail.points += [Point(x=a[0], y=a[1]), Point(x=b[0], y=b[1])]
             trail.colors += [color, color]
-        out.markers.append(trail)
+        self.trail_pub.publish(trail)
         self.marker_pub.publish(out)
 
 
