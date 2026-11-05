@@ -56,12 +56,12 @@ python3 -m pytest src
 | 번호 | 클래스명 (`class_name`) | 대상 미션 |
 |:---:|---|---|
 | 0 | `traffic_light_red` | 신호등 적색 (정지선 정지) |
-| 1 | `traffic_light_yellow` | 신호등 황색 (감속/정지) |
-| 2 | `traffic_light_green` | 신호등 녹색 (출발 신호) |
-| 3 | `sign_left` | 갈림길 좌측 주행 |
-| 4 | `sign_right` | 갈림길 우측 주행 |
-| 5 | `sign_pedestrian` | 보행자 표지판 (정지선에서 3초 정지 후 출발) |
-| 6 | `sign_slow` | 서행/방지턱 표지판 (0.2 m/s 이하 서행) |
+| 1 | `traffic_light_green` | 신호등 녹색 (출발 신호) |
+| 2 | `sign_left` | 갈림길 좌측 주행 |
+| 3 | `sign_right` | 갈림길 우측 주행 |
+| 4 | `sign_pedestrian` | 보행자 표지판 (정지선에서 3초 정지 후 출발) |
+| 5 | `sign_slow` | 서행 표지판 (0.2 m/s 이하 서행) |
+| 6 | `sign_bump` | 과속방지턱 표지판 (0.2 m/s 이하 서행) |
 | 7 | `sign_parking` | 주차 표지판 (T자 주차 시퀀스 진입) |
 
 ---

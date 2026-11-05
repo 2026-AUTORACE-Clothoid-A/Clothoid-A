@@ -13,8 +13,8 @@ import numpy as np
 
 # keep in sync with clothoid_interfaces/msg/Detection.msg
 KNOWN_CLASSES = (
-    'traffic_light_red', 'traffic_light_yellow', 'traffic_light_green',
-    'sign_left', 'sign_right', 'sign_pedestrian', 'sign_slow', 'sign_parking',
+    'traffic_light_red', 'traffic_light_green',
+    'sign_left', 'sign_right', 'sign_pedestrian', 'sign_slow', 'sign_bump', 'sign_parking',
 )
 
 
