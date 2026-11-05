@@ -8,6 +8,7 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from clothoid_lidar.cone_follower import (  # noqa: E402
+    look_ahead_point,
     ConeFollower, FollowerParams, build_center_line, compute_steering, order_by_mst)
 from clothoid_lidar.cone_sorter import (  # noqa: E402
     LEFT, RIGHT, ConeMission, ConeSorter, SorterParams)
@@ -208,3 +209,19 @@ def test_collinear_cones_do_not_crash():
 def test_lsq_window_is_forced_odd_and_at_least_five():
     assert FollowerParams(lsq_window_size=2).lsq_window_size == 5
     assert FollowerParams(lsq_window_size=8).lsq_window_size == 9
+
+
+def test_first_step_limit_is_separate_from_the_segment_limit():
+    # corridor already at 60 deg to the car: the next cone is only reachable with a wider first step
+    cones = np.array([[0.0, 0.4], [0.1, 0.57], [0.2, 0.74]])
+    narrow = ConeSorter(SorterParams(first_step_angle_deg=45.0))
+    wide = ConeSorter(SorterParams(first_step_angle_deg=90.0))
+    assert narrow.trace(cones, 0, set()) == [0]
+    assert wide.trace(cones, 0, set()) == [0, 1, 2]
+
+
+def test_look_ahead_point_matches_the_steering_target():
+    params = FollowerParams(lfd=0.3)
+    center = np.column_stack((np.arange(0.0, 1.0, 0.05), np.zeros(20)))
+    assert look_ahead_point(center, params)[0] == pytest.approx(0.3)
+    assert look_ahead_point(np.zeros((0, 2)), params) is None

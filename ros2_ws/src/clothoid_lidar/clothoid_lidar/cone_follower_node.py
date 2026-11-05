@@ -10,7 +10,7 @@ import math
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PointStamped, Twist
 from nav_msgs.msg import Path
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
@@ -33,6 +33,7 @@ class ConeFollowerNode(Node):
         self.declare_parameter('right_boundary_topic', '/cone/right_boundary')
         self.declare_parameter('mission_active_topic', '/cone/mission_active')
         self.declare_parameter('centerline_topic', '/cone/centerline')
+        self.declare_parameter('target_topic', '/cone/target')
 
         d = FollowerParams()
         self.declare_parameter('wheelbase', d.wheelbase)
@@ -53,6 +54,8 @@ class ConeFollowerNode(Node):
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
         self.center_pub = self.create_publisher(
             Path, self.get_parameter('centerline_topic').value, 1)
+        self.target_pub = self.create_publisher(
+            PointStamped, self.get_parameter('target_topic').value, 1)
         self.create_subscription(
             Path, self.get_parameter('left_boundary_topic').value, self.on_left, 1)
         self.create_subscription(
@@ -107,6 +110,10 @@ class ConeFollowerNode(Node):
         return age <= self.follower.p.boundary_timeout
 
     def control(self):
+        # The course starts with both boundaries on their way, one arrives first. A side not received
+        # yet is not "lost": without this the first command of every course is a reverse.
+        if self.left_time is None or self.right_time is None:
+            return
         left_fresh, right_fresh = self._fresh(self.left_time), self._fresh(self.right_time)
         if not left_fresh and not right_fresh:
             self.get_logger().warn('all boundaries stale, no command', throttle_duration_sec=1.0)
@@ -127,6 +134,12 @@ class ConeFollowerNode(Node):
             header = Header(frame_id='base_link')
             header.stamp = self.get_clock().now().to_msg()
             self.center_pub.publish(to_path(result.center, header))
+        if result.target is not None:
+            target = PointStamped()
+            target.header.stamp = self.get_clock().now().to_msg()
+            target.header.frame_id = 'base_link'
+            target.point.x, target.point.y = float(result.target[0]), float(result.target[1])
+            self.target_pub.publish(target)
 
 
 def main(args=None):

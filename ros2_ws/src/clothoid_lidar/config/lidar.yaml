@@ -12,16 +12,17 @@ obstacle_extractor:
     range_max: 2.0
     angle_min_deg: -110.0
     angle_max_deg: 110.0
-    cluster_gap: 0.08
+    cluster_gap: 0.06        # 0.08 merged neighbouring cones into one too wide to accept (docs: LIDAR_EXTRACTOR_EVAL)
     min_points: 2
     max_width: 0.15
     cone_radius: 0.04
 
 cone_sorter:
   ros__parameters:
-    max_dist_between_cones: 0.4
+    max_dist_between_cones: 0.5  # 0.6 bridged to the other row on the 11-03 bags
     max_trace_length: 20
     threshold_directional_angle_deg: 45.0
+    first_step_angle_deg: 90.0   # the corridor can be at an angle to the car at the first cone
     angle_from_left_first_cone: 45.0
     dist_from_left_first_cone: 0.7
     dist_from_right_first_cone: 0.7
@@ -40,12 +41,12 @@ cone_sorter:
 
 cone_follower:
   ros__parameters:
-    speed: 0.3               # 2025 launch value
+    speed: 0.4               # simulator course: 0.3~0.4 pass, 0.5 and 0.2 or less hit a cone
     reverse_speed: -0.2
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
     wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
     rear_axle_x: 0.1         # rear axle behind base_link (base_link is midway between the axles)
-    lfd: 0.3
+    lfd: 0.4                 # simulator course: 0.3 hits a cone, see the sweep in the commit message
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus

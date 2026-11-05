@@ -31,6 +31,7 @@ Pixel boxes refer to the 640x480 color image.
 | `/lidar/obstacles` | `geometry_msgs/PoseArray` | `clothoid_lidar` `obstacle_extractor` | obstacle centres in `base_link` (positions only), shared by the cone and static obstacle missions |
 | `/cone/left_boundary`, `/cone/right_boundary` | `nav_msgs/Path` | `clothoid_lidar` `cone_sorter` | sorted cones of each side while the cone course runs |
 | `/cone/mission_active` | `std_msgs/Bool` | `clothoid_lidar` `cone_sorter` | cone course start / end |
+| `/cone/target` | `geometry_msgs/PointStamped` | `clothoid_lidar` `cone_follower` | look-ahead point on the centre line, `base_link` |
 | `/parking_done` | `std_msgs/Bool` | `clothoid_parking` | true once after the last parking step |
 | `/lane/target_warp` | `geometry_msgs/PointStamped` | `clothoid_lane` `lane_main`, only with `debug` on | target in warped image pixels, `z` = 1 found, 0 lost |
 | `/lane/left_warp`, `/lane/right_warp` | `geometry_msgs/PolygonStamped` | `clothoid_lane` `lane_main`, only with `debug` on | windows that really held lane pixels, warped image pixels |

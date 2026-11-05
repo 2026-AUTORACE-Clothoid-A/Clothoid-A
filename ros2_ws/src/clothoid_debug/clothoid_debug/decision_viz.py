@@ -9,7 +9,8 @@ The pose in frame `track` starts at (0, 0) and integrates /imu yaw and the /odom
 localization, no correction, it drifts. /odom yaw is not used because it is computed from the steering
 value and does not match the real rotation (2026-11-05 bags: about 1.9 x gyro in turns, 287-354 deg
 against 450 deg for a whole run). This TF needs base_link to have no other parent, so do not use it
-with `use_ekf:=true` or `pub_odom_tf:=true`.
+with `use_ekf:=true` or `pub_odom_tf:=true`. In the simulator `use_odom_pose` is true: it publishes
+odom -> base_link and a true /odom pose, so the trail uses that and `track` is fixed to `odom`.
 """
 import math
 
@@ -50,6 +51,7 @@ class DecisionViz(Node):
         for name, value in (('warp_x_h', d.x_h), ('warp_x_l', d.x_l), ('warp_y_h', d.y_h),
                             ('warp_y_l', d.y_l)):
             self.declare_parameter(name, value)
+        self.declare_parameter('use_odom_pose', False)
         self.declare_parameter('camera_height', 0.187)   # lens above the floor, measured on limo1
         # horizon of the warp trapezoid is at row 178, cy 217, fy 489 -> atan(39 / 489)
         self.declare_parameter('camera_pitch', 0.080)
@@ -63,6 +65,7 @@ class DecisionViz(Node):
         self.declare_parameter('cy', 217.0)
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.wheelbase, self.rear_axle_x = get('wheelbase'), get('rear_axle_x')
+        self.use_odom_pose = get('use_odom_pose')
         self.warp_params = LaneParams(x_h=get('warp_x_h'), x_l=get('warp_x_l'),
                                       y_h=get('warp_y_h'), y_l=get('warp_y_l'))
         self.projection = GroundProjection(
@@ -72,6 +75,7 @@ class DecisionViz(Node):
         self.frames = {}          # image stamp -> latest camera frames, to match the lane result
         self.left, self.right = [], []
         self.target = None
+        self.cone_target = None   # (x, y, time) from cone_follower, base_link
         self.cmd = {}             # input name -> (Twist, time)
         self.stopline = self.cone_active = False
         self.limit_time = None
@@ -89,6 +93,7 @@ class DecisionViz(Node):
         self.create_subscription(PolygonStamped, '/lane/left_warp', self.on_left, 5)
         self.create_subscription(PolygonStamped, '/lane/right_warp', self.on_right, 5)
         self.create_subscription(PointStamped, '/lane/target_warp', self.on_target, 5)
+        self.create_subscription(PointStamped, '/cone/target', self.on_cone_target, 5)
         self.create_subscription(Imu, '/imu', self.on_imu, 50)
         self.create_subscription(Odometry, '/odom', self.on_odom, 20)
         self.create_subscription(Bool, '/stopline_detected', self.on_stopline, 5)
@@ -120,6 +125,9 @@ class DecisionViz(Node):
         if frame is not None:
             self.publish_overlay(frame, msg)
 
+    def on_cone_target(self, msg):
+        self.cone_target = (msg.point.x, msg.point.y, self.now())
+
     def on_cmd(self, name, msg):
         self.cmd[name] = (msg, self.now())
 
@@ -141,17 +149,21 @@ class DecisionViz(Node):
     def on_odom(self, msg):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         self.speed = msg.twist.twist.linear.x
-        if self.last_odom is not None and 0.0 < t - self.last_odom < 1.0:
-            self.x += self.speed * math.cos(self.yaw) * (t - self.last_odom)
-            self.y += self.speed * math.sin(self.yaw) * (t - self.last_odom)
-        self.last_odom = t
-
         tf = TransformStamped()
         tf.header.stamp = msg.header.stamp
-        tf.header.frame_id, tf.child_frame_id = 'track', 'base_link'
-        tf.transform.translation.x, tf.transform.translation.y = self.x, self.y
-        tf.transform.rotation.z = math.sin(self.yaw / 2.0)
-        tf.transform.rotation.w = math.cos(self.yaw / 2.0)
+        if self.use_odom_pose:
+            self.x, self.y = msg.pose.pose.position.x, msg.pose.pose.position.y
+            tf.header.frame_id, tf.child_frame_id = 'track', 'odom'
+            tf.transform.rotation.w = 1.0
+        else:
+            if self.last_odom is not None and 0.0 < t - self.last_odom < 1.0:
+                self.x += self.speed * math.cos(self.yaw) * (t - self.last_odom)
+                self.y += self.speed * math.sin(self.yaw) * (t - self.last_odom)
+            tf.header.frame_id, tf.child_frame_id = 'track', 'base_link'
+            tf.transform.translation.x, tf.transform.translation.y = self.x, self.y
+            tf.transform.rotation.z = math.sin(self.yaw / 2.0)
+            tf.transform.rotation.w = math.cos(self.yaw / 2.0)
+        self.last_odom = t
         self.tf_pub.sendTransform(tf)
         self.pose_stamp = msg.header.stamp
 
@@ -245,14 +257,27 @@ class DecisionViz(Node):
         right.points = self.floor_points(self.right)
         out.markers += [left, right]
 
+        # Big pink point: what the deciding node really follows. The lane target keeps being computed
+        # during the cone course but steers nothing, so it shrinks to a small grey point.
+        name = self.winner()[0]
+        cone_fresh = self.cone_target is not None and self.now() - self.cone_target[2] <= 0.3
+        follows_cones = name == 'avoid' and cone_fresh
         if self.target is not None:
             found = self.target.point.z > 0.5
-            target = self.marker(3, Marker.SPHERE, scale=0.08,
-                                 rgb=(1.0, 0.1, 0.9) if found else (0.4, 0.4, 0.4))
+            big = found and not follows_cones
+            target = self.marker(3, Marker.SPHERE, scale=0.08 if big else 0.04,
+                                 rgb=(1.0, 0.1, 0.9) if big else (0.4, 0.4, 0.4))
             points = self.floor_points([(self.target.point.x, self.target.point.y)])
             if points:
                 target.pose.position = points[0]
                 out.markers.append(target)
+        cone = self.marker(8, Marker.SPHERE, scale=0.08, rgb=(1.0, 0.1, 0.9))
+        if follows_cones:
+            cone.pose.position.x, cone.pose.position.y = self.cone_target[:2]
+            cone.pose.position.z = 0.03
+        else:
+            cone.action = Marker.DELETE
+        out.markers.append(cone)
 
         _, cmd = self.winner()
         steer = self.code_steer(cmd)

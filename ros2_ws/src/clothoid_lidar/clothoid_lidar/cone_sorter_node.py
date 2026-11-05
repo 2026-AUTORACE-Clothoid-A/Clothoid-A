@@ -16,7 +16,8 @@ from clothoid_lidar.cone_sorter import ConeMission, ConeSorter, SorterParams
 
 _FIELDS = [
     ('max_dist_between_cones', float), ('max_trace_length', int),
-    ('threshold_directional_angle_deg', float), ('angle_from_left_first_cone', float),
+    ('threshold_directional_angle_deg', float), ('first_step_angle_deg', float),
+    ('angle_from_left_first_cone', float),
     ('dist_from_left_first_cone', float), ('dist_from_right_first_cone', float),
     ('start_x_min', float), ('start_x_max', float), ('start_y_min', float),
     ('start_y_max', float), ('start_min_count', int),

@@ -32,6 +32,14 @@ ros2 launch clothoid_debug rviz.launch.py
 - rqt로 재생할 때는 `/clock`이 없으므로 `bag.launch.py`와 `rviz.launch.py` 모두 `use_sim_time:=false`로 켠다. `/limo_status`는 체크하지 않는다(`limo_msgs`가 없어 rqt가 죽는다).
 - 재생 위치는 `ros2 bag play`의 `--start-offset <초>`, 속도는 `--rate <배속>`으로 정한다.
 
+### 시뮬레이터로 보기
+노드가 직접 운전한다. 컨테이너 터미널 3개에서 각각 실행한다(`simul/`은 `docker/README.md` 참고).
+```bash
+cd ~/Clothoid-A/simul && export PYTHONPATH=$PWD/src/limo_parking_sim:$PYTHONPATH && python3 -m limo_parking_sim.app --mission cone --view follow
+ros2 launch clothoid_debug sim.launch.py
+ros2 launch clothoid_debug rviz.launch.py
+```
+
 ### 실제 주행 중 보기
 ```bash
 # 로봇
@@ -46,7 +54,8 @@ ros2 launch clothoid_debug rviz.launch.py use_sim_time:=false
 ## 화면 보는 법
 | 표시 | 의미 |
 |---|---|
-| 분홍 점 | 차선 추종점. `lane_main`이 실제로 쓰는 값이다(차선을 놓치면 회색) |
+| 큰 분홍 점 | 지금 명령을 내는 노드의 추종점. 평소에는 `lane_main`, 콘 코스 중에는 `cone_follower` |
+| 작은 회색 점 | 명령에 안 쓰이는 차선 추종점(콘 코스 중, 또는 차선을 놓쳤을 때) |
 | 파랑 / 노랑 점 | 왼쪽 / 오른쪽 윈도우가 실제로 잡은 차선 |
 | 차 앞 초록 곡선 | 지금 명령을 내는 노드의 조향을 유지할 때 갈 경로(1 m) |
 | 굵은 궤적선 | 차가 지나온 길. 색은 그 지점에서 명령을 낸 입력이다 |

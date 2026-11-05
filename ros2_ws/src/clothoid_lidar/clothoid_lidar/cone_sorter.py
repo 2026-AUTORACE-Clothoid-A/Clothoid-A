@@ -25,6 +25,9 @@ class SorterParams:
     max_dist_between_cones: float = 0.4   # m, max gap inside one boundary
     max_trace_length: int = 20            # cones per boundary
     threshold_directional_angle_deg: float = 45.0  # max turn between two chain segments
+    # first step of a chain, measured from the car's heading. The first cone is beside the car and the
+    # corridor can already be at an angle to it, so this is wider than the limit between segments.
+    first_step_angle_deg: float = 45.0
     # first cone of each side
     angle_from_left_first_cone: float = 45.0  # deg from +x, mirrored for the right side
     dist_from_left_first_cone: float = 0.7    # m
@@ -96,7 +99,7 @@ class ConeSorter:
     def trace(self, cones: np.ndarray, start: int, used: set) -> List[int]:
         """Greedy chain: nearest unused cone within the gap, without a sharp turn."""
         p = self.p
-        max_turn = np.radians(p.threshold_directional_angle_deg)
+        max_turn = np.radians(p.first_step_angle_deg)
         chain = [start]
         heading = np.array([1.0, 0.0])
         while len(chain) < p.max_trace_length:
@@ -117,6 +120,7 @@ class ConeSorter:
                 break
             step = cones[best] - here
             heading = step / np.hypot(*step)
+            max_turn = np.radians(p.threshold_directional_angle_deg)
             chain.append(best)
         return chain
 
