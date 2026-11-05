@@ -15,6 +15,13 @@ Visualization Manager:
       Cell Size: 1
       Plane Cell Count: 30
       Color: 80; 80; 80
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Arrows: false
+      Show Axes: true
+      Marker Scale: 0.3
     - Class: rviz_default_plugins/LaserScan
       Name: Lidar /scan
       Enabled: true

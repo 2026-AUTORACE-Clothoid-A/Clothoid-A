@@ -24,11 +24,12 @@ bag에는 원본 센서만 있으므로 노드를 먼저 띄운다. Humble 개�
 ```bash
 ros2 launch clothoid_debug bag.launch.py
 ros2 bag play <bag 폴더> --clock
-rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz --ros-args -p use_sim_time:=true
+ros2 launch clothoid_debug rviz.launch.py
 ```
 
 - `bag.launch.py`는 `limo_base`와 `twist_mux`를 띄우지 않아 `/cmd_vel`이 나오지 않는다. 그래도 `/cmd_vel_lane`은 나오므로 **`twist_mux`가 도는 로봇과 같은 `ROS_DOMAIN_ID`에서 재생하지 않는다.**
 - 컨테이너에는 `limo_msgs`가 없어 `limo_base`는 빌드에서 건너뛴다. `/limo_status`도 재생에서 자동으로 빠지고, 이 도구는 그 토픽을 쓰지 않는다.
+- rqt로 재생할 때는 `/clock`이 없으므로 `bag.launch.py`와 `rviz.launch.py` 모두 `use_sim_time:=false`로 켠다. `/limo_status`는 체크하지 않는다(`limo_msgs`가 없어 rqt가 죽는다).
 - 재생 위치는 `ros2 bag play`의 `--start-offset <초>`, 속도는 `--rate <배속>`으로 정한다.
 
 ### 실제 주행 중 보기
@@ -39,7 +40,7 @@ ros2 launch clothoid_bringup full.launch.py debug:=true
 
 # 노트북: 개발 컨테이너를 같은 번호로 켜고 그 안에서 (노트북 ROS가 Humble이 아니면 버전이 달라진다)
 ROS_DOMAIN_ID=<로봇과 같은 번호> LOCAL_USER_ID=$(id -u) docker compose -f docker/docker-compose.yml run --rm --name clothoid-dev dev
-rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz
+ros2 launch clothoid_debug rviz.launch.py use_sim_time:=false
 ```
 
 ## 화면 보는 법
@@ -50,6 +51,7 @@ rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz
 | 차 앞 초록 곡선 | 지금 명령을 내는 노드의 조향을 유지할 때 갈 경로(1 m) |
 | 굵은 궤적선 | 차가 지나온 길. 색은 그 지점에서 명령을 낸 입력이다 |
 | 빨간 점과 축 표시 | 라이다 스캔, `/lidar/obstacles` |
+| 이름 붙은 좌표축 | TF (`track`, `base_link`, 센서 좌표계) |
 | 파랑·노랑·초록 경로 | 콘 코스의 왼쪽 경계, 오른쪽 경계, 중심선 |
 | Overlay 패널 | 카메라 영상 + 변환 영역(보라) + 차선 점 + 추종점(십자) + 상태 글자 |
 | Warped lane windows 패널 | 변환 이미지와 슬라이딩 윈도우 |

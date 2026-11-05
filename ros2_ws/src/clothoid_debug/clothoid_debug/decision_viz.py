@@ -18,6 +18,7 @@ import numpy as np
 import rclpy
 from geometry_msgs.msg import Point, PointStamped, PolygonStamped, TransformStamped, Twist
 from nav_msgs.msg import Odometry
+from builtin_interfaces.msg import Time as RosTime
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, Imu
@@ -76,6 +77,7 @@ class DecisionViz(Node):
         self.limit_time = None
         self.x = self.y = self.yaw = self.speed = 0.0
         self.last_imu = self.last_odom = None
+        self.pose_stamp = RosTime()
         self.trail = []           # (x, y, deciding input)
 
         self.overlay_pub = self.create_publisher(Image, '/viz/overlay', 1)
@@ -151,6 +153,7 @@ class DecisionViz(Node):
         tf.transform.rotation.z = math.sin(self.yaw / 2.0)
         tf.transform.rotation.w = math.cos(self.yaw / 2.0)
         self.tf_pub.sendTransform(tf)
+        self.pose_stamp = msg.header.stamp
 
         if not self.trail or math.hypot(self.x - self.trail[-1][0], self.y - self.trail[-1][1]) > 0.03:
             self.trail.append((self.x, self.y, self.winner()[0]))
@@ -209,7 +212,9 @@ class DecisionViz(Node):
     # --- markers ----------------------------------------------------------------
     def marker(self, marker_id, kind, frame='base_link', scale=0.03, rgb=(1, 1, 1), a=1.0):
         m = Marker()
-        m.header.frame_id = frame   # stamp 0 = latest TF, markers are redrawn all the time
+        m.header.frame_id = frame
+        # the newest pose, which TF is known to hold whatever clock RViz runs on
+        m.header.stamp = self.pose_stamp
         m.ns, m.id, m.type, m.action = 'decision', marker_id, kind, Marker.ADD
         m.pose.orientation.w = 1.0
         m.scale.x = m.scale.y = m.scale.z = scale

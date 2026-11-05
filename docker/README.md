@@ -48,7 +48,7 @@ Bags go under `bag/` in the repo, with `metadata.yaml` and the `.db3` in one fol
 because the repo is at `/home/user/Clothoid-A` in the container. Run these in three terminals:
 ```bash
 ros2 launch clothoid_debug bag.launch.py
-rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz --ros-args -p use_sim_time:=true
+ros2 launch clothoid_debug rviz.launch.py
 ros2 bag play ~/Clothoid-A/bag/<bag folder> --clock
 ```
 See `ros2_ws/src/clothoid_debug/README.md` for what is on the screen.
