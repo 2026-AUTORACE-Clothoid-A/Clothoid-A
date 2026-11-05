@@ -5,12 +5,13 @@ lane_main:
     base_speed: 0.3            # rules recommend 0.3~0.4 m/s
     lost_hold_sec: 0.0         # >0 keeps the last heading when the lane is lost
     initial_side: 1            # 0 left lane, 1 right lane, 2 both
-    lane_width: 103            # px in the warped image (retune)
-    parking_lane_width: 140    # px (retune)
+    lane_width: 170            # px in the warped image, measured with the warp below
+    parking_lane_width: 231    # px, 140 scaled with lane_width from 103 (retune)
 
-    # warp: perspective corners (retune with the real camera mounting)
-    warp_x_h: 70
-    warp_x_l: 550
+    # warp: perspective corners, set on limo1 from straight-lane frames, camera lens 18.7~19 cm
+    # above the floor. Redo if the camera mounting changes.
+    warp_x_h: -28
+    warp_x_l: 370
     warp_y_h: 70
     warp_y_l: 40
 
