@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 import argparse
+import sys
 from pathlib import Path
+
+# Add local yolo26 ultralytics source so no pip install is required
+for p in [
+    Path('/home/a/catkin_ws/yolo26_pruning/yolo26'),
+    Path('/home/a/catkin_ws/yolo26_TensorRT/yolo26'),
+    Path('/home/a/ros_noetic_docker/workspace/yolo26_pruning/yolo26'),
+    Path('/home/a/ros_noetic_docker/workspace/yolo26_TensorRT/yolo26'),
+]:
+    if p.exists() and str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 PACKAGE_ROOT = Path(__file__).resolve().parent.parent
 
@@ -13,6 +24,7 @@ parser.add_argument('--imgsz', type=int, default=640)
 parser.add_argument('--device', type=str, default='0')
 parser.add_argument('--name', type=str, default='clothoid_26n')
 parser.add_argument('--resume', action='store_true', help="Resume interrupted training")
+parser.add_argument('--amp', action='store_true', default=False, help="Enable AMP (default False to prevent offline hang)")
 args = parser.parse_args()
 
 from ultralytics import YOLO
@@ -23,5 +35,5 @@ model = YOLO(args.model_pt)
 model.train(
     data=args.data, epochs=args.epoch, batch=args.bs, imgsz=args.imgsz,
     device=args.device, name=args.name, resume=args.resume, fliplr=0.0,
-    project=str(PACKAGE_ROOT / "runs")
+    amp=args.amp, project=str(PACKAGE_ROOT / "runs")
 )

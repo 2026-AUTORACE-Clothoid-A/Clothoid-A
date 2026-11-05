@@ -19,6 +19,16 @@ import os
 import sys
 from pathlib import Path
 
+# Add local yolo26 ultralytics source so no pip install is required
+for p in [
+    Path('/home/a/catkin_ws/yolo26_pruning/yolo26'),
+    Path('/home/a/catkin_ws/yolo26_TensorRT/yolo26'),
+    Path('/home/a/ros_noetic_docker/workspace/yolo26_pruning/yolo26'),
+    Path('/home/a/ros_noetic_docker/workspace/yolo26_TensorRT/yolo26'),
+]:
+    if p.exists() and str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+
 # Package paths
 SCRIPT_DIR = Path(__file__).resolve().parent
 PACKAGE_ROOT = SCRIPT_DIR.parent
