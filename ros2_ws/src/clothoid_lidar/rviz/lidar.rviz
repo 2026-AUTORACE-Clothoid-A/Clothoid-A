@@ -1,0 +1,121 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: base_link
+    Background Color: 30; 30; 34
+    Frame Rate: 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (0.5 m)
+      Enabled: true
+      Cell Size: 0.5
+      Plane Cell Count: 12
+      Color: 80; 80; 80
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+      Show Names: true
+      Marker Scale: 0.2
+    - Class: rviz_default_plugins/LaserScan
+      Name: Lidar /scan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+      Style: Flat Squares
+      Size (m): 0.015
+      Color Transformer: FlatColor
+      Color: 170; 170; 170
+      Decay Time: 0
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Clusters A (lidar.yaml)
+      Enabled: true
+      Topic:
+        Value: /lidar/debug/clusters_a
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Clusters B (candidate)
+      Enabled: false
+      Topic:
+        Value: /lidar/debug/clusters_b
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Cone zones
+      Enabled: true
+      Topic:
+        Value: /lidar/debug/zones
+    - Class: rviz_default_plugins/PoseArray
+      Name: Obstacles /lidar/obstacles (running node)
+      Enabled: false
+      Topic:
+        Value: /lidar/obstacles
+      Shape: Arrow (Flat)
+      Color: 255; 170; 0
+      Arrow Length: 0.08
+    - Class: rviz_default_plugins/Path
+      Name: Cone left boundary
+      Enabled: true
+      Topic:
+        Value: /cone/left_boundary
+      Color: 40; 120; 255
+      Line Style: Billboards
+      Line Width: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: Cone right boundary
+      Enabled: true
+      Topic:
+        Value: /cone/right_boundary
+      Color: 255; 220; 40
+      Line Style: Billboards
+      Line Width: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: Cone centerline
+      Enabled: true
+      Topic:
+        Value: /cone/centerline
+      Color: 40; 255; 40
+      Line Style: Billboards
+      Line Width: 0.03
+    - Class: rviz_default_plugins/Map
+      Name: Avoid costmap
+      Enabled: false
+      Topic:
+        Value: /avoid/costmap
+      Color Scheme: costmap
+      Alpha: 0.6
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Avoid candidates
+      Enabled: false
+      Topic:
+        Value: /avoid/candidates
+    - Class: rviz_default_plugins/Path
+      Name: Avoid path
+      Enabled: false
+      Topic:
+        Value: /avoid/path
+      Color: 255; 80; 200
+      Line Style: Billboards
+      Line Width: 0.03
+    - Class: rviz_default_plugins/Image
+      Name: Camera
+      Enabled: true
+      Topic:
+        Value: /camera/color/image_raw
+        Reliability Policy: Best Effort
+      Normalize Range: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top view
+      Scale: 260
+      Angle: 0
+      X: 0.7
+      Y: 0.0
+      Invert Z Axis: false
+    Saved: ~
+Window Geometry:
+  Height: 950
+  Width: 1600

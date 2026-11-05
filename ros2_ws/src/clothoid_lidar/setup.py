@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'rviz'), glob('rviz/*.rviz')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -27,6 +28,7 @@ setup(
             'obstacle_extractor = clothoid_lidar.obstacle_extractor_node:main',
             'cone_sorter = clothoid_lidar.cone_sorter_node:main',
             'cone_follower = clothoid_lidar.cone_follower_node:main',
+            'lidar_debug = clothoid_lidar.lidar_debug_node:main',
         ],
     },
 )
