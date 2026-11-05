@@ -19,16 +19,16 @@
 RViz만으로는 볼 수 없다. 판단 결과를 만드는 노드가 함께 돌아야 한다.
 
 ### bag으로 보기
-bag에는 원본 센서만 있으므로 노드를 먼저 띄운다. 터미널 3개에서 각각 실행한다.
+bag에는 원본 센서만 있으므로 노드를 먼저 띄운다. Humble 개발 컨테이너(`docker/README.md`) 안의 터미널 3개에서 각각 실행한다.
 
 ```bash
 ros2 launch clothoid_debug bag.launch.py
 ros2 bag play <bag 폴더> --clock
-rviz2 -d <저장소>/ros2_ws/src/clothoid_debug/rviz/decision.rviz --ros-args -p use_sim_time:=true
+rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz --ros-args -p use_sim_time:=true
 ```
 
 - `bag.launch.py`는 `limo_base`와 `twist_mux`를 띄우지 않아 `/cmd_vel`이 나오지 않는다. 그래도 `/cmd_vel_lane`은 나오므로 **`twist_mux`가 도는 로봇과 같은 `ROS_DOMAIN_ID`에서 재생하지 않는다.**
-- 노트북(Jazzy)에는 `limo_base`용 `limo_msgs`가 없다. `colcon build --symlink-install --packages-ignore limo_base`로 빌드한다. `/limo_status`는 재생에서 자동으로 빠지고, 이 도구는 그 토픽을 쓰지 않는다.
+- 컨테이너에는 `limo_msgs`가 없어 `limo_base`는 빌드에서 건너뛴다. `/limo_status`도 재생에서 자동으로 빠지고, 이 도구는 그 토픽을 쓰지 않는다.
 - 재생 위치는 `ros2 bag play`의 `--start-offset <초>`, 속도는 `--rate <배속>`으로 정한다.
 
 ### 실제 주행 중 보기
@@ -37,9 +37,9 @@ rviz2 -d <저장소>/ros2_ws/src/clothoid_debug/rviz/decision.rviz --ros-args -p
 CLOTHOID_REMOTE=1 ROS_DOMAIN_ID=<번호> source ~/Clothoid-A/scripts/env_jetson.sh
 ros2 launch clothoid_bringup full.launch.py debug:=true
 
-# 노트북
-export ROS_DOMAIN_ID=<로봇과 같은 번호>
-rviz2 -d <저장소>/ros2_ws/src/clothoid_debug/rviz/decision.rviz
+# 노트북: 개발 컨테이너를 같은 번호로 켜고 그 안에서 (노트북 ROS가 Humble이 아니면 버전이 달라진다)
+ROS_DOMAIN_ID=<로봇과 같은 번호> LOCAL_USER_ID=$(id -u) docker compose -f docker/docker-compose.yml run --rm --name clothoid-dev dev
+rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz
 ```
 
 ## 화면 보는 법
@@ -62,7 +62,7 @@ rviz2 -d <저장소>/ros2_ws/src/clothoid_debug/rviz/decision.rviz
 - **bag에서 궤적은 녹화 때의 경로다.** 노드의 명령이 차를 움직이지 않으므로 초록 곡선은 "그 위치에서 노드가 내린 판단"이다. 노드가 직접 몰았을 때의 결과가 아니다.
 - **명령 입력 판정:** bag 재생 때는 `twist_mux`가 없어서, `twist_mux.yaml`의 우선순위와 타임아웃을 이 노드 안에서 흉내 내어 판정한다. 값을 바꾸면 `decision_viz.py`의 `MUX_INPUTS`도 맞춘다.
 - **TF:** `track → base_link`를 발행하므로 `use_ekf:=true`, `pub_odom_tf:=true`와 함께 쓰지 않는다(`base_link`의 부모가 둘이 된다).
-- **실차 미확인:** 로봇에서는 아직 돌려 보지 않았다. 노트북(Jazzy)과 로봇(Humble) 사이 통신, Wi-Fi로 영상을 보낼 때의 부하, Jetson의 `debug:=true` 부하를 확인해야 한다. 끊기면 RViz의 영상 패널부터 끈다.
+- **실차 미확인:** 로봇에서는 아직 돌려 보지 않았다. 노트북과 로봇 사이 통신, Wi-Fi로 영상을 보낼 때의 부하, Jetson의 `debug:=true` 부하를 확인해야 한다. 끊기면 RViz의 영상 패널부터 끈다.
 
 ## 기존 코드에서 바꾼 부분
 - `clothoid_lane/lane_detector.py`: `LaneResult`에 `left_points`, `right_points` 추가. 조향과 추종점 계산은 그대로다.

@@ -8,8 +8,16 @@ The hardware packages (`limo_msgs`, `orbbec_camera`, `ydlidar_ros2_driver`) are 
 
 ## Ubuntu host
 ```bash
-xhost +local:root
-LOCAL_USER_ID=$(id -u) docker compose -f docker/docker-compose.yml run --rm dev
+xhost +local:root   # once per login, lets the container open windows (RViz)
+docker compose -f docker/docker-compose.yml build   # first time, and after the Dockerfile changes
+LOCAL_USER_ID=$(id -u) docker compose -f docker/docker-compose.yml run --rm --name clothoid-dev dev
+```
+This opens a shell inside the container. ROS Humble and the workspace are already sourced. `exit` stops the
+container and every other terminal attached to it; files stay on the host because the repo is mounted.
+
+More terminals into the same container:
+```bash
+docker exec -it -u user clothoid-dev bash
 ```
 Ubuntu 24.04 defaults to Wayland; if GUI windows do not appear, log in with an Xorg session.
 
@@ -30,3 +38,22 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 `rosdep install` is not needed here; hardware packages are marked as exec dependencies only.
+
+The repo is mounted, not copied: edit on the host, build and run in the container. Python edits apply at once
+with `--symlink-install`; rebuild after adding files or changing `setup.py`. Do not build this `ros2_ws` on
+the host too. Results from another ROS version end up in the same `build/` and `install/`.
+
+## Replay a bag with RViz
+Bags go under `bag/` in the repo, with `metadata.yaml` and the `.db3` in one folder. Symlinks must be relative,
+because the repo is at `/home/user/Clothoid-A` in the container. Run these in three terminals:
+```bash
+ros2 launch clothoid_debug bag.launch.py
+rviz2 -d ~/Clothoid-A/ros2_ws/src/clothoid_debug/rviz/decision.rviz --ros-args -p use_sim_time:=true
+ros2 bag play ~/Clothoid-A/bag/<bag folder> --clock
+```
+See `ros2_ws/src/clothoid_debug/README.md` for what is on the screen.
+
+## Notes
+- The container shares the host network and takes `ROS_DOMAIN_ID` from the host shell (42 if unset). When
+  replaying a bag, use a different number from any robot running `twist_mux`, or the replayed commands can reach it.
+- No GPU is mapped, so RViz renders on the CPU. `libGL error` lines at start are expected and the window still works.
