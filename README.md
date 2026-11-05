@@ -15,6 +15,7 @@ ros2_ws/src/
   clothoid_lidar/        obstacle extraction, rubber cone course
   clothoid_parking/      T-parking
   clothoid_mission/      mission state logic (stop / slow / direction / parking signals)
+  clothoid_debug/        RViz view of what the nodes saw and decided, live or on a bag; sends no drive command
 docker/                  dev image for laptops (Humble, amd64)
 scripts/env_jetson.sh    environment for the LIMO
 docs/                    MIGRATION_PLAN.md, INTERFACES.md, PACKAGES.md, FIELD_TEST.md, PORTING_GUIDE.md

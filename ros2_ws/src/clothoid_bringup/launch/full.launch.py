@@ -4,6 +4,8 @@
     ros2 launch clothoid_bringup full.launch.py use_yolo:=false use_parking:=false
     ros2 launch clothoid_bringup full.launch.py debug:=true backend:=ultralytics model_path:=/path/best.pt
 
+`debug:=true` also starts clothoid_debug/decision_viz; open clothoid_debug/rviz/decision.rviz to watch it.
+
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
 see docs/PACKAGES.md). Platform-only arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`)
@@ -54,4 +56,6 @@ def generate_launch_description():
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
+        # with debug on, also publish what rviz/decision.rviz shows
+        include('clothoid_debug', 'viz.launch.py', condition=enabled('debug')),
     ])
