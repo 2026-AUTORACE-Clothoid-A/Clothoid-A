@@ -48,6 +48,10 @@ def generate_launch_description():
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false',
                               description='fuse /odom and /imu into /odometry/filtered'),
+        DeclareLaunchArgument('steering_scale', default_value='2.47',
+                              description='limo_base: inner wheel angle per body value (official 2.47)'),
+        DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
+                              description='limo_base: inner wheel limit in rad (official 28 deg)'),
 
         # URDF: base_link -> laser_link, imu_link, wheels
         include('limo_description', 'launch', 'load_urdf.launch.py'),
@@ -59,7 +63,8 @@ def generate_launch_description():
         static_tf('camera_link_to_optical', 'camera_link', 'camera_color_optical_frame',
                   xyz=(0, 0, 0), rpy=('-1.5708', '0', '-1.5708')),
 
-        include('limo_base', 'launch', 'limo_base.launch.py'),
+        include('limo_base', 'launch', 'limo_base.launch.py', args={
+            name: LaunchConfiguration(name) for name in ('steering_scale', 'max_inner_angle')}),
 
         # DaBai DC1 runs on astra_stereo_u3.launch.py. Color only; the driver's own TF has a
         # unit error (29 m), so publish_tf is off and we publish the TF above.
