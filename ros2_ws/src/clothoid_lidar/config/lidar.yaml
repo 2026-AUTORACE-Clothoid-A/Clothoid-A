@@ -19,7 +19,10 @@ obstacle_extractor:
 
 cone_sorter:
   ros__parameters:
-    max_dist_between_cones: 0.5  # 0.6 bridged to the other row on the 11-03 bags
+    trace_method: dfs2025    # dfs2025 (search with costs, 2025 launch values) or greedy
+    # dfs2025 on the 11-03 and 11-05 bags: 0.4 keeps every target between the rows, 0.5 put 4~6
+    # targets outside on cone1/cone2 and 0.6 bridged to the other row
+    max_dist_between_cones: 0.4
     max_trace_length: 20
     threshold_directional_angle_deg: 45.0
     first_step_angle_deg: 90.0   # the corridor can be at an angle to the car at the first cone
