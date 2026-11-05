@@ -103,5 +103,40 @@
 - [ ] `ROS_DOMAIN_ID`를 차마다 다르게.
 - [ ] 출발 전 `git bundle` 백업, Jetson에서 pull + 빌드 완료.
 
+### 9. 미션 이음새 점검 (2026-11-05, 코드 기준)
+mux는 출력 타이머가 없다. 입력 메시지가 올 때만 내보내고, 0을 스스로 보내지 않는다. 그래서 제어하던 입력이 조용해지면, 아래 입력의 다음 메시지가 오거나 `limo_base` `cmd_timeout`(0.5 s) 워치독이 0을 보낼 때까지 **마지막 명령이 계속 실행된다.**
+
+| # | 위험 | 근거 | 제안 | 담당 |
+|---|---|---|---|---|
+| R1 | 넘겨주는 순간 마지막 명령이 0.5 s 남는다(주차 마지막 스텝, 콘 후진 −0.2 m/s) | `parking_node.py` 완료 뒤 침묵, `cone_follower` 종료 시 침묵 | 발행을 멈출 때 `Twist(0)` 1회 | parking, 라이다 |
+| R2 | 신호등 정지에 상한 시간이 없다. 녹색을 놓치거나 YOLO가 죽으면 영원히 정지한다 | `mission_logic.py:97-100` | `stop_max_sec`(5번 와치독) | 주영 |
+| R3 | 신호등 대기(8 s) 중 다른 정지선(횡단보도)이 보이면 신호등 정지를 한다 | `arm_timeout_sec` 8, 정지선 종류 구분 없음 | 대기 시간 단축, 또는 횡단보도 정지선과 구분 | 주영 |
+| R4 | 신호등이 풀리면 대기 중이던 보행자 정지 3.5 s가 이어서 걸릴 수 있다 | 풀릴 때 `light_armed_at`만 지움 | 정지가 풀릴 때 다른 대기도 지움 | 주영 |
+| R5 | `/parking_done`을 아무도 읽지 않는다. `/parking_flag`가 끝까지 참이라 lane이 주차 모드(폭 231, 갈림길 무시)로 남는다 | `Inputs.parking_done`이 `step()`에서 쓰이지 않음 | 완료 뒤 flag 해제, lane 폭 복원 | 주영, 차선 |
+| R6 | 주차가 다시 시작될 수 있다. 파라미터를 바꾸거나 노드를 재시작하면 시퀀스가 새로 생기고, flag는 1 s마다 다시 온다. 시작선 HSV가 차선 노랑 범위를 포함한다 | `parking_node.py:107-108,143`, `parking.yaml:41-42` | 완료 상태를 flag 해제(R5)로 막는다 | parking |
+| R7 | 콘 모드가 아무 데서나 켜지고 mission이 막지 않는다. 한쪽 경계만 보이면 후진한다 | 1105 bag, `cone_follower.py:202-209` | 7-3 요청에 추가, LIDAR 세션에 전달(2026-11-05) | 라이다 |
+| R8 | `/speed_limit`은 lane에만 적용된다(콘·주차는 무시) | `lane_main.py` 구독만 있음 | 콘 구간 서행이 필요한지 규정 확인 | – |
+| R9 | 재시작하면 상태가 다 사라진다. transient_local도 respawn도 없다. 2회차는 노드 전부 재시작이 필요하다 | 6번 | `/mission/reset` | 주영 |
+
+- 먼저 할 것: R2, R5, R1. R2와 R5는 mission 노드 안에서 끝나므로 설계 승인 뒤 바로 할 수 있다.
+- 기본값 주의: `full.launch.py` `backend:=none`이면 `/detections`가 늘 비어 있어 신호등·보행자·갈림길·주차가 하나도 켜지지 않는다.
+
+### 10. 런치를 껐다 켜면 mux가 멈추는 문제 (작년 대회장)
+- 작년 시스템은 ROS1 Noetic(`roscore` + `ackermann_cmd_mux`, `MIGRATION_PLAN.md`)이었다. 원인 기록은 없다.
+- 작년 쪽 가설: 대회장 네트워크에 붙으면 NTP가 시계를 크게 옮긴다. ROS1 타이머는 시계가 뒤로 가면 멈출 수 있다. 연습장(인터넷 없음)에서 재현되지 않았고 재부팅으로만 풀렸다는 점과 맞는다.
+- 올해(ROS 2, Fast DDS 기본)도 "차가 안 움직이고 재부팅하면 풀리는" 같은 증상을 낼 수 있는 원인이 있다.
+
+| # | 원인 후보 | 확인 | 정리 |
+|---|---|---|---|
+| 1 | Ctrl+C 뒤에도 프로세스가 남는다(PC에서 `ros2 run` kill로 확인). `limo_base`는 시리얼 read 스레드를 join하지 않고 블로킹 read에 머문다(`limo_driver.cpp:138,153`). 새 `limo_base`는 포트를 못 열면 `exit(-1)`한다(`limo_driver.cpp:131-151`). twist_mux가 둘이면 출력이 겹친다 | `ps -ef \| grep -E 'twist_mux\|limo_base'`, `lsof /dev/ttylimo`, `ros2 node list`에서 중복 확인 | PID로 kill, 안 되면 `kill -9` |
+| 2 | Fast DDS 공유메모리 잔여물. 비정상 종료 뒤 `/dev/shm/fastrtps_*`가 남으면 같은 기기 안 노드끼리 통신이 끊길 수 있고 재부팅하면 풀린다 | `ls /dev/shm` | 모든 노드를 끈 뒤 `fastdds shm clean` |
+| 3 | 대회장에서만: `ROS_DOMAIN_ID` 충돌. `CLOTHOID_REMOTE=1`로 노트북을 붙이면 같은 도메인의 다른 팀 `/cmd_vel`·`/estop`이 섞인다 | `ros2 topic info -v /cmd_vel`(낯선 노드) | 차마다 다른 도메인(8번) |
+| 4 | 대회장에서만: NTP 시계 점프. twist_mux 타임아웃은 노드 시계(`now()`)로 잰다 | `timedatectl`, 대회장 Wi-Fi 연결 전후 비교 | 주행 중 NTP 끄기 검토 |
+| 5 | arm lock: `require_arm:=true`(기본)에서 `/estop false` 발행 없이 다시 실행하면 정상적으로 침묵한다 | `ros2 topic hz /estop` | 대회는 `require_arm:=false` |
+
+- 제안(설계 승인 뒤): `scripts/preflight.sh`. 1~4를 확인하고 `--clean`이면 남은 프로세스와 공유메모리를 정리한다. 런치를 다시 켜기 전에 매번 돌린다.
+- launch의 노드에 `sigterm_timeout`을 짧게 준다.
+- FIELD_TEST에 "런치 10회 껐다 켜기 + 매번 `/cmd_vel` 확인" 시험을 넣는다. 연습장에서도 대회장처럼 Wi-Fi에 붙여서 해 본다.
+
 ## 지금은 못 하는 것 (플랫폼 실험 필요)
 바닥 원 주행으로 `steering_scale` 확정, RC 우선순위와 `control_mode`, 라이다 0° 방향과 TF 실측, 트랙 조명 fps와 노출 고정, 세 `warp_*` 재튜닝, `motion_mode` 순간 변화 확인. 순서는 `FIELD_TEST.md`.
