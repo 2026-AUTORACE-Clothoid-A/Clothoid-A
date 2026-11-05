@@ -2,8 +2,8 @@
 # Keep the warp values equal to lane.yaml. Floats need a decimal point.
 stopline:
   ros__parameters:
-    warp_x_h: 70
-    warp_x_l: 550
+    warp_x_h: -28
+    warp_x_l: 370
     warp_y_h: 70
     warp_y_l: 40
     crop_x: 40

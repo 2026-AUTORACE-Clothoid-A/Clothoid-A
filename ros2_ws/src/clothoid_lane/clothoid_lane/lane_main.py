@@ -7,7 +7,7 @@ as in 2025 and converted to angular.z with the bicycle model: w = v * tan(delta)
 import math
 
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
@@ -74,6 +74,10 @@ class LaneMainNode(Node):
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
         self.debug_pub = self.create_publisher(
             Image, self.get_parameter('debug_image_topic').value, 1)
+        # debug only, warped image pixels (clothoid_debug draws them): target z = 1 found, 0 lost
+        self.target_pub = self.create_publisher(PointStamped, '/lane/target_warp', 1)
+        self.left_pub = self.create_publisher(PolygonStamped, '/lane/left_warp', 1)
+        self.right_pub = self.create_publisher(PolygonStamped, '/lane/right_warp', 1)
         self.create_subscription(
             Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
         self.create_subscription(
@@ -148,6 +152,17 @@ class LaneMainNode(Node):
                 speed = min(speed, self.speed_limit)
         return speed
 
+    def _publish_debug_points(self, result, header):
+        for pub, points in ((self.left_pub, result.left_points),
+                            (self.right_pub, result.right_points)):
+            poly = PolygonStamped(header=header)
+            poly.polygon.points = [Point32(x=float(x), y=float(y)) for x, y in points]
+            pub.publish(poly)
+        target = PointStamped(header=header)
+        target.point.x, target.point.y = result.target_x, result.target_y
+        target.point.z = 1.0 if result.found else 0.0
+        self.target_pub.publish(target)
+
     # --- main loop --------------------------------------------------------------
     def on_image(self, msg: Image):
         try:
@@ -161,6 +176,8 @@ class LaneMainNode(Node):
 
         if debug and result.debug_image is not None:
             self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
+        if debug:
+            self._publish_debug_points(result, msg.header)
 
         now = self.get_clock().now()
         if result.found:

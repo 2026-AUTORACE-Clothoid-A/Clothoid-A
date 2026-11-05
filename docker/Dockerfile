@@ -30,6 +30,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         ros-humble-rosbag2-storage-mcap \
     && rm -rf /var/lib/apt/lists/*
 
+# Competition simulator (simul/, not in git): Panda3D from pip, Qt and Tk from apt. Do not pip install
+# PyQt5, it would shadow the apt build that rqt and RViz tools need.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-tk python3-pyqt5 \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir panda3d==1.10.16
+
 # Non-root user; the entrypoint remaps its uid to LOCAL_USER_ID
 RUN useradd --shell /bin/bash -u 1000 -m user \
     && echo "user ALL=(root) NOPASSWD:ALL" > /etc/sudoers.d/user \
