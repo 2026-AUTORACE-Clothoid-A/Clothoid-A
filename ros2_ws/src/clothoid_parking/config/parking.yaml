@@ -31,9 +31,9 @@ parking:
     range_limit: 0.34
     sensor_step_max_sec: 3.0       # new: stop waiting for the lidar after this long
 
-    # start line (2025 values, retune with lane.yaml's warp)
-    x_h: 70
-    x_l: 550
+    # start line (warp equal to lane.yaml, the rest are 2025 values to retune)
+    x_h: -28
+    x_l: 370
     y_h: 70
     y_l: 40
     crop_x: 40
