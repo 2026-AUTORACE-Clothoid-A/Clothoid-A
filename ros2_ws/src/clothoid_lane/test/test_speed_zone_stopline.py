@@ -14,6 +14,8 @@ from clothoid_lane.speed_zone import (  # noqa: E402
 from clothoid_lane.stopline import StopLineDetector, StopLineParams  # noqa: E402
 
 RED = (0, 0, 255)  # BGR
+WHITE = (255, 255, 255)
+COLOR = SpeedZoneParams(method='color')  # 2025 red_road
 
 
 def frame_with_red_patch(w=200, h=60):
@@ -24,7 +26,7 @@ def frame_with_red_patch(w=200, h=60):
 
 
 def test_speed_zone_detects_red_patch_in_roi():
-    result = SpeedZoneDetector(SpeedZoneParams()).detect(frame_with_red_patch())
+    result = SpeedZoneDetector(COLOR).detect(frame_with_red_patch())
     assert result.found
     assert result.area > 1800
 
@@ -32,15 +34,15 @@ def test_speed_zone_detects_red_patch_in_roi():
 def test_speed_zone_ignores_patch_outside_roi():
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     cv2.rectangle(frame, (200, 100), (400, 160), RED, -1)  # upper half, outside the ROI
-    assert not SpeedZoneDetector(SpeedZoneParams()).detect(frame).found
+    assert not SpeedZoneDetector(COLOR).detect(frame).found
 
 
 def test_speed_zone_ignores_small_patch():
-    assert not SpeedZoneDetector(SpeedZoneParams()).detect(frame_with_red_patch(20, 20)).found
+    assert not SpeedZoneDetector(COLOR).detect(frame_with_red_patch(20, 20)).found
 
 
 def test_speed_zone_debug_image_is_full_frame():
-    result = SpeedZoneDetector(SpeedZoneParams()).detect(frame_with_red_patch(), debug=True)
+    result = SpeedZoneDetector(COLOR).detect(frame_with_red_patch(), debug=True)
     assert result.debug_image.shape == (480, 640, 3)
 
 
@@ -65,6 +67,63 @@ def test_speed_zone_hold_keeps_active_then_releases():
     assert hold.update(False, 1.9)            # inside the hold window
     assert not hold.update(False, 2.2)        # expired
     assert hold.update(True, 3.0)             # re-armed by a new detection
+
+
+# --- slow zone, method diamond (2026) ---------------------------------------------------
+
+def frame_with(draw):
+    frame = np.full((480, 640, 3), 40, dtype=np.uint8)  # dark floor
+    draw(frame)
+    return frame
+
+
+def diamond(cx=320, cy=330, rx=90, ry=40):
+    return np.array([[cx, cy - ry], [cx + rx, cy], [cx, cy + ry], [cx - rx, cy]], np.int32)
+
+
+def hollow_diamond(frame, thickness=9):
+    cv2.polylines(frame, [diamond()], True, WHITE, thickness)
+
+
+def test_diamond_outline_is_found():
+    result = SpeedZoneDetector(SpeedZoneParams()).detect(frame_with(hollow_diamond))
+    assert result.found
+    assert len(result.diamonds) == 1
+
+
+def test_filled_diamond_is_not_a_mark():
+    # the 2026 mark is an outline; a solid white diamond has no hole
+    frame = frame_with(lambda f: cv2.fillPoly(f, [diamond()], WHITE))
+    assert not SpeedZoneDetector(SpeedZoneParams()).detect(frame).found
+
+
+def test_stop_line_and_crosswalk_are_not_marks():
+    def draw(f):
+        cv2.rectangle(f, (100, 400), (540, 420), WHITE, -1)              # stop line
+        for x in range(120, 520, 80):
+            cv2.rectangle(f, (x, 300), (x + 40, 380), WHITE, -1)         # crosswalk bars
+    assert not SpeedZoneDetector(SpeedZoneParams()).detect(frame_with(draw)).found
+
+
+def test_hollow_rectangle_is_not_a_diamond():
+    # fills its bounding box: a parking-box outline, not a rhombus
+    frame = frame_with(lambda f: cv2.rectangle(f, (200, 290), (440, 380), WHITE, 9))
+    assert not SpeedZoneDetector(SpeedZoneParams()).detect(frame).found
+
+
+def test_diamond_above_the_search_band_is_ignored():
+    frame = frame_with(lambda f: cv2.polylines(f, [diamond(cy=90)], True, WHITE, 9))
+    assert not SpeedZoneDetector(SpeedZoneParams()).detect(frame).found
+
+
+def test_diamond_debug_image_is_full_frame():
+    result = SpeedZoneDetector(SpeedZoneParams()).detect(frame_with(hollow_diamond), debug=True)
+    assert result.debug_image.shape == (480, 640, 3)
+
+
+def test_speed_zone_rejects_unknown_method():
+    with pytest.raises(ValueError):
+        SpeedZoneDetector(SpeedZoneParams(method='triangle'))
 
 
 # --- stop line -----------------------------------------------------------------------

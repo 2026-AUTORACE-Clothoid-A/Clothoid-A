@@ -1,8 +1,22 @@
-# Floor-mark slow zone (2025 red_road). Values are from the 2025 red/blue road and must be
-# re-tuned on the real 2026 track mark. Float parameters must be written with a decimal
-# point (0.2, not 0): ROS2 rejects an integer for a double parameter.
+# Floor-mark slow zone. Float parameters must be written with a decimal point (0.2, not 0):
+# ROS2 rejects an integer for a double parameter.
 speed_zone:
   ros__parameters:
+    # diamond: the white diamond outline of the 2026 track (all three slow zones have one).
+    # color: the 2025 red_road patch (roi_* and hsv_ranges below).
+    method: diamond
+
+    # --- method diamond, measured on the 2026-11-05 bags 02 and 03 (camera image px) ---
+    white_s_max: 60          # white = S <= 60 and V >= 170 (floor S 0~35, V 35~65)
+    white_v_min: 170
+    diamond_y0: 0.40         # search the image below 40 % of its height
+    diamond_min_area: 400.0  # the diamond is ~440 px^2 when it first gets that low, ~3 s before the car
+    diamond_fill_min: 0.44   # area / bounding box: diamonds 0.47~0.52, bars and stop lines 0.75+
+    diamond_fill_max: 0.56
+    diamond_hole_min: 0.33   # hole / area: diamonds 0.37~0.57, solid marks 0~0.05
+    diamond_approx: 0.04     # approxPolyDP tolerance, fraction of the outline length
+
+    # --- method color (2025 red_road) ---
     roi_x0: 0.25
     roi_x1: 0.75
     roi_y0: 0.75
@@ -10,6 +24,8 @@ speed_zone:
     # groups of 6 integers: h_lo s_lo v_lo h_hi s_hi v_hi, OR-ed (this is 2025 red)
     hsv_ranges: [0, 100, 100, 10, 255, 255, 170, 100, 0, 180, 255, 255]
     min_area: 1800.0
+
+    # --- both ---
     slow_speed: 0.2      # rules: 0.2 m/s or less
-    hold_sec: 1.0        # keep slowing after the mark is gone
+    hold_sec: 1.0        # keep slowing after the mark is gone (retune: how long the zone lasts after the diamond)
     # debug (default false) is set by the launch argument `debug:=true`: true publishes /speed_zone/debug_image

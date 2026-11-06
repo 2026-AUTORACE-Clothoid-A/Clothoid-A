@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Floor-mark slow zone node (ROS2 port of 2025 `red_road`).
+"""Floor-mark slow zone node: the white diamond of the 2026 track (`method: diamond`) or the
+2025 `red_road` colour patch (`method: color`), see speed_zone.py.
 
 Publishes `/speed_limit` (Float32) while a mark is under the car and for `hold_sec` after.
 It never publishes a release value: lane_main drops the limit by itself when the heartbeat
@@ -15,6 +16,10 @@ from std_msgs.msg import Float32
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.speed_zone import (SpeedZoneDetector, SpeedZoneHold, SpeedZoneParams)
 
+# method `diamond` parameters, declared with the SpeedZoneParams defaults
+DIAMOND_PARAMS = ('white_s_max', 'white_v_min', 'diamond_y0', 'diamond_min_area',
+                  'diamond_fill_min', 'diamond_fill_max', 'diamond_hole_min', 'diamond_approx')
+
 
 class SpeedZoneNode(Node):
     def __init__(self):
@@ -25,6 +30,9 @@ class SpeedZoneNode(Node):
         self.declare_parameter('debug_image_topic', '/speed_zone/debug_image')
 
         d = SpeedZoneParams()
+        self.declare_parameter('method', d.method)
+        for name in DIAMOND_PARAMS:
+            self.declare_parameter(name, getattr(d, name))
         self.declare_parameter('roi_x0', d.roi_x0)
         self.declare_parameter('roi_x1', d.roi_x1)
         self.declare_parameter('roi_y0', d.roi_y0)
@@ -52,6 +60,7 @@ class SpeedZoneNode(Node):
     @staticmethod
     def _build(value) -> SpeedZoneParams:
         return SpeedZoneParams(
+            method=value('method'), **{name: value(name) for name in DIAMOND_PARAMS},
             roi_x0=value('roi_x0'), roi_x1=value('roi_x1'),
             roi_y0=value('roi_y0'), roi_y1=value('roi_y1'),
             hsv_ranges=tuple(value('hsv_ranges')), min_area=value('min_area'),
