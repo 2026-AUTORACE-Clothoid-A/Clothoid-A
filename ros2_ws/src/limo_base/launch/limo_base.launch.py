@@ -31,8 +31,8 @@ def generate_launch_description():
 
     # simulated_robot_arg = DeclareLaunchArgument('simulated_robot', default_value='false',
     #                                                description='Whether running with simulator')
-    steering_scale_arg = DeclareLaunchArgument('steering_scale', default_value='2.47',
-                                               description='inner wheel angle (rad) per body steering value, official 2.47')
+    steering_scale_arg = DeclareLaunchArgument('steering_scale', default_value='1.06',
+                                               description='inner wheel angle (rad) per body steering value, measured on limo2 (official 2.47)')
     max_inner_angle_arg = DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
                                                  description='inner wheel limit in rad, official 28 deg')
     cmd_timeout_arg = DeclareLaunchArgument('cmd_timeout', default_value='0.5',

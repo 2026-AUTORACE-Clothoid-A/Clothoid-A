@@ -2,13 +2,10 @@
 
 ROS-free. Ported from 2025 `cone_sorter_node.cpp`:
   * course start / continue zones and first-cone selection: same logic and parameters.
-  * boundary tracing: SIMPLIFIED. 2025 searched every cone chain through an adjacency graph
-    with DFS and scored them with seven weighted costs (angle, residual distance, number of
-    cones, initial / changing direction, cones on either side, wrong direction). Here each
-    side is a greedy nearest-neighbour chain from its first cone, limited by the cone gap and
-    the turning angle. Good enough for a clean gate; upgrade it from the 2025 source
-    (`git show ros1-2025:webot_ws/src/rubber_cone/src/cone_sorter_node.cpp`) if cones are
-    dense or noisy.
+  * boundary tracing: `trace_method` picks one.
+    `dfs2025` (default): the 2025 search over every chain with weighted costs, see cone_trace.py.
+    `greedy`: a simpler chain from the first cone of each side to the nearest unused cone, limited by
+    the cone gap and the turning angle.
 All points are in base_link (x forward, y left).
 """
 from dataclasses import dataclass, field
@@ -16,15 +13,21 @@ from typing import List, Optional
 
 import numpy as np
 
+from clothoid_lidar.cone_trace import best_chains
+
 LEFT = +1
 RIGHT = -1
 
 
 @dataclass
 class SorterParams:
+    trace_method: str = 'dfs2025'         # dfs2025 or greedy
     max_dist_between_cones: float = 0.4   # m, max gap inside one boundary
     max_trace_length: int = 20            # cones per boundary
     threshold_directional_angle_deg: float = 45.0  # max turn between two chain segments
+    # first step of a chain, measured from the car's heading. The first cone is beside the car and the
+    # corridor can already be at an angle to it, so this is wider than the limit between segments.
+    first_step_angle_deg: float = 45.0
     # first cone of each side
     angle_from_left_first_cone: float = 45.0  # deg from +x, mirrored for the right side
     dist_from_left_first_cone: float = 0.7    # m
@@ -41,6 +44,23 @@ class SorterParams:
     ing_y_min: float = -1.0
     ing_y_max: float = 1.0
     ing_min_count: int = 4
+    # dfs2025 only, 2025 launch values
+    max_n_neighbors: int = 10
+    threshold_absolute_angle_deg: float = 60.0
+    ellipse_major_radius_factor: float = 2.0
+    ellipse_minor_radius_factor: float = 1.0
+    len_override_factor: float = 2.0
+    car_size: float = 0.5                 # m, chains may not cross the car
+    angle_cost_threshold_deg: float = 45.0
+    residual_dist_threshold: float = 0.0  # m, 0 = max_dist_between_cones
+    wrong_dir_threshold_deg: float = 45.0
+    w_angle_cost: float = 1000.0
+    w_residual_dist_cost: float = 200.0
+    w_num_cones_cost: float = 5000.0
+    w_initial_dir_cost: float = 1000.0
+    w_change_dir_cost: float = 2000.0
+    w_wrong_dir_cost: float = 1000.0
+    max_search_nodes: int = 3000          # bounds the time of one search, not in 2025
 
 
 @dataclass
@@ -96,7 +116,7 @@ class ConeSorter:
     def trace(self, cones: np.ndarray, start: int, used: set) -> List[int]:
         """Greedy chain: nearest unused cone within the gap, without a sharp turn."""
         p = self.p
-        max_turn = np.radians(p.threshold_directional_angle_deg)
+        max_turn = np.radians(p.first_step_angle_deg)
         chain = [start]
         heading = np.array([1.0, 0.0])
         while len(chain) < p.max_trace_length:
@@ -117,6 +137,7 @@ class ConeSorter:
                 break
             step = cones[best] - here
             heading = step / np.hypot(*step)
+            max_turn = np.radians(p.threshold_directional_angle_deg)
             chain.append(best)
         return chain
 
@@ -132,6 +153,12 @@ class ConeSorter:
             return SortResult(
                 left=cones[[first_left]] if first_left is not None else np.zeros((0, 2)),
                 right=cones[[first_right]] if first_right is not None else np.zeros((0, 2)))
+
+        if self.p.trace_method == 'dfs2025':
+            points = [(float(x), float(y)) for x, y in cones]
+            left, right = best_chains(points, first_left, first_right, self.p, LEFT, RIGHT)
+            return SortResult(left=cones[left] if left else np.zeros((0, 2)),
+                              right=cones[right] if right else np.zeros((0, 2)))
 
         used = {i for i in (first_left, first_right) if i is not None}
         left = self.trace(cones, first_left, used - {first_left}) if first_left is not None else []

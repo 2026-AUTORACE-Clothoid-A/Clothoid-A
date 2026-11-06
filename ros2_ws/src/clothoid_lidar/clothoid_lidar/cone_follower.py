@@ -50,6 +50,7 @@ class FollowResult:
     steering: float                # rad, + left
     reverse: bool = False
     center: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)), repr=False)
+    target: Optional[np.ndarray] = field(default=None, repr=False)   # look-ahead point, base_link
 
 
 def _arc_length(points: np.ndarray) -> np.ndarray:
@@ -167,26 +168,26 @@ def _pairwise_center(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     return left if len(left) else right
 
 
-def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
-    """Pure pursuit steering (rad, + left) towards the look-ahead point of the centre line."""
+def look_ahead_point(center: np.ndarray, params: FollowerParams) -> Optional[np.ndarray]:
+    """The centre line point `lfd` along from the closest one, or its end if the line is shorter."""
     n = len(center)
     if n == 0:
-        return 0.0
+        return None
     closest = int(np.argmin(np.sum(center ** 2, axis=1)))
 
-    target = None
     acc = 0.0
     for i in range(closest + 1, n):
         acc += float(np.linalg.norm(center[i] - center[i - 1]))
         if acc >= params.lfd:
-            target = center[i]
-            break
-    if target is None:
-        if n > closest + 1:
-            target = center[-1]
-        else:
-            return 0.0
+            return center[i]
+    return center[-1] if n > closest + 1 else None
 
+
+def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
+    """Pure pursuit steering (rad, + left) towards the look-ahead point of the centre line."""
+    target = look_ahead_point(center, params)
+    if target is None:
+        return 0.0
     theta = np.arctan2(target[1], target[0] + params.rear_axle_x)
     return float(np.arctan2(2.0 * params.wheelbase * np.sin(theta), params.lfd))
 
@@ -211,4 +212,5 @@ class ConeFollower:
         center = build_center_line(left, right, p)
         if len(center) == 0:
             return None
-        return FollowResult(p.speed, compute_steering(center, p), center=center)
+        return FollowResult(p.speed, compute_steering(center, p), center=center,
+                            target=look_ahead_point(center, p))
