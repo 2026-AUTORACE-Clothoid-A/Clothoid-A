@@ -74,6 +74,16 @@ def test_yellow_mask_ignores_white_marks():
     assert abs(marked.target_x - clean.target_x) <= 2
 
 
+def test_wide_yellow_blob_is_not_a_lane():
+    # a wide yellow block (yellow cone) between the lines must not pull the right windows
+    frame = make_frame(160, 480)
+    cv2.rectangle(frame, (330, 150), (430, 479), (0, 230, 230), -1)
+    clean = detector().detect(make_frame(160, 480), SIDE_RIGHT, lane_width=100)
+    coned = detector().detect(frame, SIDE_RIGHT, lane_width=100)
+    assert coned.found
+    assert abs(coned.target_x - clean.target_x) <= 2
+
+
 def test_white_lanes_use_canny_when_no_yellow():
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     for x in (160, 480):
