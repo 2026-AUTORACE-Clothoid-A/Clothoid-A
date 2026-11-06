@@ -5,7 +5,6 @@ Start the simulator first, see docker/README.md. It stands in for the sensors an
 """
 import os
 
-import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import GroupAction, IncludeLaunchDescription
@@ -23,9 +22,8 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(share(package, 'launch', launch_file)),
             launch_arguments=(args or {}).items())
 
-    with open(share('clothoid_lane', 'config', 'lane.yaml')) as f:
-        lane = yaml.safe_load(f)['lane_main']['ros__parameters']
-    warp = {k: lane[k] for k in ('warp_x_h', 'warp_x_l', 'warp_y_h', 'warp_y_l')}
+    # the simulator camera uses limo1's warp
+    warp = share('clothoid_lane', 'config', 'camera_limo1.yaml')
 
     return LaunchDescription([
         GroupAction([

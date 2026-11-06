@@ -1,0 +1,12 @@
+# Camera profile of limo2, see camera_limo1.yaml.
+# 2026-11-07: the vanishing point of a straight lane is at row 227 (limo1 bags: 171), so the camera
+# looks 6.5 deg higher than limo1's (pitch -0.021 rad, slightly up). The warp below is limo1's ground
+# area seen with that pitch, moved 4 cm forward because limo2 does not see the floor closer than
+# 0.37 m: 0.37~0.69 m ahead, same width, a straight lane is again parallel and 170 px wide.
+/**:
+  ros__parameters:
+    warp_x_h: -16
+    warp_x_l: 327
+    warp_y_h: 120
+    warp_y_l: 2
+    camera_pitch: -0.021

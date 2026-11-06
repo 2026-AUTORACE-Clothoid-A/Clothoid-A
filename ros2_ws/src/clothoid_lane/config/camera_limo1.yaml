@@ -1,0 +1,12 @@
+# Camera profile: bird's-eye warp of one LIMO. Picked with the launch argument `camera:=limo1|limo2`
+# and loaded after lane.yaml / stopline.yaml by lane_main, stopline and decision_viz ("/**").
+# The cameras of the two cars are not mounted at the same angle, so one warp does not fit both.
+/**:
+  ros__parameters:
+    # set on limo1 from straight-lane frames, lens 18.7~19 cm above the floor: the warped image
+    # covers 0.33~0.65 m ahead, +-0.48 m to the sides, a 0.5 m lane is 170 px wide
+    warp_x_h: -28
+    warp_x_l: 370
+    warp_y_h: 70
+    warp_y_l: 40
+    camera_pitch: 0.080        # rad, decision_viz ground projection (bags: vanishing point row 171)
