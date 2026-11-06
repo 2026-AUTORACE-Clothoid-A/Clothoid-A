@@ -145,18 +145,20 @@ class LaneDetector:
         y0 = max(0, p.height // 2 + p.y_h)
         y1 = min(hsv_mask.shape[0], p.height - p.y_l)
         binary = (hsv_mask > 0).astype(np.uint8)
-        n, labels = cv2.connectedComponents(binary)
-        if n <= 1:
+        # a blob is thicker than the limit iff one of its pixels is farther than half the limit
+        # from the blob edge. Most frames have no such pixel, so this exits before labelling.
+        deep = cv2.distanceTransform(binary, cv2.DIST_L2, 5) > p.yellow_max_thickness / 2
+        if not deep.any():
             return out
-        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
-        # largest distance to an edge per blob = half its thickness
-        half = np.zeros(n, np.float32)
-        np.maximum.at(half, labels.ravel(), dist.ravel())
+        n, labels = cv2.connectedComponents(binary)
+        is_cone = np.zeros(n, bool)
+        is_cone[np.unique(labels[deep])] = True
         in_band = np.zeros(n, bool)
         in_band[np.unique(labels[y0:y1])] = True
-        thick = np.nonzero(in_band[1:] & (2 * half[1:] > p.yellow_max_thickness))[0] + 1
-        if thick.size:
-            out[np.isin(labels, thick)] = 255
+        is_cone &= in_band
+        is_cone[0] = False
+        if is_cone.any():
+            out[is_cone[labels]] = 255
         return out
 
     def _sliding_window(self, warped: np.ndarray, side: int, lane_width: int,
