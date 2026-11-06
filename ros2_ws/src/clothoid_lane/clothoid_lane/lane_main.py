@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Lane following node (ROS2 port of 2025 `lane_main.py`).
 
+The lane detector is picked with `detector`: `track2026` (default, lane_tracker.py: yellow outer
+lines, white dividers between them, boundaries tracked between frames) or `sliding2025` (the 2025
+detector, lane_detector.py). Both return a target point in the warped image; the steering below is
+the 2025 one for both.
+
 Publishes a Twist on `cmd_topic` (a twist_mux input). Steering is computed the same way
 as in 2025 and converted to angular.z with the bicycle model: w = v * tan(delta) / wheelbase.
 """
@@ -15,6 +20,14 @@ from std_msgs.msg import Bool, Float32, Int32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
+from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
+
+DETECTORS = ('track2026', 'sliding2025')
+TRACKER_FIELDS = tuple(TrackerParams.__dataclass_fields__)
+# parameters that need a new detector (rebuilding one also clears the tracked lines)
+DETECTOR_PARAMS = {'detector', 'width', 'height', 'warp_w', 'warp_h', 'warp_x_h', 'warp_x_l',
+                   'warp_y_h', 'warp_y_l', 'nwindows', 'margin', 'min_pixels', 'hsv_lower',
+                   'hsv_upper', 'canny_low', 'canny_high', *TRACKER_FIELDS}
 
 
 class LaneMainNode(Node):
@@ -42,7 +55,11 @@ class LaneMainNode(Node):
         self.declare_parameter('lane_width', 103)
         self.declare_parameter('parking_lane_width', 140)
 
-        # detector
+        # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or
+        # sliding2025 (the 2025 port, lane_detector.py)
+        self.declare_parameter('detector', 'track2026')
+        for name, value in TrackerParams().__dict__.items():
+            self.declare_parameter(name, value)
         defaults = LaneParams()
         self.declare_parameter('width', defaults.width)
         self.declare_parameter('height', defaults.height)
@@ -61,7 +78,7 @@ class LaneMainNode(Node):
         self.declare_parameter('canny_high', defaults.canny_high)
         self.declare_parameter('debug', False)
 
-        self.detector = LaneDetector(self._read_detector_params())
+        self.detector = self._make_detector(lambda name: self.get_parameter(name).value)
         self.side = self.get_parameter('initial_side').value
         self.lane_width = self.get_parameter('lane_width').value
         self.parking_started = False
@@ -90,36 +107,39 @@ class LaneMainNode(Node):
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info('lane_main started')
 
-    def _read_detector_params(self) -> LaneParams:
-        g = lambda name: self.get_parameter(name).value  # noqa: E731
+    @staticmethod
+    def _lane_params(value) -> LaneParams:
         return LaneParams(
-            width=g('width'), height=g('height'),
-            warp_w=g('warp_w'), warp_h=g('warp_h'),
-            x_h=g('warp_x_h'), x_l=g('warp_x_l'), y_h=g('warp_y_h'), y_l=g('warp_y_l'),
-            nwindows=g('nwindows'), margin=g('margin'), min_pixels=g('min_pixels'),
-            hsv_lower=tuple(g('hsv_lower')), hsv_upper=tuple(g('hsv_upper')),
-            canny_low=g('canny_low'), canny_high=g('canny_high'))
+            width=value('width'), height=value('height'),
+            warp_w=value('warp_w'), warp_h=value('warp_h'),
+            x_h=value('warp_x_h'), x_l=value('warp_x_l'), y_h=value('warp_y_h'), y_l=value('warp_y_l'),
+            nwindows=value('nwindows'), margin=value('margin'), min_pixels=value('min_pixels'),
+            hsv_lower=tuple(value('hsv_lower')), hsv_upper=tuple(value('hsv_upper')),
+            canny_low=value('canny_low'), canny_high=value('canny_high'))
+
+    def _make_detector(self, value):
+        kind = value('detector')
+        if kind not in DETECTORS:
+            raise ValueError(f'detector must be one of {DETECTORS}, got {kind!r}')
+        if kind == 'sliding2025':
+            return LaneDetector(self._lane_params(value))
+        return LaneTracker(self._lane_params(value),
+                           TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}))
 
     def on_parameters(self, params):
         # `ros2 param set` takes effect on the next frame. The new values are only applied
         # after this callback returns, so rebuild the detector from the proposed values.
         from rcl_interfaces.msg import SetParametersResult
         proposed = {p.name: p.value for p in params}
+        if not DETECTOR_PARAMS & proposed.keys():
+            return SetParametersResult(successful=True)
 
         def value(name):
             return proposed.get(name, self.get_parameter(name).value)
 
         try:
-            self.detector.configure(LaneParams(
-                width=value('width'), height=value('height'),
-                warp_w=value('warp_w'), warp_h=value('warp_h'),
-                x_h=value('warp_x_h'), x_l=value('warp_x_l'),
-                y_h=value('warp_y_h'), y_l=value('warp_y_l'),
-                nwindows=value('nwindows'), margin=value('margin'),
-                min_pixels=value('min_pixels'),
-                hsv_lower=tuple(value('hsv_lower')), hsv_upper=tuple(value('hsv_upper')),
-                canny_low=value('canny_low'), canny_high=value('canny_high')))
-        except Exception as exc:  # invalid warp parameters etc.
+            self.detector = self._make_detector(value)
+        except Exception as exc:  # invalid warp parameters, unknown detector etc.
             return SetParametersResult(successful=False, reason=str(exc))
         return SetParametersResult(successful=True)
 

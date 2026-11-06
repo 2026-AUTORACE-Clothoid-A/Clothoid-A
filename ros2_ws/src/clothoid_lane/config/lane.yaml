@@ -15,10 +15,23 @@ lane_main:
     warp_y_h: 70
     warp_y_l: 40
 
-    # lane color mask (HSV) and Canny (retune)
-    hsv_lower: [20, 215, 0]
-    hsv_upper: [40, 255, 255]
-    canny_low: 50
-    canny_high: 100
+    # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or sliding2025 (2025 port)
+    detector: track2026
+
+    # yellow lane line (HSV). Measured on the 11-05 bags: tape H 18~28, S 70~180, V 100~220,
+    # floor S 0~35, V 35~65. The 2025 value S >= 215 matched no tape at all.
+    hsv_lower: [18, 60, 90]
+    hsv_upper: [35, 255, 255]
+    canny_low: 50            # sliding2025 only
+    canny_high: 100          # sliding2025 only
+
+    # track2026: white lane dividers between the yellow lines (warped image px)
+    white_s_max: 50          # white = S <= 50 and V >= 170
+    white_v_min: 170
+    white_min_length: 40.0   # divider dash >= 40 px; letter strokes pass this, the offset below drops them
+    white_max_width: 14.0    # divider 8 px; crosswalk bars 25+, diamond 38+
+    white_max_angle_deg: 25.0  # from the nearest yellow line; stop lines are ~90
+    white_offset_tol: 0.3    # divider at 0.7~1.3 lane widths from the nearest yellow line
+    look_row: 120            # warped row of the target point (2025 used the window mean, also 120)
 
     # debug (default false) is set by the launch argument `debug:=true`: true publishes /lane/debug_image

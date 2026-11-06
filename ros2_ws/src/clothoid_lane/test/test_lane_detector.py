@@ -78,3 +78,78 @@ def test_default_2025_warp_is_valid_and_runs():
     det = LaneDetector(LaneParams())
     result = det.detect(make_frame(160, 480), SIDE_RIGHT, lane_width=103)
     assert isinstance(result.found, bool)
+
+
+# --- track2026 (lane_tracker.py) -------------------------------------------------------------
+from clothoid_lane.lane_tracker import LaneTracker  # noqa: E402
+
+YELLOW = (0, 200, 230)   # BGR, H ~26, S ~255
+WHITE = (240, 240, 240)
+
+
+def tracker():
+    return LaneTracker(LaneParams(**IDENTITY, hsv_lower=(18, 60, 90), hsv_upper=(35, 255, 255)))
+
+
+def draw(lines):
+    """lines: (x in the 640 px image, colour, thickness, y0, y1)."""
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    for x, colour, thick, y0, y1 in lines:
+        cv2.line(frame, (x, y0), (x, y1), colour, thick)
+    return frame
+
+
+def test_tracker_follows_the_right_line_with_a_half_lane_offset():
+    frame = draw([(160, YELLOW, 8, 0, 479), (480, YELLOW, 8, 0, 479)])
+    result = tracker().detect(frame, SIDE_RIGHT, lane_width=160)
+    assert result.found
+    assert abs(result.target_x - (240 - 80)) <= 4
+
+
+def test_tracker_uses_the_left_line_when_the_right_one_is_missing():
+    result = tracker().detect(draw([(160, YELLOW, 8, 0, 479)]), SIDE_RIGHT, lane_width=160)
+    assert result.found
+    assert abs(result.target_x - (80 + 80)) <= 4
+
+
+def test_tracker_ignores_a_white_marking_in_the_middle_of_the_lane():
+    lanes = [(160, YELLOW, 8, 0, 479), (480, YELLOW, 8, 0, 479)]
+    clean = tracker().detect(draw(lanes), SIDE_BOTH, lane_width=160)
+    # a long thin white stroke half a lane from both lines, like the letters of "천천히"
+    marked = tracker().detect(draw(lanes + [(330, WHITE, 8, 200, 479)]), SIDE_BOTH, lane_width=160)
+    assert marked.found and abs(marked.target_x - clean.target_x) <= 2
+
+
+def test_tracker_takes_a_white_divider_one_lane_from_the_yellow_line():
+    # yellow on the left, white divider one lane width (160 px warped) to its right, nothing else
+    frame = draw([(100, YELLOW, 8, 0, 479), (420, WHITE, 8, 0, 479)])
+    result = tracker().detect(frame, SIDE_RIGHT, lane_width=160)
+    assert result.found
+    assert abs(result.right_points[0][0] - 210) <= 4      # the divider is the right boundary
+    assert abs(result.target_x - (210 - 80)) <= 4
+
+
+def test_tracker_ignores_wide_white_bars():
+    # a crosswalk bar (30 px warped) where a divider would be
+    frame = draw([(100, YELLOW, 8, 0, 479), (420, WHITE, 60, 0, 479)])
+    result = tracker().detect(frame, SIDE_RIGHT, lane_width=160)
+    assert result.right_points == []
+
+
+def test_tracker_lost_and_debug_image():
+    det = tracker()
+    assert not det.detect(np.zeros((480, 640, 3), np.uint8), SIDE_BOTH, 160).found
+    result = det.detect(draw([(160, YELLOW, 8, 0, 479)]), SIDE_BOTH, 160, debug=True)
+    assert result.debug_image.shape == (240, 320, 3)
+
+
+def test_tracker_takes_the_centre_of_zigzag_lines():
+    # school zone: both lines are triangle waves around x = 160 and 480 (640 px image)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    for centre in (160, 480):
+        pts = np.array([(centre + (20 if k % 2 else -20), k * 60) for k in range(9)], np.int32)
+        cv2.polylines(frame, [pts], False, YELLOW, 8)
+    det = tracker()
+    result = det.detect(frame, SIDE_BOTH, lane_width=160)
+    assert result.found
+    assert abs(result.target_x - 160) <= 4      # halfway between the two zigzag centre lines
