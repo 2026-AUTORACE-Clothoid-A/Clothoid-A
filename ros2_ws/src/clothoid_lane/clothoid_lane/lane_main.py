@@ -59,6 +59,8 @@ class LaneMainNode(Node):
         self.declare_parameter('hsv_upper', list(defaults.hsv_upper))
         self.declare_parameter('canny_low', defaults.canny_low)
         self.declare_parameter('canny_high', defaults.canny_high)
+        self.declare_parameter('yellow_min_pixels', defaults.yellow_min_pixels)
+        self.declare_parameter('yellow_near_px', defaults.yellow_near_px)
         self.declare_parameter('debug', False)
 
         self.detector = LaneDetector(self._read_detector_params())
@@ -98,7 +100,8 @@ class LaneMainNode(Node):
             x_h=g('warp_x_h'), x_l=g('warp_x_l'), y_h=g('warp_y_h'), y_l=g('warp_y_l'),
             nwindows=g('nwindows'), margin=g('margin'), min_pixels=g('min_pixels'),
             hsv_lower=tuple(g('hsv_lower')), hsv_upper=tuple(g('hsv_upper')),
-            canny_low=g('canny_low'), canny_high=g('canny_high'))
+            canny_low=g('canny_low'), canny_high=g('canny_high'),
+            yellow_min_pixels=g('yellow_min_pixels'), yellow_near_px=g('yellow_near_px'))
 
     def on_parameters(self, params):
         # `ros2 param set` takes effect on the next frame. The new values are only applied
@@ -118,7 +121,9 @@ class LaneMainNode(Node):
                 nwindows=value('nwindows'), margin=value('margin'),
                 min_pixels=value('min_pixels'),
                 hsv_lower=tuple(value('hsv_lower')), hsv_upper=tuple(value('hsv_upper')),
-                canny_low=value('canny_low'), canny_high=value('canny_high')))
+                canny_low=value('canny_low'), canny_high=value('canny_high'),
+                yellow_min_pixels=value('yellow_min_pixels'),
+                yellow_near_px=value('yellow_near_px')))
         except Exception as exc:  # invalid warp parameters etc.
             return SetParametersResult(successful=False, reason=str(exc))
         return SetParametersResult(successful=True)

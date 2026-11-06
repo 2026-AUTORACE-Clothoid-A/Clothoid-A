@@ -2,8 +2,15 @@
 
 ROS-free so it can be unit-tested and tuned offline.
 
-Pipeline (unchanged from 2025): blur -> HSV mask OR Canny -> perspective warp ->
-histogram for the start x of each lane -> sliding windows -> target point.
+Pipeline: blur -> lane mask -> perspective warp -> histogram for the start x of each lane ->
+sliding windows -> target point.
+
+Changes from 2025 (1105 bag analysis):
+- Lane mask: when enough yellow is in view, only the yellow mask and the Canny edges next to it
+  are kept, so white marks (slow-zone text, diamonds, crosswalks) and cone outlines are dropped.
+  With little yellow in view (white-lane sections) it falls back to the 2025 mask, Canny OR HSV.
+- found: the followed side alone decides. If it has no pixels, the other side +- lane_width/2
+  is used and the result is marked `fallback`. 2025 required both sides even when following one.
 """
 from dataclasses import dataclass, field
 from typing import Optional
@@ -39,6 +46,10 @@ class LaneParams:
     hsv_upper: tuple = (40, 255, 255)
     canny_low: int = 50
     canny_high: int = 100
+    # yellow pixels needed in the warped view to use the yellow-only mask (0 = always 2025 mask)
+    yellow_min_pixels: int = 150
+    # Canny edges within this many pixels of the yellow mask are kept in the yellow-only mask
+    yellow_near_px: int = 4
 
 
 @dataclass
@@ -51,6 +62,10 @@ class LaneResult:
     # (x, y) of the windows that really held lane pixels, in the warped image (for visualization)
     left_points: list = field(default_factory=list, repr=False)
     right_points: list = field(default_factory=list, repr=False)
+    # the followed side had no pixels and the target came from the other side
+    fallback: bool = False
+    # the yellow-only mask was used (False: 2025 mask, Canny OR HSV)
+    yellow_mask: bool = False
 
 
 def make_warp_matrix(params: LaneParams) -> np.ndarray:
@@ -91,10 +106,20 @@ class LaneDetector:
         hsv = cv2.cvtColor(blur, cv2.COLOR_BGR2HSV)
         hsv_mask = cv2.inRange(hsv, np.array(p.hsv_lower), np.array(p.hsv_upper))
         canny = cv2.Canny(blur, p.canny_low, p.canny_high)
-        merged = cv2.bitwise_or(canny, hsv_mask)
-        warped = cv2.warpPerspective(merged, self._matrix, (p.warp_w, p.warp_h),
-                                     flags=cv2.INTER_LINEAR)
-        return self._sliding_window(warped, side, lane_width, debug)
+        size = (p.warp_w, p.warp_h)
+
+        yellow_in_view = cv2.countNonZero(cv2.warpPerspective(hsv_mask, self._matrix, size))
+        use_yellow = p.yellow_min_pixels > 0 and yellow_in_view >= p.yellow_min_pixels
+        if use_yellow:
+            k = 2 * p.yellow_near_px + 1
+            near_yellow = cv2.dilate(hsv_mask, np.ones((k, k), np.uint8))
+            merged = cv2.bitwise_or(hsv_mask, cv2.bitwise_and(canny, near_yellow))
+        else:
+            merged = cv2.bitwise_or(canny, hsv_mask)
+        warped = cv2.warpPerspective(merged, self._matrix, size, flags=cv2.INTER_LINEAR)
+        result = self._sliding_window(warped, side, lane_width, debug)
+        result.yellow_mask = use_yellow
+        return result
 
     def _sliding_window(self, warped: np.ndarray, side: int, lane_width: int,
                         debug: bool) -> LaneResult:
@@ -117,6 +142,7 @@ class LaneDetector:
         lefty = None
         righty = None
         left_points, right_points = [], []
+        left_rects, right_rects = [], []
 
         for window in range(p.nwindows):
             win_yl = h - (window + 1) * window_height
@@ -130,11 +156,8 @@ class LaneDetector:
             good_left = (in_rows & (nonzerox >= win_xll) & (nonzerox < win_xlh)).nonzero()[0]
             good_right = (in_rows & (nonzerox >= win_xrl) & (nonzerox < win_xrh)).nonzero()[0]
 
-            if debug:
-                if side in (SIDE_LEFT, SIDE_BOTH):
-                    cv2.rectangle(canvas, (win_xll, win_yl), (win_xlh, win_yh), (0, 255, 0), 1)
-                if side in (SIDE_RIGHT, SIDE_BOTH):
-                    cv2.rectangle(canvas, (win_xrl, win_yl), (win_xrh, win_yh), (0, 255, 0), 1)
+            left_rects.append(((win_xll, win_yl), (win_xlh, win_yh)))
+            right_rects.append(((win_xrl, win_yl), (win_xrh, win_yh)))
 
             if len(good_left) > p.min_pixels:
                 leftx_current = int(np.mean(nonzerox[good_left]))
@@ -150,26 +173,50 @@ class LaneDetector:
             rx.append(rightx_current)
             ry.append((win_yl + win_yh) / 2)
 
-        if side == SIDE_LEFT:
-            avex = int(np.array(lx).mean() + lane_width // 2)
-            avey = int(np.array(ly).mean())
-        elif side == SIDE_RIGHT:
-            avex = int(np.array(rx).mean() - lane_width // 2)
-            avey = int(np.array(ry).mean())
-        else:
-            avex = int(np.array(lx).mean() + np.array(rx).mean()) // 2
-            avey = int(np.array(ly).mean() + np.array(ry).mean()) // 2
+        has_left = lefty is not None
+        has_right = righty is not None
+        from_left = (int(np.array(lx).mean() + lane_width // 2), int(np.array(ly).mean()))
+        from_right = (int(np.array(rx).mean() - lane_width // 2), int(np.array(ry).mean()))
 
-        # 2025 behaviour: both windows must have found pixels at least once,
-        # even when only one lane is being followed.
-        found = lefty is not None and righty is not None
-        if not found:
-            avex = w // 2
-            avey = h // 2
+        # The followed side decides; the other side is the fallback.
+        # (2025 required pixels on both sides even when following only one.)
+        fallback = False
+        used = []
+        if side == SIDE_LEFT:
+            if has_left:
+                target, used = from_left, ['left']
+            elif has_right:
+                target, used, fallback = from_right, ['right'], True
+        elif side == SIDE_RIGHT:
+            if has_right:
+                target, used = from_right, ['right']
+            elif has_left:
+                target, used, fallback = from_left, ['left'], True
+        else:
+            if has_left and has_right:
+                target = (int(np.array(lx).mean() + np.array(rx).mean()) // 2,
+                          int(np.array(ly).mean() + np.array(ry).mean()) // 2)
+                used = ['left', 'right']
+            elif has_left:
+                target, used, fallback = from_left, ['left'], True
+            elif has_right:
+                target, used, fallback = from_right, ['right'], True
+
+        found = bool(used)
+        avex, avey = target if found else (w // 2, h // 2)
 
         if debug:
+            # windows of the side(s) the target came from: green, orange when it is the fallback.
+            # Lost: the followed side's windows in green, as in 2025.
+            if not found:
+                used = {SIDE_LEFT: ['left'], SIDE_RIGHT: ['right']}.get(side, ['left', 'right'])
+            color = (0, 165, 255) if fallback else (0, 255, 0)
+            rects = {'left': left_rects, 'right': right_rects}
+            for name in used:
+                for a, b in rects[name]:
+                    cv2.rectangle(canvas, a, b, color, 1)
             cv2.circle(canvas, (avex, avey), 5, (0, 255, 255), -1)
 
         return LaneResult(found=found, target_x=float(avex), target_y=float(avey),
                           debug_image=canvas, left_points=left_points,
-                          right_points=right_points)
+                          right_points=right_points, fallback=fallback)

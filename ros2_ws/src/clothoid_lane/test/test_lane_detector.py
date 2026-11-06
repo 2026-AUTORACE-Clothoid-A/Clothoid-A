@@ -49,6 +49,40 @@ def test_left_lane_only_uses_lane_width_offset():
     assert abs(result.target_x - (80 + lane_width // 2)) <= 4
 
 
+def test_followed_side_missing_falls_back_to_other_side():
+    # following the right lane, but only the left line is in view (right-hand corner)
+    lane_width = 100
+    result = detector().detect(make_frame(left_x=160), SIDE_RIGHT, lane_width=lane_width)
+    assert result.found
+    assert result.fallback
+    assert abs(result.target_x - (80 + lane_width // 2)) <= 4
+
+
+def test_followed_side_present_is_not_fallback():
+    result = detector().detect(make_frame(right_x=480), SIDE_RIGHT, lane_width=100)
+    assert result.found
+    assert not result.fallback
+
+
+def test_yellow_mask_ignores_white_marks():
+    # yellow right line plus a white block (slow-zone text) inside the right half
+    frame = make_frame(160, 480)
+    cv2.rectangle(frame, (380, 200), (420, 300), (255, 255, 255), -1)
+    clean = detector().detect(make_frame(160, 480), SIDE_RIGHT, lane_width=100)
+    marked = detector().detect(frame, SIDE_RIGHT, lane_width=100)
+    assert marked.yellow_mask
+    assert abs(marked.target_x - clean.target_x) <= 2
+
+
+def test_white_lanes_use_canny_when_no_yellow():
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    for x in (160, 480):
+        cv2.line(frame, (x, 0), (x, 479), (255, 255, 255), 6)
+    result = detector().detect(frame, SIDE_RIGHT, lane_width=100)
+    assert not result.yellow_mask
+    assert result.found
+
+
 def test_lane_lost_returns_not_found():
     result = detector().detect(np.zeros((480, 640, 3), dtype=np.uint8), SIDE_BOTH, 103)
     assert not result.found
