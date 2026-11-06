@@ -50,10 +50,12 @@ def _to_numpy(val) -> np.ndarray:
 
 def boxes_from_results(result) -> List[Box]:
     """Convert one Ultralytics `Results` object (duck-typed) into `Box`es."""
-    names = result.names
-    if result.boxes is None or len(result.boxes) == 0:
+    if result.boxes is None:
         return []
     xyxy = _to_numpy(result.boxes.xyxy).reshape(-1, 4)
+    if len(xyxy) == 0:
+        return []
+    names = result.names
     conf = _to_numpy(result.boxes.conf).reshape(-1)
     cls = _to_numpy(result.boxes.cls).reshape(-1)
     return [Box(str(names[int(c)]), float(p), int(round(x0)), int(round(y0)),
