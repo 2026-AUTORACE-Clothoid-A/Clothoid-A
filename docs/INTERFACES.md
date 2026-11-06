@@ -20,8 +20,8 @@ TF: `base_link → laser_link` is (0.103, 0, -0.034) with no rotation (URDF).
 |---|---|---|
 | `/detections` | `clothoid_interfaces/DetectionArray` | YOLO node |
 
-`class_name` values: `traffic_light_red`, `traffic_light_yellow`, `traffic_light_green`,
-`sign_left`, `sign_right`, `sign_pedestrian`, `sign_slow`, `sign_parking`.
+`class_name` values: `traffic_light_red`, `traffic_light_green`,
+`sign_left`, `sign_right`, `sign_pedestrian`, `sign_slow`, `sign_bump`, `sign_parking`.
 Pixel boxes refer to the 640x480 color image.
 
 ## Other detection outputs

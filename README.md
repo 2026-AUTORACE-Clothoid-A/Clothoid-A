@@ -18,7 +18,7 @@ ros2_ws/src/
   clothoid_debug/        RViz view of what the nodes saw and decided, live or on a bag; sends no drive command
 docker/                  dev image for laptops (Humble, amd64)
 scripts/env_jetson.sh    environment for the LIMO
-docs/                    MIGRATION_PLAN.md, INTERFACES.md, PACKAGES.md, FIELD_TEST.md, PORTING_GUIDE.md
+docs/                    MIGRATION_PLAN.md, INTERFACES.md, PACKAGES.md, FIELD_TEST.md, PORTING_GUIDE.md, YOLO_GUIDE.md
 ```
 
 ## Where to start
