@@ -51,6 +51,8 @@ class LaneResult:
     # (x, y) of the windows that really held lane pixels, in the warped image (for visualization)
     left_points: list = field(default_factory=list, repr=False)
     right_points: list = field(default_factory=list, repr=False)
+    # track2026 only: inside the school zone zigzag (mission 6, slow guide lines)
+    zigzag: bool = False
 
 
 def make_warp_matrix(params: LaneParams) -> np.ndarray:

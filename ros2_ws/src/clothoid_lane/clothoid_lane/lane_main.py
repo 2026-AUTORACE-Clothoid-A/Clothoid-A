@@ -47,6 +47,9 @@ class LaneMainNode(Node):
         self.declare_parameter('wheelbase', 0.2)
         self.declare_parameter('max_steer_rad', 0.48869)  # LIMO inner wheel limit, 28 deg
         self.declare_parameter('speed_limit_timeout', 0.5)
+        # mission 6 (slow guide lines): speed while track2026 sees the zigzag lines, 0 = no change
+        self.declare_parameter('zigzag_speed', 0.2)
+        self.declare_parameter('zigzag_hold_sec', 0.5)   # keeps the slow speed over short misses
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
 
@@ -87,6 +90,7 @@ class LaneMainNode(Node):
         self.speed_limit_stamp = None
         self.last_cmd = None
         self.last_found_stamp = None
+        self.last_zigzag_stamp = None
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
         self.debug_pub = self.create_publisher(
@@ -200,6 +204,8 @@ class LaneMainNode(Node):
             self._publish_debug_points(result, msg.header)
 
         now = self.get_clock().now()
+        if result.zigzag:
+            self.last_zigzag_stamp = now
         if result.found:
             warp_w = self.detector.p.warp_w
             warp_h = self.detector.p.warp_h
@@ -211,6 +217,11 @@ class LaneMainNode(Node):
             steer = max(-max_steer, min(max_steer, steer))
 
             speed = self.current_speed()
+            zigzag_speed = self.get_parameter('zigzag_speed').value
+            if zigzag_speed > 0.0 and self.last_zigzag_stamp is not None and (
+                    now - self.last_zigzag_stamp).nanoseconds * 1e-9 <= \
+                    self.get_parameter('zigzag_hold_sec').value:
+                speed = min(speed, zigzag_speed)
             cmd = Twist()
             cmd.linear.x = speed
             cmd.angular.z = speed * math.tan(steer) / self.get_parameter('wheelbase').value

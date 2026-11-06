@@ -54,6 +54,7 @@ class TrackerParams:
     zigzag_min_amp: float = 4.0       # px, half swing of the window centres around the fit
     zigzag_min_flips: int = 3         # sign changes of that swing along the line
     zigzag_hold: int = 15             # frames the zone lasts with no boundary in view
+    zigzag_width_ratio: float = 1.07  # zone lane width / normal: bags 182/170 px, drawing 570/520 mm
 
 
 @dataclass
@@ -327,13 +328,17 @@ class LaneTracker:
             np.mean(np.abs(l.points[:, 0] - np.polyval(y.coeff, l.points[:, 1]))) < p.margin
             for y in yellow_lines)]
         left, right = self._pick(lines, float(lane_width), w)
-        if self._in_zigzag_zone(left, right):
+        zigzag_zone = self._in_zigzag_zone(left, right)
+        if zigzag_zone:
             # the drawing has the zigzag only along a straight: its centre is a straight line, a
             # curved fit would follow the teeth at the ends of the image
             for line in (left, right):
                 if line is not None:
                     line.straighten()
 
+        # the zigzag lane is wider: centre lines 570 mm apart against 520 mm elsewhere (drawing and
+        # rules: 450 mm between the inner tips, 690 mm between the outer tips)
+        half_lane = float(lane_width) * (self.t.zigzag_width_ratio if zigzag_zone else 1.0)
         target = None
         if side == SIDE_BOTH and left is not None and right is not None:
             y = float(self.t.look_row)
@@ -343,7 +348,7 @@ class LaneTracker:
             for line in order:
                 if line is not None:
                     toward = +1 if line is left else -1
-                    target = self._offset_point(line, toward, float(lane_width))
+                    target = self._offset_point(line, toward, half_lane)
                     break
         found = target is not None
         tx, ty = target if found else (w / 2.0, h / 2.0)
@@ -365,4 +370,5 @@ class LaneTracker:
             return [] if line is None else [(int(x), int(y)) for x, y in line.points]
 
         return LaneResult(found=found, target_x=float(tx), target_y=float(ty), debug_image=canvas,
-                          left_points=as_points(left), right_points=as_points(right))
+                          left_points=as_points(left), right_points=as_points(right),
+                          zigzag=zigzag_zone)

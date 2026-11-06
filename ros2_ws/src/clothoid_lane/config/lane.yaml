@@ -3,6 +3,9 @@
 lane_main:
   ros__parameters:
     base_speed: 0.3            # rules recommend 0.3~0.4 m/s
+    # mission 6 slow guide lines (zigzag, track2026 only): rules say pass slowly holding the heading
+    zigzag_speed: 0.2          # m/s while the zigzag is seen; 0 = no change
+    zigzag_hold_sec: 0.5       # bags: the zone state drops for 0.2 s at most inside the zone
     lost_hold_sec: 0.0         # >0 keeps the last heading when the lane is lost
     initial_side: 1            # 0 left lane, 1 right lane, 2 both
     lane_width: 170            # px in the warped image, measured with the warp below

@@ -153,3 +153,6 @@ def test_tracker_takes_the_centre_of_zigzag_lines():
     result = det.detect(frame, SIDE_BOTH, lane_width=160)
     assert result.found
     assert abs(result.target_x - 160) <= 4      # halfway between the two zigzag centre lines
+    assert result.zigzag
+    assert not det.detect(draw([(160, YELLOW, 8, 0, 479), (480, YELLOW, 8, 0, 479)]),
+                          SIDE_BOTH, lane_width=160).zigzag
