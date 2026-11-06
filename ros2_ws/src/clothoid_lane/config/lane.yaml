@@ -27,9 +27,9 @@ lane_main:
     # Below it (white-lane sections) use Canny OR HSV as in 2025. 0 = always the 2025 mask.
     yellow_min_pixels: 150
     yellow_near_px: 4
-    # yellow blobs thicker than this (px, camera image, inside the warp band) are cones and are removed
-    # with their outline. 1105 bags: lane tape, corners and zigzag 10~41 px, yellow cones 52~113 px.
-    # 0 = keep every blob.
-    yellow_max_thickness: 46
+    # yellow blobs that reach the warp band and are thicker than this (px, camera image, whole blob)
+    # are cones and are removed with their outline. 1105 bags: lane tape, corners and zigzag 10~41 px,
+    # yellow cones 99~146 px, also while only the cone base is in the band. 0 = keep every blob.
+    yellow_max_thickness: 60
 
     # debug (default false) is set by the launch argument `debug:=true`: true publishes /lane/debug_image

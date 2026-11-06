@@ -50,11 +50,12 @@ class LaneParams:
     yellow_min_pixels: int = 150
     # Canny edges within this many pixels of the yellow mask are kept in the yellow-only mask
     yellow_near_px: int = 4
-    # a yellow blob thicker than this in the camera image (2 x its largest distance to an edge,
-    # inside the warp band) is taken as a cone and removed with its outline (0 = keep every blob).
-    # Measured in the camera image because the warp stretches far, near-horizontal lane lines.
-    # 1105 bags: lane tape, corners and zigzag 10~41 px, yellow cones 52~113 px.
-    yellow_max_thickness: int = 46
+    # a yellow blob that reaches the warp band and is thicker than this in the camera image
+    # (2 x its largest distance to an edge, whole blob) is taken as a cone and removed with its
+    # outline (0 = keep every blob). Measured in the camera image because the warp stretches far,
+    # near-horizontal lane lines. 1105 bags: lane tape, corners and zigzag 10~41 px, yellow cones
+    # 99~146 px, also in the frames where only the cone base has entered the band.
+    yellow_max_thickness: int = 60
 
 
 @dataclass
@@ -134,24 +135,28 @@ class LaneDetector:
         return result
 
     def _thick_yellow_blobs(self, hsv_mask: np.ndarray) -> np.ndarray:
-        """Mask (camera image) of yellow blobs in the warp band too thick to be lane tape."""
+        """Mask (camera image) of yellow blobs that reach the warp band and are too thick to be
+        lane tape. The whole blob is measured, not only its part in the band: a cone entering
+        the band shows only its thin base there, while its body above is already thick."""
         p = self.p
         out = np.zeros_like(hsv_mask)
         if p.yellow_max_thickness <= 0:
             return out
         y0 = max(0, p.height // 2 + p.y_h)
         y1 = min(hsv_mask.shape[0], p.height - p.y_l)
-        band = (hsv_mask[y0:y1] > 0).astype(np.uint8)
-        n, labels = cv2.connectedComponents(band)
+        binary = (hsv_mask > 0).astype(np.uint8)
+        n, labels = cv2.connectedComponents(binary)
         if n <= 1:
             return out
-        dist = cv2.distanceTransform(band, cv2.DIST_L2, 5)
+        dist = cv2.distanceTransform(binary, cv2.DIST_L2, 5)
         # largest distance to an edge per blob = half its thickness
         half = np.zeros(n, np.float32)
         np.maximum.at(half, labels.ravel(), dist.ravel())
-        thick = np.nonzero(2 * half[1:] > p.yellow_max_thickness)[0] + 1
+        in_band = np.zeros(n, bool)
+        in_band[np.unique(labels[y0:y1])] = True
+        thick = np.nonzero(in_band[1:] & (2 * half[1:] > p.yellow_max_thickness))[0] + 1
         if thick.size:
-            out[y0:y1][np.isin(labels, thick)] = 255
+            out[np.isin(labels, thick)] = 255
         return out
 
     def _sliding_window(self, warped: np.ndarray, side: int, lane_width: int,
