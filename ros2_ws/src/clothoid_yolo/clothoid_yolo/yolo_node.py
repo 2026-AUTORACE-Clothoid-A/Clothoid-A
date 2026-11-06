@@ -34,13 +34,40 @@ class YoloNode(Node):
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.backend = None
-        if get('backend') == 'ultralytics':
-            if not get('model_path'):
-                raise RuntimeError('yolo: set model_path (or backend:=none)')
+        backend = get('backend')
+        model_path = get('model_path')
+
+        if not model_path:
+            # Auto-detect trained model from standard locations
+            # Priorities: .engine > .onnx > .pt
+            from pathlib import Path
+            pkg_root = Path(__file__).resolve().parent.parent
+            candidates = [
+                pkg_root / 'models' / 'best_fp16.engine',
+                pkg_root / 'models' / 'best.engine',
+                pkg_root / 'models' / 'best.onnx',
+                pkg_root / 'models' / 'best.pt',
+                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best_fp16.engine',
+                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best.engine',
+                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best.onnx',
+                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best.pt',
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    model_path = str(cand)
+                    break
+
+        if backend == 'none' and model_path:
+            backend = 'ultralytics'
+
+        if backend == 'ultralytics':
+            if not model_path:
+                raise RuntimeError('yolo: set model_path (or place best_fp16.engine / best.pt in models/)')
             self.backend = UltralyticsBackend(
-                get('model_path'), get('imgsz'), get('device'), get('model_conf'))
-        elif get('backend') != 'none':
-            raise RuntimeError(f"yolo: unknown backend '{get('backend')}'")
+                model_path, get('imgsz'), get('device'), get('model_conf'))
+            self.get_logger().info(f"Loaded YOLO model: {model_path}")
+        elif backend != 'none':
+            raise RuntimeError(f"yolo: unknown backend '{backend}'")
 
         self.aliases = dict(item.split(':', 1) for item in get('class_aliases') if ':' in item)
         self.warned_unknown = set()
