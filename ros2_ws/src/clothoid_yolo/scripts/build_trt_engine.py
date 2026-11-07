@@ -233,6 +233,16 @@ def build_engine(onnx_path: Path, args: argparse.Namespace) -> Path | None:
     out.write_bytes(data)
     print(f"      엔진 파일 저장 완료: {out} ({len(data) / 1e6:.1f} MB)")
 
+    # Save metadata yaml alongside engine so Ultralytics can restore class names
+    meta_path = Path(str(out) + ".yaml")
+    meta_classes = [
+        'traffic_light_red', 'traffic_light_green',
+        'sign_left', 'sign_right', 'sign_pedestrian', 'sign_slow', 'sign_bump', 'sign_parking'
+    ]
+    meta_content = "names:\n" + "".join(f"  {i}: {name}\n" for i, name in enumerate(meta_classes))
+    meta_path.write_text(meta_content, encoding="utf-8")
+    print(f"      클래스 메타데이터 저장: {meta_path}")
+
     _summarize_engine(trt, logger, data, out, args)
     return out
 
