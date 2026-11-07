@@ -21,3 +21,25 @@ def steer_angle(target_x: float, target_y: float, warp_w: int, warp_h: int,
 def angular_z(speed: float, steer: float, wheelbase: float = WHEELBASE) -> float:
     """Bicycle model: w = v * tan(delta) / wheelbase."""
     return speed * math.tan(steer) / wheelbase
+
+
+# after a loss longer than this the target starts again from the new detection (twist_mux lane timeout)
+TARGET_RESET_SEC = 0.3
+
+
+def limit_step(prev, new, max_step: float):
+    """Move a target point from `prev` toward `new` by at most `max_step` (same units, warped px).
+
+    A one- or two-frame jump of the target (a boundary that flickers in and out, a bad fit) then moves
+    the target only a little, while a real change is followed within a few frames. Returns `new` when
+    there is no previous point or max_step <= 0 (off). Only the detected target is moved: no line is
+    invented, and a lost lane still publishes nothing.
+    """
+    if prev is None or max_step <= 0.0:
+        return new
+    dx, dy = new[0] - prev[0], new[1] - prev[1]
+    dist = math.hypot(dx, dy)
+    if dist <= max_step:
+        return new
+    k = max_step / dist
+    return prev[0] + dx * k, prev[1] + dy * k

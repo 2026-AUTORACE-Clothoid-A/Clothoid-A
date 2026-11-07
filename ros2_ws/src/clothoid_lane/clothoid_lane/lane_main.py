@@ -11,6 +11,7 @@ as in 2025 and converted to angular.z with the bicycle model: w = v * tan(delta)
 """
 import math
 
+import cv2
 import rclpy
 from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist
 from rclpy.node import Node
@@ -21,7 +22,8 @@ from std_msgs.msg import Bool, Float32, Int32
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
-from clothoid_lane.steering import MAX_STEER_RAD, WHEELBASE, angular_z, steer_angle
+from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
+                                    limit_step, steer_angle)
 
 DETECTORS = ('track2026', 'sliding2025')
 TRACKER_FIELDS = tuple(TrackerParams.__dataclass_fields__)
@@ -93,6 +95,11 @@ class LaneMainNode(Node):
         self.declare_parameter('zigzag_hold_sec', 0.5)   # keeps the slow speed over short misses
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
+        # the target point used for steering moves at most this many warped px per frame (0 = off).
+        # 2026-11-08 bag 01:02: normal frames move it 0.3 px (median), corners 7 px (p95); the jumps
+        # that flipped the steering by up to +-28 deg moved it 29 px (median). 8 px removed 23 of 30
+        # jumps over 8 deg and changed the corner steering by 0.4 deg (p95) when replayed.
+        self.declare_parameter('target_max_step_px', 8.0)
 
         # lane following side / width. Widths are real distances, line centre to centre in metres;
         # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
@@ -118,6 +125,7 @@ class LaneMainNode(Node):
         self.speed_limit_stamp = None
         self.last_cmd = None
         self.last_found_stamp = None
+        self.used_target = None       # target point the last command steered to (after limit_step)
         self.last_zigzag_stamp = None
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
@@ -221,16 +229,29 @@ class LaneMainNode(Node):
         debug = self.get_parameter('debug').value
         result = self.detector.detect(bgr, self.side, self.lane_width, debug)
 
+        now = self.get_clock().now()
+        target = None
+        if result.found:
+            prev = self.used_target
+            if self.last_found_stamp is None or \
+                    (now - self.last_found_stamp).nanoseconds * 1e-9 > TARGET_RESET_SEC:
+                prev = None
+            target = limit_step(prev, (result.target_x, result.target_y),
+                                self.get_parameter('target_max_step_px').value)
+            self.used_target = target
+
         if debug and result.debug_image is not None:
+            if target is not None:     # yellow ring: the point steered to (green dot: detected)
+                cv2.circle(result.debug_image, (int(round(target[0])), int(round(target[1]))), 7,
+                           (0, 255, 255), 2)
             self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
         if debug:
             self._publish_debug_points(result, msg.header)
 
-        now = self.get_clock().now()
         if result.zigzag:
             self.last_zigzag_stamp = now
         if result.found:
-            steer = steer_angle(result.target_x, result.target_y,
+            steer = steer_angle(target[0], target[1],
                                 self.detector.p.warp_w, self.detector.p.warp_h,
                                 self.get_parameter('steer_gain').value,
                                 self.get_parameter('max_steer_rad').value)

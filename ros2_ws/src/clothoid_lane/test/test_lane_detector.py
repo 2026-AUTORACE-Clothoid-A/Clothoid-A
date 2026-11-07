@@ -188,3 +188,12 @@ def test_steering_law_matches_2025():
     assert steer_angle(220, 180, 320, 240) == -0.48869
     assert abs(steer_angle(190, 120, 320, 240) - (-math.atan2(30, 120) / (math.pi / 2))) < 1e-12
     assert abs(angular_z(0.3, 0.2) - 0.3 * math.tan(0.2) / 0.2) < 1e-12
+
+
+def test_target_step_limit():
+    from clothoid_lane.steering import limit_step
+    assert limit_step(None, (10.0, 20.0), 8.0) == (10.0, 20.0)          # nothing before: as detected
+    assert limit_step((0.0, 0.0), (3.0, 4.0), 8.0) == (3.0, 4.0)        # small moves pass
+    x, y = limit_step((0.0, 0.0), (30.0, 40.0), 8.0)                    # a 50 px jump moves 8 px
+    assert abs(x - 4.8) < 1e-9 and abs(y - 6.4) < 1e-9
+    assert limit_step((0.0, 0.0), (30.0, 40.0), 0.0) == (30.0, 40.0)    # 0 = off

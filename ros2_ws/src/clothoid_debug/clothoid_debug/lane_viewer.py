@@ -14,7 +14,8 @@ lane_main processed are used, so the tracker sees the same sequence, and the car
 command are drawn next to the replayed ones.
 
 Window: camera image with the warp area (magenta) and the target projected back (green; car's: cyan
-cross) | warped image with masks, sliding windows, look row and target (see LaneTracker._draw) |
+cross; yellow ring: the point steered to after target_max_step_px) | warped image with masks,
+sliding windows, look row and target (see LaneTracker._draw) |
 numbers | steering over the last seconds (replay green, car's command cyan, measured from the gyro
 orange, grey: the 23.4 deg the car can really steer).
 
@@ -41,7 +42,8 @@ from ament_index_python.packages import get_package_share_directory
 
 from clothoid_lane.lane_detector import SIDE_BOTH, SIDE_LEFT, SIDE_RIGHT, make_warp_matrix
 from clothoid_lane.lane_main import detector_defaults, lane_params, make_detector
-from clothoid_lane.steering import MAX_STEER_RAD, WHEELBASE, steer_angle
+from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, limit_step,
+                                    steer_angle)
 
 CAR_LIMIT_DEG = 23.4      # central angle the LIMO reaches when limo_base clamps the inner wheel at 28
 IMAGE_TOPICS = ('/camera/color/image_raw/compressed', '/camera/color/image_raw')
@@ -86,6 +88,7 @@ def load_params(camera: str, overrides) -> dict:
     with open(os.path.join(share, f'camera_{camera}.yaml')) as f:
         cam = yaml.safe_load(f)['/**']['ros__parameters']
     values = {'steer_gain': 1.0, 'max_steer_rad': MAX_STEER_RAD, 'wheelbase': WHEELBASE,
+              'target_max_step_px': 8.0,
               'initial_side': SIDE_RIGHT, 'lane_width_m': 0.5, 'warp_px_per_m': 340.0,
               'base_speed': 0.3}
     values.update(detector_defaults())
@@ -226,9 +229,11 @@ class Viewer:
         self.lane_width = values['lane_width_m'] * values['warp_px_per_m']
         self.matrix = make_warp_matrix(lp)
         self.inverse = np.linalg.inv(self.matrix)
+        self.used_target, self.last_found_t = None, None   # lane_main's target_max_step_px state
 
     def reset_tracking(self) -> None:
         self.detector = make_detector(lambda name: self.v[name])
+        self.used_target, self.last_found_t = None, None
 
     def ground_distance(self, warp_row: float):
         """Metres ahead of the camera of a warped row (camera_height / camera_pitch of the profile)."""
@@ -251,9 +256,14 @@ class Viewer:
         (frames before --start still go through the tracker so its state matches)."""
         v, lp = self.v, self.lp
         result = self.detector.detect(bgr, self.side, self.lane_width, draw)
-        steer = None
-        if result.found:
-            steer = math.degrees(steer_angle(result.target_x, result.target_y, lp.warp_w, lp.warp_h,
+        steer, used = None, None
+        if result.found:     # same target limit as lane_main
+            prev = self.used_target
+            if self.last_found_t is None or t - self.last_found_t > TARGET_RESET_SEC:
+                prev = None
+            used = limit_step(prev, (result.target_x, result.target_y), v['target_max_step_px'])
+            self.used_target, self.last_found_t = used, t
+            steer = math.degrees(steer_angle(used[0], used[1], lp.warp_w, lp.warp_h,
                                              v['steer_gain'], v['max_steer_rad']))
         car = small['target'].get(round(t, 4))
         cmd = nearest(small['cmd'], recv + 0.03, 0.08) if car is not None else None
@@ -284,6 +294,8 @@ class Viewer:
         if result.found:
             cv2.circle(cam, tuple(int(c) for c in self.to_image(result.target_x, result.target_y,
                                                                 cam_scale)), 6, (0, 255, 0), -1)
+            cv2.circle(cam, tuple(int(c) for c in self.to_image(used[0], used[1], cam_scale)), 9,
+                       (0, 255, 255), 2)
         if car is not None and car[2]:
             cross(cam, self.to_image(car[0], car[1], cam_scale, self.car_inverse), (255, 255, 0))
         text(cam, 'camera  t=%.2f s  (%d/%d)' % (t_rel, index + 1, total), (8, 20))
@@ -291,6 +303,8 @@ class Viewer:
         # warped debug image, 2x
         sx, sy = 640.0 / lp.warp_w, cam.shape[0] / lp.warp_h
         warp = cv2.resize(result.debug_image, (640, cam.shape[0]), interpolation=cv2.INTER_NEAREST)
+        if used is not None:      # yellow ring: the point steered to, after target_max_step_px
+            cv2.circle(warp, (int(used[0] * sx), int(used[1] * sy)), 14, (0, 255, 255), 2)
         if car is not None and car[2]:
             cx, cy = self.car_to_warp(car[0], car[1])
             cross(warp, (cx * sx, cy * sy), (255, 255, 0))
@@ -305,8 +319,9 @@ class Viewer:
                 'FOUND' if result.found else 'LOST (nothing published)',
                 result.reference or '-', 'yes' if result.zigzag else 'no'),
              (0, 255, 0) if result.found else (0, 0, 255)),
-            ('target (warp px)  x %.1f  y %.1f   window searches %s' % (
-                result.target_x, result.target_y, searches), None),
+            ('target x %.1f y %.1f, steered to %s  windows %s' % (
+                result.target_x, result.target_y,
+                '-' if used is None else '%.1f %.1f' % used, searches), None),
             ('car target        ' + ('x %.1f  y %.1f (car warp %s)' % (car[0], car[1], ','.join(
                 map(str, self.car_warp))) if car and car[2] else ('lost' if car else 'not in bag')),
              (255, 255, 0)),
@@ -388,6 +403,8 @@ class Tuner:
              lambda v, x: v.__setitem__('white_v_min', int(x))),
             ('white dash min px', 1, 80, lambda v: int(round(v['white_min_length'])),
              lambda v, x: v.__setitem__('white_min_length', float(x))),
+            ('target max step px (0 off)', 0, 40, lambda v: int(round(v['target_max_step_px'])),
+             lambda v, x: v.__setitem__('target_max_step_px', float(x))),
             ('window margin px', 5, 80, lambda v: int(v['margin']),
              lambda v, x: v.__setitem__('margin', int(x))),
             ('min windows', 1, 20, lambda v: int(v['min_line_windows']),
