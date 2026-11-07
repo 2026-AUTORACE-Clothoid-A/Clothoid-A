@@ -69,7 +69,7 @@ class MissionLogic:
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
 
-        if 'sign_slow' in seen:
+        if 'sign_slow' in seen or 'sign_bump' in seen:
             self.slow_until = now + p.slow_hold_sec
         if 'sign_left' in seen:
             self.direction = p.fork_left_direction

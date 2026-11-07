@@ -4,10 +4,12 @@
     ros2 launch clothoid_bringup full.launch.py use_yolo:=false use_parking:=false
     ros2 launch clothoid_bringup full.launch.py debug:=true backend:=ultralytics model_path:=/path/best.pt
 
+`debug:=true` also starts clothoid_debug/decision_viz; open clothoid_debug/rviz/decision.rviz to watch it.
+
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
-see docs/PACKAGES.md). Platform-only arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`)
-are forwarded to `bringup.launch.py`.
+see docs/PACKAGES.md). Platform-only arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `steering_scale`,
+`max_inner_angle`) are forwarded to `bringup.launch.py`.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -29,7 +31,8 @@ def generate_launch_description():
         return IfCondition(LaunchConfiguration(name))
 
     switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_mission']
-    platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf']
+    platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'steering_scale',
+                     'max_inner_angle']
     debug = LaunchConfiguration('debug')
 
     return LaunchDescription([
@@ -42,6 +45,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
+        DeclareLaunchArgument('steering_scale', default_value='1.06'),
+        DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
 
         # sensors, TF, limo_base, twist_mux
         include('clothoid_bringup', 'bringup.launch.py',
@@ -54,4 +59,6 @@ def generate_launch_description():
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
+        # with debug on, also publish what rviz/decision.rviz shows
+        include('clothoid_debug', 'viz.launch.py', condition=enabled('debug')),
     ])

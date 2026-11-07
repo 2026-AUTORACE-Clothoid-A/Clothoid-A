@@ -1,0 +1,16 @@
+# Clothoid-A 2026 Target Dataset YAML
+path: /home/a/Clothoid-A/ros2_ws/src/clothoid_yolo/dataset
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 8
+names:
+  0: traffic_light_red
+  1: traffic_light_green
+  2: sign_left
+  3: sign_right
+  4: sign_pedestrian
+  5: sign_slow
+  6: sign_bump
+  7: sign_parking

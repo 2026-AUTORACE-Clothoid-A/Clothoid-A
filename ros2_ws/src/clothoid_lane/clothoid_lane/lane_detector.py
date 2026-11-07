@@ -48,6 +48,9 @@ class LaneResult:
     target_x: float
     target_y: float
     debug_image: Optional[np.ndarray] = field(default=None, repr=False)
+    # (x, y) of the windows that really held lane pixels, in the warped image (for visualization)
+    left_points: list = field(default_factory=list, repr=False)
+    right_points: list = field(default_factory=list, repr=False)
 
 
 def make_warp_matrix(params: LaneParams) -> np.ndarray:
@@ -113,6 +116,7 @@ class LaneDetector:
         lx, ly, rx, ry = [], [], [], []
         lefty = None
         righty = None
+        left_points, right_points = [], []
 
         for window in range(p.nwindows):
             win_yl = h - (window + 1) * window_height
@@ -135,9 +139,11 @@ class LaneDetector:
             if len(good_left) > p.min_pixels:
                 leftx_current = int(np.mean(nonzerox[good_left]))
                 lefty = int(np.mean(nonzeroy[good_left]))
+                left_points.append((leftx_current, lefty))
             if len(good_right) > p.min_pixels:
                 rightx_current = int(np.mean(nonzerox[good_right]))
                 righty = int(np.mean(nonzeroy[good_right]))
+                right_points.append((rightx_current, righty))
 
             lx.append(leftx_current)
             ly.append((win_yl + win_yh) / 2)
@@ -165,4 +171,5 @@ class LaneDetector:
             cv2.circle(canvas, (avex, avey), 5, (0, 255, 255), -1)
 
         return LaneResult(found=found, target_x=float(avex), target_y=float(avey),
-                          debug_image=canvas)
+                          debug_image=canvas, left_points=left_points,
+                          right_points=right_points)

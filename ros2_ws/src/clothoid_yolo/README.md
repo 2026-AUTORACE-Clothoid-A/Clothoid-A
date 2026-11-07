@@ -12,8 +12,8 @@ depends on that topic, so the model can change freely.
 
 ## Class names
 The model's class names must equal the names in `clothoid_interfaces/msg/Detection.msg`:
-`traffic_light_red`, `traffic_light_yellow`, `traffic_light_green`, `sign_left`, `sign_right`,
-`sign_pedestrian`, `sign_slow`, `sign_parking`. Unknown names are dropped with one warning; map
+`traffic_light_red`, `traffic_light_green`, `sign_left`, `sign_right`,
+`sign_pedestrian`, `sign_slow`, `sign_bump`, `sign_parking`. Unknown names are dropped with one warning; map
 them with `class_aliases: ['red:traffic_light_red']` if relabelling is not possible.
 
 ## Run
