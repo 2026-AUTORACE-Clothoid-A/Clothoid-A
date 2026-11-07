@@ -60,10 +60,6 @@ def generate_launch_description():
                                           'see config/twist_mux_arm.yaml'),
         DeclareLaunchArgument('mux_output', default_value='/cmd_vel',
                               description='twist_mux output; /cmd_vel_dry = shadow run, nothing drives'),
-        DeclareLaunchArgument('steering_scale', default_value='2.47',
-                              description='limo_base: inner wheel angle per body value (official 2.47)'),
-        DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
-                              description='limo_base: inner wheel limit in rad (official 28 deg)'),
         DeclareLaunchArgument('cmd_timeout', default_value='0.5',
                               description='limo_base: stop after this long without /cmd_vel'),
         DeclareLaunchArgument('camera_pitch', default_value='0.0',
@@ -72,6 +68,10 @@ def generate_launch_description():
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false',
                               description='fuse /odom and /imu into /odometry/filtered'),
+        DeclareLaunchArgument('steering_scale', default_value='1.06',
+                              description='limo_base: inner wheel angle per body value (measured, official 2.47)'),
+        DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
+                              description='limo_base: inner wheel limit in rad (official 28 deg)'),
 
         # URDF: base_link -> laser_link, imu_link, wheels
         include('limo_description', 'launch', 'load_urdf.launch.py'),

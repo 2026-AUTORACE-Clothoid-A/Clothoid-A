@@ -11,10 +11,22 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
+# Add local yolo26 ultralytics source so no pip install is required
+import sys
+from pathlib import Path
+for p in [
+    Path('/home/a/catkin_ws/yolo26_pruning/yolo26'),
+    Path('/home/a/catkin_ws/yolo26_TensorRT/yolo26'),
+    Path('/home/a/ros_noetic_docker/workspace/yolo26_pruning/yolo26'),
+    Path('/home/a/ros_noetic_docker/workspace/yolo26_TensorRT/yolo26'),
+]:
+    if p.exists() and str(p) not in sys.path:
+        sys.path.insert(0, str(p))
+
 # keep in sync with clothoid_interfaces/msg/Detection.msg
 KNOWN_CLASSES = (
-    'traffic_light_red', 'traffic_light_yellow', 'traffic_light_green',
-    'sign_left', 'sign_right', 'sign_pedestrian', 'sign_slow', 'sign_parking',
+    'traffic_light_red', 'traffic_light_green',
+    'sign_left', 'sign_right', 'sign_pedestrian', 'sign_slow', 'sign_bump', 'sign_parking',
 )
 
 
@@ -28,12 +40,24 @@ class Box:
     y_max: int
 
 
+def _to_numpy(val) -> np.ndarray:
+    if hasattr(val, 'cpu'):
+        val = val.cpu()
+    if hasattr(val, 'numpy'):
+        val = val.numpy()
+    return np.asarray(val)
+
+
 def boxes_from_results(result) -> List[Box]:
     """Convert one Ultralytics `Results` object (duck-typed) into `Box`es."""
+    if result.boxes is None:
+        return []
+    xyxy = _to_numpy(result.boxes.xyxy).reshape(-1, 4)
+    if len(xyxy) == 0:
+        return []
     names = result.names
-    xyxy = np.asarray(result.boxes.xyxy).reshape(-1, 4)
-    conf = np.asarray(result.boxes.conf).reshape(-1)
-    cls = np.asarray(result.boxes.cls).reshape(-1)
+    conf = _to_numpy(result.boxes.conf).reshape(-1)
+    cls = _to_numpy(result.boxes.cls).reshape(-1)
     return [Box(str(names[int(c)]), float(p), int(round(x0)), int(round(y0)),
                 int(round(x1)), int(round(y1)))
             for (x0, y0, x1, y1), p, c in zip(xyxy, conf, cls)]

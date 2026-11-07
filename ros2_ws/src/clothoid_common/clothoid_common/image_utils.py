@@ -1,4 +1,6 @@
 """sensor_msgs/Image <-> numpy helpers (no cv_bridge needed)."""
+import array
+
 import cv2
 import numpy as np
 from sensor_msgs.msg import Image
@@ -34,5 +36,6 @@ def bgr_to_image(frame: np.ndarray, header) -> Image:
     else:
         out.encoding = 'bgr8'
         out.step = out.width * 3
-    out.data = np.ascontiguousarray(frame).tobytes()
+    # array, not bytes: on Humble the bytes path checks every element (206 ms for one 640x480 frame)
+    out.data = array.array('B', np.ascontiguousarray(frame).tobytes())
     return out

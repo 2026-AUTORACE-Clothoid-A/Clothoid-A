@@ -1,0 +1,111 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: track
+    Frame Rate: 30
+    Background Color: 30; 30; 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (1 m, track)
+      Enabled: true
+      Reference Frame: track
+      Cell Size: 1
+      Plane Cell Count: 30
+      Color: 80; 80; 80
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: true
+      Show Arrows: false
+      Show Axes: true
+      Marker Scale: 0.3
+    - Class: rviz_default_plugins/LaserScan
+      Name: Lidar /scan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+      Style: Spheres
+      Size (m): 0.02
+      Color Transformer: FlatColor
+      Color: 255; 60; 60
+      Decay Time: 0
+    - Class: rviz_default_plugins/PoseArray
+      Name: Obstacles /lidar/obstacles
+      Enabled: true
+      Topic:
+        Value: /lidar/obstacles
+      Shape: Axes
+      Axes Length: 0.1
+      Axes Radius: 0.02
+    - Class: rviz_default_plugins/Path
+      Name: Cone left
+      Enabled: true
+      Topic:
+        Value: /cone/left_boundary
+      Color: 40; 120; 255
+      Line Style: Billboards
+      Line Width: 0.03
+    - Class: rviz_default_plugins/Path
+      Name: Cone right
+      Enabled: true
+      Topic:
+        Value: /cone/right_boundary
+      Color: 255; 255; 40
+      Line Style: Billboards
+      Line Width: 0.03
+    - Class: rviz_default_plugins/Path
+      Name: Cone centerline
+      Enabled: true
+      Topic:
+        Value: /cone/centerline
+      Color: 40; 255; 40
+      Line Style: Billboards
+      Line Width: 0.05
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Decision markers
+      Enabled: true
+      Topic:
+        Value: /viz/markers
+    - Class: rviz_default_plugins/Marker
+      Name: Trail
+      Enabled: true
+      Topic:
+        Value: /viz/trail
+    - Class: rviz_default_plugins/Image
+      Name: Overlay
+      Enabled: true
+      Topic:
+        Value: /viz/overlay
+    - Class: rviz_default_plugins/Image
+      Name: Warped lane windows
+      Enabled: true
+      Topic:
+        Value: /lane/debug_image
+    - Class: rviz_default_plugins/Image
+      Name: Stopline
+      Enabled: false
+      Topic:
+        Value: /stopline/debug_image
+    - Class: rviz_default_plugins/Image
+      Name: Speed zone
+      Enabled: false
+      Topic:
+        Value: /speed_zone/debug_image
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Follow car
+      Target Frame: base_link
+      Scale: 150
+      Angle: 0
+      X: 0.0
+      Y: 0.0
+      Invert Z Axis: false
+    Saved: ~
+Window Geometry:
+  Height: 1000
+  Width: 1700

@@ -8,6 +8,7 @@
   알고리즘은 `pytest`로 PC에서 돌고, 노드는 그것을 부르기만 한다.
 - 숫자(임계값, 속도, 영역)는 코드에 쓰지 않고 yaml에 둔다. 토픽 이름은 `clothoid_bringup/config/topics.yaml` 한 곳.
 - 다른 미션 패키지의 코드를 import하지 않는다. 여럿이 쓰는 ROS 보조 함수는 `clothoid_common`에만 둔다.
+  (예외: 미션이 아닌 `clothoid_debug`는 변환 행렬을 맞추려고 `clothoid_lane.lane_detector`를 import한다.)
 - 각 노드는 자기 `twist_mux` 입력에만 발행한다(`/cmd_vel` 직접 발행 금지).
 - **ROS2 yaml 주의:** 실수 파라미터는 `0.2`처럼 소수점을 꼭 쓴다(정수 `0`을 쓰면 노드가 시작하지 않는다).
   빈 리스트 `[]`도 쓰지 않는다(문자열 배열은 `['']`).
@@ -38,6 +39,7 @@
 | `clothoid_lidar` | 라이다 담당 | `obstacle_extractor`, `cone_sorter`, `cone_follower` | `rubber_cone`, `obstacle_detector` 대체 | 이식, 소터는 단순화, 노드 기동 확인, 실제 콘 미확인 |
 | `clothoid_parking` | 주영 | T자 주차 스텝 표 + 시작선 | `parking_rect` | 2025 시퀀스 이식, 노드 기동 확인, 2026용 재작성 필요 |
 | `clothoid_mission` | 주영 | 정지·서행·방향·주차 신호 로직 | 신규(2025는 mux 우선순위로 처리) | 초안, 가짜 입력으로 ROS 동작 확인 |
+| `clothoid_debug` | - | 노드의 판단을 RViz로 보는 시각화(`debug:=true`, bag 재생). 주행 명령 없음 | 신규 | bag 재생으로 동작 확인, 실차 미확인. 사용법은 패키지 `README.md` |
 
 ## 실행 확인 현황 (2026-11-02, limo2, 커밋 `f9e422d`)
 

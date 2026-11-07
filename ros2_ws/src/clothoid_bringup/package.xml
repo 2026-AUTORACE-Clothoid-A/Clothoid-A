@@ -29,6 +29,7 @@
   <exec_depend>clothoid_lidar</exec_depend>
   <exec_depend>clothoid_parking</exec_depend>
   <exec_depend>clothoid_mission</exec_depend>
+  <exec_depend>clothoid_debug</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

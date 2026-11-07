@@ -4,6 +4,8 @@
     ros2 launch clothoid_bringup full.launch.py use_yolo:=false use_parking:=false
     ros2 launch clothoid_bringup full.launch.py debug:=true backend:=ultralytics model_path:=/path/best.pt
 
+`debug:=true` also starts clothoid_debug/decision_viz; open clothoid_debug/rviz/decision.rviz to watch it.
+
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
 see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`,
@@ -37,7 +39,7 @@ def generate_launch_description():
     platform_args = {
         'camera_pitch': '0.0', 'use_camera': 'true', 'use_lidar': 'true', 'use_ekf': 'false',
         'require_arm': 'true', 'mux_output': '/cmd_vel',
-        'steering_scale': '2.47', 'max_inner_angle': '0.48869', 'cmd_timeout': '0.5',
+        'steering_scale': '1.06', 'max_inner_angle': '0.48869', 'cmd_timeout': '0.5',
     }
     debug = LaunchConfiguration('debug')
 
@@ -69,4 +71,7 @@ def generate_launch_description():
         Node(package='clothoid_bringup', executable='latency_monitor', name='latency_monitor',
              output='screen', parameters=[{'csv_path': LaunchConfiguration('latency_csv')}],
              condition=enabled('use_latency_monitor')),
+
+        # with debug on, also publish what rviz/decision.rviz shows
+        include('clothoid_debug', 'viz.launch.py', condition=enabled('debug')),
     ])

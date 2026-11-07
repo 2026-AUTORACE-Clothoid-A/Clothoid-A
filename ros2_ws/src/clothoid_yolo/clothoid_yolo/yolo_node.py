@@ -30,6 +30,7 @@ class YoloNode(Node):
         # model class name -> message class name, as "model_name:message_name" strings
         self.declare_parameter('class_aliases', [''])
         self.declare_parameter('debug', False)
+        self.declare_parameter('show', False)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.backend = None
@@ -75,17 +76,24 @@ class YoloNode(Node):
             out.detections.append(d)
         self.pub.publish(out)
 
-        if self.get_parameter('debug').value and boxes:
-            self.publish_debug(bgr, boxes, msg.header)
-
-    def publish_debug(self, bgr: np.ndarray, boxes, header):
-        import cv2
-        canvas = bgr.copy()
-        for b in boxes:
-            cv2.rectangle(canvas, (b.x_min, b.y_min), (b.x_max, b.y_max), (0, 255, 0), 2)
-            cv2.putText(canvas, f'{b.class_name} {b.confidence:.2f}', (b.x_min, b.y_min - 4),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-        self.debug_pub.publish(bgr_to_image(canvas, header))
+        need_debug = self.get_parameter('debug').value
+        need_show = self.get_parameter('show').value
+        if (need_debug or need_show) and bgr is not None:
+            import cv2
+            canvas = bgr.copy()
+            for b in boxes:
+                cv2.rectangle(canvas, (b.x_min, b.y_min), (b.x_max, b.y_max), (0, 255, 0), 2)
+                cv2.putText(canvas, f'{b.class_name} {b.confidence:.2f}', (b.x_min, max(b.y_min - 4, 15)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+            if need_debug:
+                self.debug_pub.publish(bgr_to_image(canvas, msg.header))
+            if need_show:
+                try:
+                    cv2.imshow('Clothoid YOLO Detection', canvas)
+                    cv2.waitKey(1)
+                except Exception as exc:
+                    self.get_logger().warn(f'cv2.imshow failed (check DISPLAY): {exc}',
+                                           throttle_duration_sec=5.0)
 
 
 def main(args=None):
@@ -96,6 +104,11 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
+        try:
+            import cv2
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
