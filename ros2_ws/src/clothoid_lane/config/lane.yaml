@@ -12,8 +12,11 @@ lane_main:
     # driver at the driver's positions, so a higher value has to be tried on the car
     steer_gain: 1.0
     initial_side: 1            # 0 left lane, 1 right lane, 2 both
-    lane_width: 170            # px in the warped image; both camera profiles make a straight lane 170 px
-    parking_lane_width: 231    # px, 140 scaled with lane_width from 103 (retune)
+    # lane width, line centre to centre in metres: 0.5 m on our track (measured 2026-11-07). The rule
+    # book says 550 mm, so check it at the venue and change only this value. In the warped image it
+    # is lane_width_m x warp_px_per_m (per car, camera_*.yaml): 0.5 m = 170 px.
+    lane_width_m: 0.5
+    parking_lane_width_m: 0.68   # was 231 px (2025's 140 px scaled with the lane width), retune
 
     # warp: per car, see camera_limo1.yaml / camera_limo2.yaml (launch argument camera:=)
 

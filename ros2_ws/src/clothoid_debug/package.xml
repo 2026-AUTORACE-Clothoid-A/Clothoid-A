@@ -17,6 +17,8 @@
   <depend>clothoid_common</depend>
   <!-- bag.launch.py also needs clothoid_bringup at run time; not declared because bringup depends on this package -->
   <exec_depend>clothoid_lane</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>compressed_image_transport</exec_depend>
   <exec_depend>clothoid_lidar</exec_depend>
   <exec_depend>clothoid_mission</exec_depend>
 

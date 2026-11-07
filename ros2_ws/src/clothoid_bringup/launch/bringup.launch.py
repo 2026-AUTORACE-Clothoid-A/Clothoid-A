@@ -56,9 +56,12 @@ def generate_launch_description():
         # URDF: base_link -> laser_link, imu_link, wheels
         include('limo_description', 'launch', 'load_urdf.launch.py'),
 
-        # camera mounting (same nominal values as wego/camera_tilt_launch.py; measure and update)
+        # colour camera lens of the DaBai, measured on limo2 2026-11-07 (wego had 0.23, 0.05, 0.06):
+        # x 5 cm ahead of the front axle (base_link is midway between the axles, wheelbase 0.2),
+        # y 1 cm right of the centre line, z 19 cm above the floor = 0.045 above base_link (URDF:
+        # wheel centres 0.10 below base_link, wheel radius 0.045)
         static_tf('base_link_to_camera_link', 'base_link', 'camera_link',
-                  xyz=(0.23, 0.05, 0.06), pitch=camera_pitch),
+                  xyz=(0.15, -0.01, 0.045), pitch=camera_pitch),
         # optical frame (z forward, x right, y down)
         static_tf('camera_link_to_optical', 'camera_link', 'camera_color_optical_frame',
                   xyz=(0, 0, 0), rpy=('-1.5708', '0', '-1.5708')),

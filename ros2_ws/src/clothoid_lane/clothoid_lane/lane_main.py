@@ -25,6 +25,8 @@ from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 DETECTORS = ('track2026', 'sliding2025')
 TRACKER_FIELDS = tuple(TrackerParams.__dataclass_fields__)
 # parameters that need a new detector (rebuilding one also clears the tracked lines)
+# parameters that set the lane width in the warped image
+WIDTH_PARAMS = {'lane_width_m', 'parking_lane_width_m', 'warp_px_per_m'}
 DETECTOR_PARAMS = {'detector', 'width', 'height', 'warp_w', 'warp_h', 'warp_x_h', 'warp_x_l',
                    'warp_y_h', 'warp_y_l', 'nwindows', 'margin', 'min_pixels', 'hsv_lower',
                    'hsv_upper', 'canny_low', 'canny_high', *TRACKER_FIELDS}
@@ -56,10 +58,13 @@ class LaneMainNode(Node):
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
 
-        # lane following side / width
+        # lane following side / width. Widths are real distances, line centre to centre in metres;
+        # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
+        # (config/camera_*.yaml), so the width in pixels is lane_width_m x warp_px_per_m.
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
-        self.declare_parameter('lane_width', 103)
-        self.declare_parameter('parking_lane_width', 140)
+        self.declare_parameter('lane_width_m', 0.5)
+        self.declare_parameter('parking_lane_width_m', 0.68)
+        self.declare_parameter('warp_px_per_m', 340.0)
 
         # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or
         # sliding2025 (the 2025 port, lane_detector.py)
@@ -86,8 +91,9 @@ class LaneMainNode(Node):
 
         self.detector = self._make_detector(lambda name: self.get_parameter(name).value)
         self.side = self.get_parameter('initial_side').value
-        self.lane_width = self.get_parameter('lane_width').value
         self.parking_started = False
+        self.parking_width = False   # set by the parking flag, kept afterwards (2025 behaviour)
+        self.lane_width = self._lane_width_px(lambda name: self.get_parameter(name).value)
 
         self.speed_limit = None
         self.speed_limit_stamp = None
@@ -112,7 +118,7 @@ class LaneMainNode(Node):
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
 
         self.add_on_set_parameters_callback(self.on_parameters)
-        self.get_logger().info('lane_main started')
+        self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
 
     @staticmethod
     def _lane_params(value) -> LaneParams:
@@ -123,6 +129,10 @@ class LaneMainNode(Node):
             nwindows=value('nwindows'), margin=value('margin'), min_pixels=value('min_pixels'),
             hsv_lower=tuple(value('hsv_lower')), hsv_upper=tuple(value('hsv_upper')),
             canny_low=value('canny_low'), canny_high=value('canny_high'))
+
+    def _lane_width_px(self, value) -> float:
+        name = 'parking_lane_width_m' if self.parking_width else 'lane_width_m'
+        return value(name) * value('warp_px_per_m')
 
     def _make_detector(self, value):
         kind = value('detector')
@@ -138,16 +148,21 @@ class LaneMainNode(Node):
         # after this callback returns, so rebuild the detector from the proposed values.
         from rcl_interfaces.msg import SetParametersResult
         proposed = {p.name: p.value for p in params}
-        if not DETECTOR_PARAMS & proposed.keys():
-            return SetParametersResult(successful=True)
 
         def value(name):
             return proposed.get(name, self.get_parameter(name).value)
 
-        try:
-            self.detector = self._make_detector(value)
-        except Exception as exc:  # invalid warp parameters, unknown detector etc.
-            return SetParametersResult(successful=False, reason=str(exc))
+        width = WIDTH_PARAMS & proposed.keys()
+        if width and any(value(name) <= 0.0 for name in WIDTH_PARAMS):
+            return SetParametersResult(successful=False, reason='lane widths must be > 0')
+        if DETECTOR_PARAMS & proposed.keys():
+            try:
+                self.detector = self._make_detector(value)
+            except Exception as exc:  # invalid warp parameters, unknown detector etc.
+                return SetParametersResult(successful=False, reason=str(exc))
+        if width:
+            self.lane_width = self._lane_width_px(value)
+            self.get_logger().info(f'lane width {self.lane_width:.0f} px')
         return SetParametersResult(successful=True)
 
     # --- flags from other nodes -------------------------------------------------
@@ -160,7 +175,8 @@ class LaneMainNode(Node):
         self.parking_started = msg.data
         if msg.data:
             self.side = SIDE_RIGHT
-            self.lane_width = self.get_parameter('parking_lane_width').value
+            self.parking_width = True
+            self.lane_width = self._lane_width_px(lambda name: self.get_parameter(name).value)
             self.get_logger().info('parking lane change')
 
     def on_speed_limit(self, msg: Float32):

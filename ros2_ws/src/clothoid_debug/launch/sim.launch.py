@@ -22,8 +22,8 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(share(package, 'launch', launch_file)),
             launch_arguments=(args or {}).items())
 
-    # the simulator camera uses limo1's warp
-    warp = share('clothoid_lane', 'config', 'camera_limo1.yaml')
+    # the simulator camera uses limo2's warp (the only car in use)
+    warp = share('clothoid_lane', 'config', 'camera_limo2.yaml')
 
     return LaunchDescription([
         GroupAction([

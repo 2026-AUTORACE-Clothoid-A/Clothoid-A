@@ -41,7 +41,7 @@ ros2 bag record -o ~/bags/run1 /camera/color/image_raw /camera/color/camera_info
 
 ## 3. TF와 센서 방향
 
-현재 TF는 공장 공칭값이고 **줄자로 잰 값이 아니다**: `base_link`→`laser_link` (0.103, 0, −0.034), `base_link`→`camera_link` (0.23, 0.05, 0.06).
+현재 TF는 공장 공칭값이고 **줄자로 잰 값이 아니다**: `base_link`→`laser_link` (0.103, 0, −0.034), `base_link`→`camera_link` (0.15, -0.01, 0.045). limo2에서 잰 값이다(2026-11-07): DaBai의 컬러 카메라 렌즈가 앞바퀴 축보다 5 cm 앞, 진행 방향 기준 차 중심선에서 오른쪽 1 cm, 바닥에서 19 cm. `base_link`는 앞뒤 축 가운데(축간거리 0.2 m, 실측 확인)이고 바닥에서 0.145 m 위(URDF)다.
 
 - `ros2 run tf2_tools view_frames`, `ros2 run tf2_ros tf2_echo base_link laser_link`, `... base_link camera_color_optical_frame`.
 - 라바콘 노드가 쓰는 TF는 `base_link←laser_link`뿐이다. 차선 인식은 이미지 호모그래피만 쓰고 TF를 안 쓴다.

@@ -27,7 +27,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('debug', default_value='false'),
-        DeclareLaunchArgument('camera', default_value='limo1',
+        DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2 (config/camera_*.yaml)'),
         node('lane_main', 'lane_main', 'lane.yaml'),
         node('speed_zone', 'speed_zone', 'speed_zone.yaml'),

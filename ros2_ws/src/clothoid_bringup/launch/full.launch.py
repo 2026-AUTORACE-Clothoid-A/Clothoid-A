@@ -39,7 +39,7 @@ def generate_launch_description():
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
         DeclareLaunchArgument('debug', default_value='false'),
-        DeclareLaunchArgument('camera', default_value='limo1',
+        DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2 (clothoid_lane/config)'),
         DeclareLaunchArgument('backend', default_value='none',
                               description='yolo backend, "none" publishes empty detections'),

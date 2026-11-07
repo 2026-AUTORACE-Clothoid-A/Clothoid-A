@@ -125,7 +125,9 @@ private:
     ImuData imu_data_;
     uint8_t motion_mode_ = 0xFF;  // current motion type; invalid until the body reports it
 
-    static constexpr double track_ = 0.172;           // m (left right wheel distance)
+    // m (left right wheel distance): LIMO spec sheet tread 175 mm (wheelbase 200 mm); the factory
+    // driver had 0.172. Only used for the inner/central steering angle conversion.
+    static constexpr double track_ = 0.175;
     static constexpr double wheelbase_ = 0.2;         // m (front rear wheel distance)
     double steering_scale_ = 2.47;       // inner wheel angle (rad) per body steering value, official value
     double max_inner_angle_ = 0.48869;   // 28 degree, official value

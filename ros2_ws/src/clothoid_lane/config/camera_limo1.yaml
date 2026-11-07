@@ -13,3 +13,4 @@
     warp_y_l: 40
     camera_pitch: 0.080        # rad, decision_viz ground projection (bags: vanishing point row 171)
     look_row: 120              # lane target row, 0.49 m ahead of the camera (2025 used the window mean, also 120)
+    warp_px_per_m: 340.0       # px per metre across the warped image: the 0.5 m lane is 170 px

@@ -11,7 +11,7 @@ def generate_launch_description():
     camera = PathJoinSubstitution([FindPackageShare('clothoid_lane'), 'config',
                                    ['camera_', LaunchConfiguration('camera'), '.yaml']])
     return LaunchDescription([
-        DeclareLaunchArgument('camera', default_value='limo1',
+        DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2'),
         Node(package='clothoid_debug', executable='decision_viz', name='decision_viz',
              output='screen', parameters=[camera]),

@@ -9,8 +9,20 @@
     warp_x_l: 327
     warp_y_h: 120
     warp_y_l: 2
-    camera_pitch: -0.021
-    # lane target row: 180 = 0.45 m ahead of the camera, 0.68 m ahead of base_link (120 = 0.76 m).
+    camera_pitch: -0.021       # rad; the user reads the mount as level within +-1 deg (2026-11-07)
+    # colour camera lens, measured 2026-11-07: 19 cm above the floor (the bag gives 0.185 m from the
+    # lane width), 5 cm ahead of the front axle and 1 cm right of the car's centre line.
+    # decision_viz ground projection only; the lane target is still the image centre, so the car
+    # runs about 1 cm left of the lane centre.
+    camera_height: 0.19
+    camera_x: 0.15             # m ahead of base_link (midway between the axles)
+    camera_y: -0.01            # m, left positive
+    # lateral scale of the warped image, px per metre across: lane_width_m x this = lane width in px.
+    # 340 makes the 0.5 m lane 170 px; the 2026-11-07 bag straights measure 165~168 px (330~336).
+    # Measure again whenever the warp changes: straight lane px / real lane width.
+    warp_px_per_m: 340.0
+    # lane target row: 180 = 0.45 m ahead of the camera, 0.50 m ahead of the front axle and 0.60 m
+    # ahead of base_link (120 = 0.53 / 0.58 / 0.68 m). The warp starts 0.37 m ahead of the camera.
     # 2026-11-07 drive with 120: the car cut the first right corner (radius ~0.6 m) and crossed the
     # inner line; replaying that drive, 180 steers 6 deg there instead of 9
     look_row: 180
