@@ -29,6 +29,7 @@ setup(
             'cone_follower = clothoid_lidar.cone_follower_node:main',
             'lidar_debug = clothoid_lidar.lidar_debug_node:main',
             'red_ratio = clothoid_lidar.red_ratio_node:main',
+            'static_avoid = clothoid_lidar.static_avoid_node:main',
         ],
     },
 )

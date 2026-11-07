@@ -1,0 +1,44 @@
+# Static obstacle mission (3-lane section). Design: docs/STATIC_AVOID.md. Distances in m.
+# Floats need a decimal point. Topic names come from clothoid_bringup/config/topics.yaml.
+static_avoid:
+  ros__parameters:
+    cmd_topic: /cmd_vel_avoid
+    limos_topic: /lidar/limos
+    # camera red share as a 'cone course' sign: OFF. The cone mission (namgyu/cone) starts on the lidar
+    # alone, so only /cone/mission_active is used. To try it: use_red_ratio true and start red_ratio.
+    use_red_ratio: false
+    red_ratio_max: 0.10          # 1105 bags: obstacle zone <= 0.06, cone course >= 0.20
+    debug: true                  # /avoid/path, /avoid/candidates (costmap is always published)
+
+    lane_width: 0.50             # line centre to centre on our track; rules 0.55, check at the venue
+    # trigger
+    activate_range: 1.5
+    block_half_width: 0.30
+    activate_scans: 3
+    rearm_clear: 1.0             # s
+    # hand-over to lane_main
+    min_travel: 3.0
+    max_travel: 7.0
+    release_tol: 0.10
+    release_heading_deg: 10.0
+    release_clear: 2.0          # m ahead, all lanes clear
+    # painted island. Fallback from the activation point (~1.5 m before the first LIMO; the 11-05
+    # bags put the true island at 3.6~5.5 m from it). Soft cost only.
+    island_s_min: 3.3            # fallback when the entry line was not seen
+    island_s_max: 5.0
+    fork_commit: 2.0
+    # the island from the white entry line (rule book p.4 drawing at scale); the camera sees the
+    # line, the base crosses it, a start within entry_max_back of that anchors the section
+    island_from_entry_min: 4.40
+    island_from_entry_max: 6.15
+    entry_max_back: 3.0
+    island_handover: 1.0         # m before the island front: hand over, lane_main enters A / B
+    island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
+    image_every: 3               # entry line: every 3rd camera frame
+    # camera geometry and the white threshold are NOT set here: avoid.launch.py passes the lane
+    # package's camera_<car>.yaml and lane.yaml lane_main white_s_max / white_v_min
+    # control
+    speed: 0.30
+    slow_speed: 0.20
+    lookahead: 0.45
+    max_steer: 0.49

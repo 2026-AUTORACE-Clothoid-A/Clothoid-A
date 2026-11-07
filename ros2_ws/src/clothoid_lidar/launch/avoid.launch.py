@@ -1,0 +1,65 @@
+"""Static obstacle mission: LIMO extractor and static_avoid. full.launch.py should include this next
+to cone.launch.py. The camera red share (red_ratio node) is not started: off by default, see
+config/static_avoid.yaml.
+
+The camera geometry comes from the lane package's per-car file (camera_<camera>.yaml) and the white
+threshold from lane.yaml's lane_main section, so the entry-line detector uses the lane's values;
+static_avoid also follows lane_main's white_* when they are changed at run time.
+
+    ros2 launch clothoid_lidar avoid.launch.py                     # on the car (camera:=limo2 = car 7)
+    ros2 launch clothoid_lidar avoid.launch.py use_sim_time:=true  # with `ros2 bag play --clock`
+"""
+import os
+
+import yaml
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def _lane_files(camera):
+    """(camera profile path or None, {white_s_max, white_v_min} from lane.yaml or {})."""
+    try:
+        lane = get_package_share_directory('clothoid_lane')
+    except PackageNotFoundError:
+        return None, {}
+    cam = os.path.join(lane, 'config', f'camera_{camera}.yaml')
+    white = {}
+    try:
+        with open(os.path.join(lane, 'config', 'lane.yaml')) as f:
+            main = (yaml.safe_load(f) or {}).get('lane_main', {}).get('ros__parameters', {})
+        white = {k: int(main[k]) for k in ('white_s_max', 'white_v_min') if k in main}
+    except OSError:
+        pass
+    return (cam if os.path.exists(cam) else None), white
+
+
+def _nodes(context):
+    lidar = get_package_share_directory('clothoid_lidar')
+    topics = os.path.join(get_package_share_directory('clothoid_bringup'), 'config', 'topics.yaml')
+    lidar_yaml = os.path.join(lidar, 'config', 'lidar.yaml')
+    avoid_yaml = os.path.join(lidar, 'config', 'static_avoid.yaml')
+    sim = {'use_sim_time': LaunchConfiguration('use_sim_time').perform(context).lower() == 'true'}
+    camera = LaunchConfiguration('camera').perform(context)
+    cam_file, white = _lane_files(camera)
+    avoid_params = [topics, avoid_yaml] + ([cam_file] if cam_file else []) + [white, sim]
+    note = (f'static_avoid: camera file {cam_file}' if cam_file else
+            f'static_avoid: no camera_{camera}.yaml in clothoid_lane, built-in limo2 values')
+    return [
+        LogInfo(msg=note + (f', lane white {white}' if white else ', built-in white threshold')),
+        Node(package='clothoid_lidar', executable='obstacle_extractor', name='limo_extractor',
+             output='screen', parameters=[topics, lidar_yaml, sim]),
+        Node(package='clothoid_lidar', executable='static_avoid', name='static_avoid',
+             output='screen', parameters=avoid_params),
+    ]
+
+
+def generate_launch_description():
+    return LaunchDescription([
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
+        DeclareLaunchArgument('camera', default_value='limo2',
+                              description='lane camera profile: limo1 | limo2 (limo2 = car 7)'),
+        OpaqueFunction(function=_nodes),
+    ])

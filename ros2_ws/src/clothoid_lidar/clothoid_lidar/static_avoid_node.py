@@ -1,0 +1,395 @@
+#!/usr/bin/env python3
+"""Static obstacle mission node (3-lane section). Logic in static_avoid.py, design in
+docs/STATIC_AVOID.md.
+
+In:  limos_topic (PoseArray, base_link, from the `limo_extractor` instance), scan_topic, odom_topic
+     (speed only), imu_topic (yaw), /cone/mission_active, /camera/red_ratio, parking_topic,
+     /cmd_vel_state (mission stop commands), direction_topic,
+     image_topic (raw or .../compressed; every `image_every`-th frame) for the white entry line,
+     island_topic (optional PointStamped in base_link: the island front from the lane tracker),
+     /parameter_events (follows lane_main's white_s_max / white_v_min so venue tuning applies).
+     Camera geometry: camera_height / camera_pitch / camera_x / camera_y from the lane package's
+     per-car camera file (avoid.launch.py camera:=limo1|limo2).
+Out: cmd_topic (/cmd_vel_avoid, 20 Hz while active, one Twist(0) when it ends),
+     /avoid/active (Bool, every scan), /avoid/lane (Int32, 1..3 while active, 0 idle),
+     debug: /avoid/path (Path), /avoid/candidates (MarkerArray), /avoid/costmap (OccupancyGrid),
+     /avoid/cues (MarkerArray: entry line, island and its source), all in base_link.
+"""
+import math
+from collections import deque
+from dataclasses import fields
+
+import numpy as np
+import rclpy
+from geometry_msgs.msg import Point, PointStamped, PoseArray, PoseStamped, Twist
+from rcl_interfaces.msg import ParameterEvent
+from nav_msgs.msg import OccupancyGrid, Odometry, Path
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+from sensor_msgs.msg import CompressedImage, Image, Imu, LaserScan
+from std_msgs.msg import Bool, ColorRGBA, Float32, Header, Int32
+from tf2_ros import Buffer, TransformException, TransformListener
+from visualization_msgs.msg import Marker, MarkerArray
+
+from clothoid_lidar.red_ratio_node import image_to_bgr
+from clothoid_lidar.section_cues import (CameraModel, EntryLineTracker, WhiteParams,
+                                         find_entry_line)
+from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, PoseTracker,
+                                         StaticAvoid, section_to_base, yaw_from_quaternion)
+
+
+class StaticAvoidNode(Node):
+    def __init__(self):
+        super().__init__('static_avoid')
+        topics = {
+            'limos_topic': '/lidar/limos', 'scan_topic': '/scan', 'odom_topic': '/odom',
+            'imu_topic': '/imu', 'cmd_topic': '/cmd_vel_avoid',
+            'cone_active_topic': '/cone/mission_active', 'red_ratio_topic': '/camera/red_ratio',
+            'parking_topic': '/parking_flag', 'state_cmd_topic': '/cmd_vel_state',
+            'direction_topic': '/direction_flag',
+        }
+        for name, value in topics.items():
+            self.declare_parameter(name, value)
+        self.declare_parameter('base_frame', 'base_link')
+        self.declare_parameter('use_red_ratio', False)
+        self.declare_parameter('red_ratio_window', 0.5)   # s, max over this window
+        self.declare_parameter('state_window', 0.5)       # s, a mission command this recent inhibits
+        self.declare_parameter('scan_time_offset', 0.05)  # s, stamp is the start of the sweep
+        self.declare_parameter('lidar_x', 0.103)          # used when TF is not available
+        self.declare_parameter('lidar_y', 0.0)
+        self.declare_parameter('debug', True)
+        # camera cues
+        self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('image_every', 3)
+        self.declare_parameter('island_topic', '')        # '' = no island signal from the lane side
+        self.declare_parameter('lane_node', '/lane_main')  # whose white_* tuning to follow
+        cam = CameraModel()
+        for name, value in (('camera_height', cam.height), ('camera_pitch', cam.pitch),
+                            ('camera_x', cam.x), ('camera_y', cam.y), ('fx', cam.fx),
+                            ('fy', cam.fy), ('cx', cam.cx), ('cy', cam.cy)):
+            self.declare_parameter(name, value)
+        wp = WhiteParams()
+        self.declare_parameter('white_s_max', wp.s_max)
+        self.declare_parameter('white_v_min', wp.v_min)
+        d = AvoidParams()
+        for f in fields(AvoidParams):
+            value = getattr(d, f.name)
+            self.declare_parameter(f.name, list(value) if isinstance(value, tuple) else value)
+        self.p = AvoidParams(**{
+            f.name: (tuple(self.get_parameter(f.name).value) if isinstance(getattr(d, f.name), tuple)
+                     else self.get_parameter(f.name).value) for f in fields(AvoidParams)})
+
+        self.avoid = StaticAvoid(self.p)
+        self.tracker = PoseTracker()
+        v = lambda n: self.get_parameter(n).value  # noqa: E731
+        self.cam = CameraModel(fx=v('fx'), fy=v('fy'), cx=v('cx'), cy=v('cy'),
+                               height=v('camera_height'), pitch=v('camera_pitch'),
+                               x=v('camera_x'), y=v('camera_y'))
+        self.white = WhiteParams(s_max=int(v('white_s_max')), v_min=int(v('white_v_min')))
+        self.entry = EntryLineTracker()
+        self.image_count = 0
+        self.cone_active = False
+        self.parking = False
+        self.direction = None
+        self.red = deque()          # (t, ratio)
+        self.state_seen = None      # time of the last /cmd_vel_state message
+        self.lidar_pose = None      # (x, y, yaw) of the scan frame in base_link
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        g = lambda n: self.get_parameter(n).value  # noqa: E731
+        self.cmd_pub = self.create_publisher(Twist, g('cmd_topic'), 1)
+        self.active_pub = self.create_publisher(Bool, '/avoid/active', 1)
+        self.lane_pub = self.create_publisher(Int32, '/avoid/lane', 1)
+        self.path_pub = self.create_publisher(Path, '/avoid/path', 1)
+        self.cand_pub = self.create_publisher(MarkerArray, '/avoid/candidates', 1)
+        self.map_pub = self.create_publisher(OccupancyGrid, '/avoid/costmap', 1)
+        self.cues_pub = self.create_publisher(MarkerArray, '/avoid/cues', 1)
+
+        self.create_subscription(PoseArray, g('limos_topic'), self.on_limos, 1)
+        self.create_subscription(LaserScan, g('scan_topic'), self.on_scan, qos_profile_sensor_data)
+        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 20)
+        self.create_subscription(Imu, g('imu_topic'), self.on_imu, 50)
+        self.create_subscription(Bool, g('cone_active_topic'), self.on_cone, 1)
+        self.create_subscription(Float32, g('red_ratio_topic'), self.on_red, 5)
+        self.create_subscription(Bool, g('parking_topic'), self.on_parking, 1)
+        self.create_subscription(Twist, g('state_cmd_topic'), self.on_state_cmd, 5)
+        self.create_subscription(Int32, g('direction_topic'), self.on_direction, 1)
+        image_topic = g('image_topic')
+        if image_topic.endswith('/compressed'):
+            self.create_subscription(CompressedImage, image_topic, self.on_image,
+                                     qos_profile_sensor_data)
+        elif image_topic:
+            self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
+        if g('island_topic'):
+            self.create_subscription(PointStamped, g('island_topic'), self.on_island, 1)
+        self.create_subscription(ParameterEvent, '/parameter_events', self.on_param_event, 10)
+        self.create_timer(0.05, self.on_timer)
+        self.create_timer(0.5, self.publish_costmap)
+        self.get_logger().info(f'static_avoid started: lane width {self.p.lane_width:.2f} m, '
+                               f'trigger {self.p.activate_range:.1f} m ahead, camera h '
+                               f'{self.cam.height:.3f} pitch {self.cam.pitch:+.3f}, white S<='
+                               f'{self.white.s_max} V>={self.white.v_min}')
+
+    # ---- inputs -----------------------------------------------------------------------------
+    def now(self) -> float:
+        return self.get_clock().now().nanoseconds * 1e-9
+
+    def stamp(self, msg) -> float:
+        """Message time (the driver's stamp): bag playback's /clock ticks at 40 Hz, slower than
+        /odom, so the node clock would merge odometry steps. Falls back to now() when unset."""
+        t = Time.from_msg(msg.header.stamp).nanoseconds * 1e-9
+        return t if t > 0.0 else self.now()
+
+    def on_imu(self, msg: Imu):
+        q = msg.orientation
+        self.tracker.imu(self.stamp(msg), yaw_from_quaternion(q.x, q.y, q.z, q.w))
+
+    def on_odom(self, msg: Odometry):
+        self.tracker.odom(self.stamp(msg), msg.twist.twist.linear.x)
+
+    def on_cone(self, msg: Bool):
+        self.cone_active = msg.data
+
+    def on_parking(self, msg: Bool):
+        self.parking = msg.data
+
+    def on_direction(self, msg: Int32):
+        self.direction = msg.data
+
+    def on_red(self, msg: Float32):
+        self.red.append((self.now(), float(msg.data)))
+
+    def on_state_cmd(self, _msg: Twist):
+        self.state_seen = self.now()
+
+    def on_param_event(self, msg: ParameterEvent):
+        """Follow the lane tracker's white threshold when it is tuned at the venue."""
+        if msg.node != self.get_parameter('lane_node').value:
+            return
+        for prm in list(msg.new_parameters) + list(msg.changed_parameters):
+            if prm.name == 'white_s_max':
+                self.white.s_max = int(prm.value.integer_value)
+            elif prm.name == 'white_v_min':
+                self.white.v_min = int(prm.value.integer_value)
+            else:
+                continue
+            self.get_logger().info(f'white threshold from {msg.node}: S<={self.white.s_max} '
+                                   f'V>={self.white.v_min}')
+
+    def on_image(self, msg):
+        self.image_count += 1
+        if (self.image_count - 1) % max(1, int(self.get_parameter('image_every').value)):
+            return
+        if not self.tracker.ready:
+            return
+        try:
+            if isinstance(msg, CompressedImage):
+                import cv2
+                bgr = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
+            else:
+                bgr = image_to_bgr(msg)
+        except Exception as exc:   # an odd encoding must not stop the mission
+            self.get_logger().warn(f'image skipped: {exc}', throttle_duration_sec=5.0)
+            return
+        line = find_entry_line(bgr, self.cam, self.white)
+        crossing = self.entry.update(self.now(), self.tracker.distance, line)
+        if crossing is None:
+            return
+        self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m, '
+                               f'heading {math.degrees(crossing.heading):+.1f} deg to the lane')
+        if self.avoid.state == ACTIVE:
+            self.avoid.on_entry_crossing(self.tracker.latest(),
+                                         crossing.odometer - self.tracker.distance)
+
+    def on_island(self, msg: PointStamped):
+        if self.avoid.state != ACTIVE or not self.tracker.ready:
+            return
+        s, _, psi = self.avoid.section_pose(self.tracker.latest())
+        self.avoid.set_island_front(s + math.cos(psi) * msg.point.x - math.sin(psi) * msg.point.y,
+                                    'lane tracker')
+
+    def inhibit(self) -> Inhibit:
+        t = self.now()
+        while self.red and self.red[0][0] < t - self.get_parameter('red_ratio_window').value:
+            self.red.popleft()
+        red = max(r for _, r in self.red) if (self.red and self.get_parameter('use_red_ratio').value) \
+            else None
+        recent_state = (self.state_seen is not None
+                        and t - self.state_seen <= self.get_parameter('state_window').value)
+        return Inhibit(cone_active=self.cone_active, red_ratio=red, parking=self.parking,
+                       state_command=recent_state)
+
+    def on_limos(self, msg: PoseArray):
+        limos = (np.array([[p.position.x, p.position.y] for p in msg.poses])
+                 if msg.poses else np.zeros((0, 2)))
+        pose = self.tracker.latest() if self.tracker.ready else None
+        c = self.entry.recent(self.tracker.distance, self.p.entry_max_back)
+        entry_back = self.tracker.distance - c.odometer if c is not None else None
+        if self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
+                               entry_back):
+            self.get_logger().info(f'static obstacle START (blocked ahead) at odometer '
+                                   f'{self.tracker.distance:.2f} m, island '
+                                   f'{self.avoid.island[0]:.2f} m ({self.avoid.island_source})')
+
+    def _lidar(self, scan: LaserScan):
+        if self.lidar_pose is None:
+            try:
+                tf = self.tf_buffer.lookup_transform(self.get_parameter('base_frame').value,
+                                                     scan.header.frame_id, Time())
+                q = tf.transform.rotation
+                self.lidar_pose = (tf.transform.translation.x, tf.transform.translation.y,
+                                   yaw_from_quaternion(q.x, q.y, q.z, q.w))
+            except TransformException:
+                return (self.get_parameter('lidar_x').value, self.get_parameter('lidar_y').value,
+                        0.0)
+        return self.lidar_pose
+
+    def on_scan(self, scan: LaserScan):
+        active = self.avoid.state == ACTIVE
+        self.active_pub.publish(Bool(data=active))
+        if not active or not self.tracker.ready:
+            return
+        lx, ly, lyaw = self._lidar(scan)
+        r = np.asarray(scan.ranges, float)
+        ang = scan.angle_min + scan.angle_increment * np.arange(r.size) + lyaw
+        ok = np.isfinite(r) & (r > scan.range_min) & (r < scan.range_max)
+        hits = np.column_stack((lx + r[ok] * np.cos(ang[ok]), ly + r[ok] * np.sin(ang[ok])))
+        free = np.column_stack((np.cos(ang[~ok]), np.sin(ang[~ok])))
+        t_scan = (Time.from_msg(scan.header.stamp).nanoseconds * 1e-9
+                  + self.get_parameter('scan_time_offset').value)
+        debug = self.get_parameter('debug').value
+        self.avoid.on_scan(hits, np.array([lx, ly]), self.tracker.at(t_scan),
+                           self.tracker.latest(), self.direction, keep_candidates=debug,
+                           free_dirs_base=free)
+        if debug:
+            self.publish_plan()
+
+    # ---- control ----------------------------------------------------------------------------
+    def on_timer(self):
+        was_active = self.avoid.state == ACTIVE
+        if not was_active or not self.tracker.ready:
+            self.lane_pub.publish(Int32(data=0))
+            return
+        pose = self.tracker.latest()
+        cmd = self.avoid.control(pose, self.inhibit())
+        if cmd is None:   # ended this cycle: one stop, then silence (lane_main / others take over)
+            self.cmd_pub.publish(Twist())
+            self.active_pub.publish(Bool(data=False))
+            self.get_logger().info(f'static obstacle END: {self.avoid.event}')
+            return
+        out = Twist()
+        out.linear.x, out.angular.z = float(cmd[0]), float(cmd[1])
+        self.cmd_pub.publish(out)
+        self.lane_pub.publish(Int32(data=self.avoid.lane(pose) or 0))
+
+    # ---- debug ------------------------------------------------------------------------------
+    def _header(self) -> Header:
+        h = Header(frame_id=self.get_parameter('base_frame').value)
+        h.stamp = self.get_clock().now().to_msg()
+        return h
+
+    def publish_plan(self):
+        plan = self.avoid.plan
+        if plan is None:
+            return
+        pose = self.avoid.section_pose(self.tracker.latest())
+        header = self._header()
+        path = Path(header=header)
+        for x, y in section_to_base(plan.path, pose):
+            ps = PoseStamped(header=header)
+            ps.pose.position.x, ps.pose.position.y = float(x), float(y)
+            ps.pose.orientation.w = 1.0
+            path.poses.append(ps)
+        self.path_pub.publish(path)
+
+        out = MarkerArray()
+        out.markers.append(Marker(action=Marker.DELETEALL))
+        finite = [c for _, c in plan.candidates if math.isfinite(c)]
+        lo, hi = (min(finite), max(finite)) if finite else (0.0, 1.0)
+        for k, (cand, cost) in enumerate(plan.candidates):
+            m = Marker(header=header, ns='candidates', id=k, type=Marker.LINE_STRIP)
+            m.pose.orientation.w = 1.0
+            m.scale.x = 0.006
+            if math.isfinite(cost):
+                f = (cost - lo) / max(hi - lo, 1e-6)
+                m.color = ColorRGBA(r=float(f), g=float(1.0 - f), b=0.2, a=0.5)
+            else:
+                m.color = ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.15)
+            m.points = [Point(x=float(x), y=float(y), z=0.01)
+                        for x, y in section_to_base(cand[::4], pose)]
+            out.markers.append(m)
+        self.cand_pub.publish(out)
+
+    def publish_costmap(self):
+        if self.avoid.state != ACTIVE or self.avoid.costmap is None or not self.tracker.ready:
+            return
+        cm = self.avoid.costmap
+        s, d, psi = self.avoid.section_pose(self.tracker.latest())
+        grid = OccupancyGrid(header=self._header())
+        grid.info.resolution = float(self.p.resolution)
+        grid.info.width, grid.info.height = cm.ns, cm.nd
+        # cell (0, 0) of the section grid, expressed in base_link
+        corner = section_to_base(np.array([[self.p.grid_s_min, -cm.d_max]]), (s, d, psi))[0]
+        grid.info.origin.position.x, grid.info.origin.position.y = float(corner[0]), float(corner[1])
+        grid.info.origin.orientation.z = math.sin(-psi / 2.0)
+        grid.info.origin.orientation.w = math.cos(-psi / 2.0)
+        cost = np.where(cm.cost >= LETHAL, 100, np.clip(cm.cost, 0, 99)).astype(np.int8)
+        grid.data = cost.T.ravel().tolist()     # row-major, rows along d
+        self.map_pub.publish(grid)
+        self.publish_cues((s, d, psi))
+
+    def publish_cues(self, pose):
+        """Entry line and island (section frame) drawn in base_link."""
+        a, w = self.avoid, self.p.lane_width
+        header = self._header()
+        out = MarkerArray()
+        out.markers.append(Marker(action=Marker.DELETEALL))
+        s0, s1 = a.island
+        tip = 0.25
+        hexagon = np.array([(s0, 0.0), (s0 + tip, w / 2), (s1 - tip, w / 2), (s1, 0.0),
+                            (s1 - tip, -w / 2), (s0 + tip, -w / 2), (s0, 0.0)])
+        colour = {'lane tracker': (0.1, 0.8, 0.2), 'entry line': (0.95, 0.75, 0.1)}.get(
+            a.island_source, (0.7, 0.3, 0.9))
+        m = Marker(header=header, ns='island', id=0, type=Marker.LINE_STRIP)
+        m.pose.orientation.w = 1.0
+        m.scale.x = 0.02
+        m.color = ColorRGBA(r=colour[0], g=colour[1], b=colour[2], a=0.9)
+        m.points = [Point(x=float(x), y=float(y), z=0.02) for x, y in section_to_base(hexagon, pose)]
+        out.markers.append(m)
+        t = Marker(header=header, ns='island_label', id=0, type=Marker.TEXT_VIEW_FACING)
+        t.pose.orientation.w = 1.0
+        x, y = section_to_base(np.array([[s0, 0.0]]), pose)[0]
+        t.pose.position = Point(x=float(x), y=float(y), z=0.1)
+        t.scale.z = 0.06
+        t.color = m.color
+        t.text = f'island ({a.island_source})'
+        out.markers.append(t)
+        if a.entry_s is not None:
+            e = Marker(header=header, ns='entry_line', id=0, type=Marker.LINE_STRIP)
+            e.pose.orientation.w = 1.0
+            e.scale.x = 0.03
+            e.color = ColorRGBA(r=1.0, g=1.0, b=1.0, a=0.9)
+            ends = np.array([(a.entry_s, 1.5 * w), (a.entry_s, -1.5 * w)])
+            e.points = [Point(x=float(x), y=float(y), z=0.02) for x, y in section_to_base(ends, pose)]
+            out.markers.append(e)
+        self.cues_pub.publish(out)
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = StaticAvoidNode()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
