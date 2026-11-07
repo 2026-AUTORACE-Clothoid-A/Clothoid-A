@@ -25,7 +25,7 @@ from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
 #   DEFAULT_MODEL_PATH = "../models/best_fp16.engine"  # TensorRT 고속 엔진 (실차용)
 #   DEFAULT_MODEL_PATH = "../models/best.pt"           # PyTorch 가중치 (테스트용)
 # ==============================================================================
-DEFAULT_MODEL_PATH = "../models/best.pt"
+DEFAULT_MODEL_PATH = "../models/best_fp16.engine"
 
 
 def resolve_model_path(path_str: str) -> str:

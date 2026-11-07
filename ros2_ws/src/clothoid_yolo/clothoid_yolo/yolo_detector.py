@@ -110,13 +110,18 @@ class UltralyticsBackend:
             raise RuntimeError(
                 'ultralytics가 설치되어 있지 않습니다. 터미널에서 `pip install ultralytics` (또는 `pip3 install ultralytics`)를 실행해 주세요.'
             ) from exc
-        self.model = YOLO(model_path)
+        self.model = YOLO(model_path, task='detect')
         # Restore class names if engine defaulted to generic class0, class1...
-        if hasattr(self.model, 'names') and isinstance(self.model.names, (dict, list)):
-            names = self.model.names
-            keys = names.keys() if isinstance(names, dict) else range(len(names))
-            if any(str(names[k]).lower().startswith('class') for k in keys):
-                self.model.names = {i: name for i, name in enumerate(KNOWN_CLASSES)}
+        try:
+            if hasattr(self.model, 'names') and isinstance(self.model.names, (dict, list)):
+                names = self.model.names
+                keys = names.keys() if isinstance(names, dict) else range(len(names))
+                if any(str(names[k]).lower().startswith('class') for k in keys):
+                    self.model.names = {i: name for i, name in enumerate(KNOWN_CLASSES)}
+        except (AttributeError, TypeError):
+            # Engine models in Ultralytics have a read-only property for .names;
+            # _resolve_class_name will automatically fall back to KNOWN_CLASSES.
+            pass
         self.imgsz, self.device, self.conf = imgsz, device or None, conf
 
     def infer(self, bgr: np.ndarray) -> List[Box]:
