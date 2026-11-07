@@ -66,6 +66,21 @@ Visualization Manager:
       Line Style: Billboards
       Line Width: 0.05
     - Class: rviz_default_plugins/MarkerArray
+      Name: Lidar clusters A (lidar_debug)
+      Enabled: false
+      Topic:
+        Value: /lidar/debug/clusters_a
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Lidar clusters B (lidar_debug)
+      Enabled: false
+      Topic:
+        Value: /lidar/debug/clusters_b
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Cone zones (lidar_debug)
+      Enabled: false
+      Topic:
+        Value: /lidar/debug/zones
+    - Class: rviz_default_plugins/MarkerArray
       Name: Decision markers
       Enabled: true
       Topic:

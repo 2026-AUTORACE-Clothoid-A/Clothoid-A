@@ -4,7 +4,7 @@
 For every constant /cmd_vel run: chassis value sent, real inner wheel angle from the IMU gyro
 (steady part, first --settle s dropped), the value the chassis reports back (from /odom), and
 R_rear. Then one row per value: left/right x forward/reverse, and a YAML block for limo_base.
-    python3 steer_table.py <bag_dir> [--scale 1.0] [--car 8] [--settle 1.0]
+    python3 steer_table.py <bag_dir> [--scale 1.06] [--car 8] [--settle 1.0]
 """
 import argparse
 import math
@@ -28,7 +28,7 @@ def inner_of(rate, v):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('bag')
-    ap.add_argument('--scale', type=float, default=1.0, help='steering_scale limo_base ran with')
+    ap.add_argument('--scale', type=float, default=1.06, help='steering_scale limo_base ran with (launch default 1.06)')
     ap.add_argument('--max-inner', type=float, default=0.48869)
     ap.add_argument('--settle', type=float, default=1.0)
     ap.add_argument('--car', default='?')

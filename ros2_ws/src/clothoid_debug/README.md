@@ -64,6 +64,7 @@ ros2 launch clothoid_debug rviz.launch.py use_sim_time:=false
 | 파랑·노랑·초록 경로 | 콘 코스의 왼쪽 경계, 오른쪽 경계, 중심선 |
 | Overlay 패널 | 카메라 영상 + 변환 영역(보라) + 차선 점 + 추종점(십자) + 상태 글자 |
 | Warped lane windows 패널 | 변환 이미지와 슬라이딩 윈도우 |
+| `Lidar clusters A/B`, `Cone zones` (기본 꺼짐) | 라이다 군집 판정: 초록 채택, 빨강 폭 초과, 보라 빔 부족, 라벨 "폭cm/빔수". A는 `lidar.yaml` 값, B는 비교용. `ros2 launch clothoid_lidar lidar_debug.launch.py`를 같이 띄워야 나온다(bag이면 `use_sim_time:=true`) |
 
 궤적선 색: 초록 `lane`, 하늘색 `avoid`, 빨강 `state`, 노랑 `parking`, 보라는 명령 없음.
 

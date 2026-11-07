@@ -4,17 +4,18 @@
 # then the same on the right. Records a bag and prints the table at the end.
 #
 # Before (other terminal), Ackermann mode, nothing else publishing /cmd_vel:
-#     ros2 launch limo_base limo_base.launch.py steering_scale:=1.0
+#     ros2 launch limo_base limo_base.launch.py      # any steering_scale (default 1.06); the
+#     script reads it and aims at the chassis values below, so the table is scale-free
 # Run:
 #     ./steer_table.sh 8                       # car number, asks Enter before every value
 #     AUTO=1 ./steer_table.sh 8                # no questions
 #     VALUES="0.10 0.20 0.30" ./steer_table.sh 8
-# Env: V speed (0.2), T seconds per leg (3), VALUES (0.00 ... 0.40, chassis value = inner rad).
+# Env: V speed (0.2), T seconds per leg (3), VALUES (0.00 ... 0.45, chassis values).
 set -u
 CAR="${1:?usage: steer_table.sh <car number>}"
 V="${V:-0.2}"
 T="${T:-3}"
-VALUES="${VALUES:-0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40}"
+VALUES="${VALUES:-0.00 0.05 0.10 0.15 0.20 0.25 0.30 0.35 0.40 0.45}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 if ! command -v ros2 >/dev/null 2>&1; then
@@ -27,13 +28,8 @@ SCALE=""
 [ -n "$NODE" ] && SCALE=$(ros2 param get "$NODE" steering_scale 2>/dev/null | grep -oE '[0-9.]+$')
 if [ -z "$SCALE" ]; then
     echo "limo_base is not running. Start it first:"
-    echo "    ros2 launch limo_base limo_base.launch.py steering_scale:=1.0"
+    echo "    ros2 launch limo_base limo_base.launch.py"
     exit 1
-fi
-if [ "$SCALE" != "1.0" ]; then
-    echo "limo_base runs with steering_scale $SCALE; this test wants 1.0 (value = inner angle in rad)."
-    read -r -p "continue anyway with $SCALE? [y/N] " a
-    [ "$a" = "y" ] || exit 1
 fi
 
 SESSION_FILE="$HOME/bags/.session"
@@ -61,7 +57,7 @@ REC=$!
 sleep 2
 echo "recording $OUT  (car $CAR, scale $SCALE, v $V, $T s per leg)"
 
-# z for a chassis value: inner = value*scale -> central (Ackermann, L 0.2, track 0.172) -> z = v tan(central)/L
+# z for a chassis value (keep value*scale under max_inner_angle 0.48869): inner = value*scale -> central (Ackermann, L 0.2, track 0.172) -> z = v tan(central)/L
 z_of() {
     python3 -c "
 import math

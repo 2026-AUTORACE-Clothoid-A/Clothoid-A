@@ -41,7 +41,7 @@ class LidarDebugNode(Node):
         self.declare_parameter('range_max', d.range_max)
         self.declare_parameter('angle_min_deg', d.angle_min_deg)
         self.declare_parameter('angle_max_deg', d.angle_max_deg)
-        for s, gap, minp in (('a', d.cluster_gap, d.min_points), ('b', 0.06, 3)):
+        for s, gap, minp in (('a', d.cluster_gap, d.min_points), ('b', 0.05, 3)):
             self.declare_parameter(f'{s}_cluster_gap', gap)
             self.declare_parameter(f'{s}_min_points', minp)
             self.declare_parameter(f'{s}_max_width', d.max_width)

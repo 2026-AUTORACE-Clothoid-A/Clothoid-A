@@ -11,7 +11,7 @@ limo_base model (src/limo_driver.cpp): /cmd_vel -> central angle atan(L*wz/v) ->
 /odom wz is computed back from the chassis feedback value with the same scale. So
     true scale = scale_used * inner(gyro) / inner(odom)
 when the odom speed is right. Usage:
-    python3 analyze_drive.py <bag_dir> [--scale 2.47] [--tape 1:2.00,2:1.98] [--plot out.png]
+    python3 analyze_drive.py <bag_dir> [--scale 1.06] [--tape 1:2.00,2:1.98] [--plot out.png]
 """
 import argparse
 import math
@@ -115,7 +115,7 @@ def mean(tab, col, t0, t1):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('bag')
-    ap.add_argument('--scale', type=float, default=2.47, help='steering_scale limo_base ran with')
+    ap.add_argument('--scale', type=float, default=1.06, help='steering_scale limo_base ran with (launch default 1.06; bags before 2026-11-06: 2.47)')
     ap.add_argument('--max-inner', type=float, default=0.48869, help='max_inner_angle limo_base ran with')
     ap.add_argument('--settle', type=float, default=1.0, help='seconds skipped at the start of a run')
     ap.add_argument('--tape', default='', help='tape distances per straight run, e.g. "1:2.00,2:1.98"')
