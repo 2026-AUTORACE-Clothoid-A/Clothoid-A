@@ -108,9 +108,8 @@ class UltralyticsBackend:
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError(
-                'ultralytics is not installed. On the Jetson use the conda env with the '
-                'JetPack torch build (scripts/env_jetson.sh dl_env), then '
-                '`pip install ultralytics`.') from exc
+                'ultralytics가 설치되어 있지 않습니다. 터미널에서 `pip install ultralytics` (또는 `pip3 install ultralytics`)를 실행해 주세요.'
+            ) from exc
         self.model = YOLO(model_path)
         # Restore class names if engine defaulted to generic class0, class1...
         if hasattr(self.model, 'names') and isinstance(self.model.names, (dict, list)):
