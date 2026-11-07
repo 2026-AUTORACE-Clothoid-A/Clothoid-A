@@ -267,11 +267,18 @@ def plot(path, rec, bag, direction, n_snaps):
     draw_island(ax, rec, p)
     t_first, t_last = plans[0]['t'], plans[-1]['t']
     step = max(1, int(round(0.5 / 0.1)))
+    stops = []
     for k in range(0, len(plans), step):
         pl = plans[k]
+        if not pl['plan'].feasible:       # every path blocked: the node sends a stop, no path
+            stops.append(pl['pose'])
+            continue
         colour = mcm.viridis((pl['t'] - t_first) / max(t_last - t_first, 1e-6))
-        style = '-' if pl['plan'].feasible else ':'
-        ax.plot(-pl['plan'].path[:, 1], pl['plan'].path[:, 0], style, color=colour, lw=1.0, alpha=0.9)
+        ax.plot(-pl['plan'].path[:, 1], pl['plan'].path[:, 0], '-', color=colour, lw=1.0, alpha=0.9)
+    if stops:
+        st = np.array(stops)
+        ax.plot(-st[:, 1], st[:, 0], 'x', color='red', ms=7, mew=2,
+                label='all paths blocked: stop (car pose)')
     m = tr[:, 0] <= t_last + 3.0
     ax.plot(-tr[m, 2], tr[m, 1], 'k-', lw=2.5, label='driven (RC)')
     ax.plot([], [], color=mcm.viridis(0.5), label='chosen path, one per 0.5 s (colour = time)')
@@ -279,13 +286,14 @@ def plot(path, rec, bag, direction, n_snaps):
         lm = np.array(rec['limos'])
         ax.plot(-lm[:, 1], lm[:, 0], '.', color='deepskyblue', ms=2, label='LIMO-sized clusters')
     ax.set_xlim(-dmax, dmax)
-    smax = max(tr[m, 1].max(), max(pl['plan'].path[-1, 0] for pl in plans))
+    smax = max([tr[m, 1].max()] + [pl['plan'].path[-1, 0] for pl in plans if pl['plan'].feasible])
     lo = min(-0.5, rec['entry_s'] - 0.3) if rec['entry_s'] is not None else -0.5
     ax.set_ylim(lo, min(p.grid_s_max, max(smax + 0.2, p.island_s_max + 0.3)))
     ax.set_xlabel('left  <-  -d [m]  ->  right')
     ax.set_ylabel('s along the section [m]')
     ax.legend(fontsize=6.5, loc='upper center', bbox_to_anchor=(0.5, -0.07), ncol=1, frameon=False)
-    ax.set_title(f'{t_first:.1f}-{t_last:.1f} s, direction {direction}', fontsize=9)
+    ax.set_title(f'{t_first:.1f}-{t_last:.1f} s, direction {direction}\n(background: highest cost '
+                 f'seen at any time)', fontsize=9)
 
     for col, k in enumerate(idx):
         sh = plans[k]
@@ -297,11 +305,14 @@ def plot(path, rec, bag, direction, n_snaps):
         for cand, cst in sh['plan'].candidates:
             ax.plot(-cand[:, 1], cand[:, 0], color='0.75' if not np.isfinite(cst) else 'tab:blue',
                     lw=0.4, alpha=0.35)
-        ax.plot(-sh['plan'].path[:, 1], sh['plan'].path[:, 0], color='green', lw=2.2,
-                label='planned (chosen)')
+        s0, d0, _ = sh['pose']
+        if sh['plan'].feasible:
+            ax.plot(-sh['plan'].path[:, 1], sh['plan'].path[:, 0], color='green', lw=2.2,
+                    label='planned (chosen)')
+        else:
+            ax.plot(-d0, s0, 'x', color='red', ms=16, mew=3, label='all blocked: stop')
         later = tr[(tr[:, 0] >= sh['t']) & (tr[:, 0] <= sh['t'] + 8.0)]
         ax.plot(-later[:, 2], later[:, 1], 'k--', lw=1.5, label='driven next (RC)')
-        s0, d0, _ = sh['pose']
         ax.plot(-d0, s0, 'r^', ms=9)
         if len(sh['limos']):
             ax.plot(-sh['limos'][:, 1], sh['limos'][:, 0], 's', color='deepskyblue', mfc='none',
@@ -309,7 +320,7 @@ def plot(path, rec, bag, direction, n_snaps):
         ax.set_xlim(-dmax, dmax)
         ax.set_ylim(s0 - 0.6, s0 + 2.4)
         ax.set_title(f'{sh["t"]:.1f} s, lane {sh["lane"]}, '
-                     f'{"ok" if sh["plan"].feasible else "BLOCKED"}', fontsize=9)
+                     f'{"ok" if sh["plan"].feasible else "STOP (all paths blocked)"}', fontsize=9)
         if col == 0:
             ax.legend(fontsize=6.5, loc='upper center', bbox_to_anchor=(0.5, -0.07),
                       frameon=False)
@@ -317,8 +328,8 @@ def plot(path, rec, bag, direction, n_snaps):
                  'centre may not go there (obstacle + car half width + 5 cm, + 0.3 m unseen body '
                  'behind each hit), orange = close to it. Left: the path chosen at every scan, one '
                  'per 0.5 s drawn (colour = time), over the RC path (black). Right: snapshots with '
-                 'the candidates (blue, grey = blocked), the chosen path (green) and where the RC car '
-                 'went next (black dashed)', fontsize=8)
+                 'the candidates (blue, grey = blocked), the chosen path (green; red X = every path '
+                 'blocked, the node stops) and where the RC car went next (black dashed)', fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=85)
     print('saved', path)

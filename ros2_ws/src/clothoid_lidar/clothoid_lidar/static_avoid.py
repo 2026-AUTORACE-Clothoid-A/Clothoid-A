@@ -30,6 +30,7 @@ class AvoidParams:
     # geometry (m)
     lane_width: float = 0.50          # line centre to centre, our track; rules say 0.55
     car_half_width: float = 0.11      # LIMO 0.22 m wide
+    car_half_length: float = 0.16     # LIMO 0.32 m long, base_link in the middle
     footprint_offsets: Tuple[float, float, float] = (-0.1, 0.0, 0.1)  # circle centres along the car
     safety: float = 0.05              # extra clearance to obstacles
     line_margin: float = 0.03         # car side to yellow outer line
@@ -80,8 +81,19 @@ class AvoidParams:
     # safety margin (an obstacle seen late, or passed close), lethal cells there only cost, so the
     # car can still pick the way out instead of freezing
     lethal_free_start: float = 0.25
+    # A lethal cell only forbids a path if it is closer than the car needs to swerve clear of it at
+    # full lock; further ones are a large cost, the car can still turn away on a later plan (10 Hz).
+    # escape = sqrt(2 R y - y^2) + margin: R the rear-axle radius at full lock (car 7 / limo2
+    # measured 0.45~0.49 m with steering_scale 1.06), y the sideways move that clears a LIMO
+    # straight ahead (car half width + LIMO half width + safety), margin for the replanning period,
+    # the look-ahead and the car's front overhang.
+    min_turn_radius: float = 0.48
+    escape_offset: float = 0.30
+    escape_margin: float = 0.15
+    w_lethal_far: float = 400.0       # x share of path samples lethal beyond the escape distance
     w_obstacle: float = 1.0
     w_centre: float = 40.0            # per m^2 off the nearest lane centre
+    w_outer: float = 200.0            # per m (path mean) beyond the lane 1 / lane 3 centre, outwards
     w_lateral: float = 2.0            # per m of offset change
     w_short: float = 0.5              # per 1/m of transition length
     w_hysteresis: float = 4.0         # per m away from the last chosen end offset
@@ -305,11 +317,17 @@ def target_centre(direction: Optional[int], p: AvoidParams) -> Optional[float]:
     return None
 
 
+def escape_distance(p: AvoidParams) -> float:
+    """Path length within which a lethal cell cannot be swerved around any more (m)."""
+    r, y = p.min_turn_radius, min(p.escape_offset, p.min_turn_radius)
+    return math.sqrt(max(2.0 * r * y - y * y, 0.0)) + p.escape_margin
+
+
 def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Costmap,
                direction: Optional[int], last_end: Optional[float], p: AvoidParams,
                keep_candidates: bool = False,
                island: Optional[Tuple[float, float]] = None) -> Plan:
-    s0, d0, _ = pose
+    s0, d0, psi = pose
     island = island or (p.island_s_min, p.island_s_max)
     w = p.lane_width
     ends = np.arange(-p.end_span * w, p.end_span * w + 1e-9, p.end_step)
@@ -317,10 +335,14 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     E, Lt = np.meshgrid(ends, lengths, indexing='ij')
     E, Lt = E.ravel(), Lt.ravel()                                   # (P,)
     ds = np.arange(p.path_ds, p.horizon + 1e-9, p.path_ds)          # (S,)
-    u = np.clip(ds[None, :] / Lt[:, None], 0.0, 1.0)
-    d = d0 + (E - d0)[:, None] * (1.0 - np.cos(math.pi * u)) / 2.0  # (P, S)
-    slope = np.where(u < 1.0, (E - d0)[:, None] * math.pi / (2.0 * Lt[:, None])
-                     * np.sin(math.pi * u), 0.0)
+    # Every candidate leaves along the car's present heading (slope tan psi, as when it is half way
+    # through a lane change) and ends straight at E after Lt: a cubic Hermite in d(s), then straight.
+    m0 = math.tan(max(-1.0, min(1.0, psi)))
+    x = np.clip(ds[None, :] / Lt[:, None], 0.0, 1.0)
+    h00, h10, h01 = 2 * x ** 3 - 3 * x ** 2 + 1, x ** 3 - 2 * x ** 2 + x, -2 * x ** 3 + 3 * x ** 2
+    d = h00 * d0 + h10 * (Lt[:, None] * m0) + h01 * E[:, None]      # (P, S)
+    dh00, dh10, dh01 = 6 * x ** 2 - 6 * x, 3 * x ** 2 - 4 * x + 1, -6 * x ** 2 + 6 * x
+    slope = np.where(x < 1.0, (dh00 * d0 + dh01 * E[:, None]) / Lt[:, None] + dh10 * m0, 0.0)
     theta = np.arctan(slope)
     s = np.broadcast_to(s0 + ds[None, :], d.shape)
 
@@ -329,18 +351,31 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     fs = s[..., None] + off * np.cos(theta)[..., None]
     fd = d[..., None] + off * np.sin(theta)[..., None]
     c = costmap.lookup(np.column_stack((fs.ravel(), fd.ravel()))).reshape(fs.shape)
-    lethal = ((c >= LETHAL) & (ds[None, :, None] > p.lethal_free_start)).any(axis=(1, 2))
-    obstacle = c.mean(axis=(1, 2))
+    hit = (c >= LETHAL).any(axis=2) & (ds[None, :] > p.lethal_free_start)     # (P, S)
+    near = ds[None, :] <= escape_distance(p)
+    lethal = (hit & near).any(axis=1)              # cannot be swerved around: forbidden
+    lethal_far = (hit & ~near).mean(axis=1)        # can still be swerved around later: cost
+    obstacle = np.where(c >= LETHAL, 100.0, c).mean(axis=(1, 2))
 
-    d_limit = 1.5 * w - p.car_half_width - p.line_margin
-    out_of_road = (np.abs(d) > d_limit).any(axis=1)
+    # yellow outer line, checked at the car's outer corners (a car at an angle reaches further out
+    # than its centre): no path may go further out than the line - margin, or than the corners are
+    # now when they are already beyond it (a hard limit from the first point would forbid coming
+    # back)
+    def corner(dd, th):
+        return np.abs(dd) + p.car_half_length * np.abs(np.sin(th)) + p.car_half_width * np.cos(th)
+    # turning back at full lock from heading psi still drifts out by R (1 - cos psi)
+    d_limit = max(1.5 * w - p.line_margin, float(corner(np.array(d0), np.array(psi)))
+                  + p.min_turn_radius * (1.0 - math.cos(psi)) + 0.01)
+    out_of_road = (corner(d, theta) > d_limit + 1e-6).any(axis=1)
+    beyond_outer = np.maximum(np.abs(d) - w, 0.0).mean(axis=1)   # past lane 1 / 3 centre
     on_island = ((s >= island[0]) & (s <= island[1])
                  & (np.abs(d) < w / 2.0)).mean(axis=1)
 
     centres = lane_centres(p)
     off_centre = np.min((d[..., None] - centres) ** 2, axis=2).mean(axis=1)
     cost = (p.w_obstacle * obstacle + p.w_centre * off_centre + p.w_lateral * np.abs(E - d0)
-            + p.w_short / Lt + p.w_island * on_island)
+            + p.w_short / Lt + p.w_island * on_island + p.w_lethal_far * lethal_far
+            + p.w_outer * beyond_outer)
     if last_end is not None:
         cost += p.w_hysteresis * np.abs(E - last_end)
     tc = target_centre(direction, p)
