@@ -54,6 +54,23 @@ cone_follower:
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
 
+# Second extractor instance for the static obstacle mission: LIMO-sized objects, no cones
+# (from namgyu/static-obstacle-avoidance). Retune min_width / min_points with a real LIMO scan.
+limo_extractor:
+  ros__parameters:
+    obstacles_topic: /lidar/limos
+    target_frame: base_link
+    use_tf: true
+    range_min: 0.1
+    range_max: 2.0
+    angle_min_deg: -110.0
+    angle_max_deg: 110.0
+    cluster_gap: 0.08
+    min_points: 3
+    min_width: 0.12          # LIMO body 0.22 m wide; cones (~0.07) are dropped
+    max_width: 0.45
+    cone_radius: 0.1         # centre = surface centroid pushed back by this
+
 # Camera red/orange share for the cone course check (/camera/red_ratio, Float32 0..1).
 # HSV: flat list, 6 numbers per range (h_lo, s_lo, v_lo, h_hi, s_hi, v_hi), OR-ed. Integers.
 # 1105 bags (full frame, 2025 red): cone course 20-39 %, obstacle zone (cone stand-ins) <= 6 %,

@@ -19,11 +19,12 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
-from clothoid_lidar.lidar_debug import FEW, OK, WIDE, classify_clusters, summary
+from clothoid_lidar.lidar_debug import FEW, NARROW, OK, WIDE, classify_clusters, summary
 from clothoid_lidar.obstacle_extractor import ExtractorParams
 
 FIELDS = ('cluster_gap', 'min_points', 'max_width', 'cone_radius')
-COLOURS = {OK: (0.1, 0.85, 0.2), WIDE: (0.95, 0.15, 0.1), FEW: (0.7, 0.3, 0.9)}
+COLOURS = {OK: (0.1, 0.85, 0.2), WIDE: (0.95, 0.15, 0.1), FEW: (0.7, 0.3, 0.9),
+           NARROW: (0.4, 0.6, 1.0)}
 
 
 def colour(rgb, a=1.0):

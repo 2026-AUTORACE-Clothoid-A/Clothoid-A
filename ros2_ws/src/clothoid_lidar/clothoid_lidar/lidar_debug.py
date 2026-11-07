@@ -15,12 +15,13 @@ from clothoid_lidar.obstacle_extractor import ExtractorParams
 OK = 'ok'          # published as an obstacle centre
 WIDE = 'wide'      # width > max_width
 FEW = 'few'        # beams < min_points
+NARROW = 'narrow'  # width < min_width (LIMO search drops cones)
 
 
 @dataclass
 class Cluster:
     points: np.ndarray   # (k, 2) scan-frame beam end points
-    kind: str            # OK, WIDE or FEW
+    kind: str            # OK, WIDE, FEW or NARROW
     width: float         # m, first-to-last beam distance
     centre: np.ndarray   # (2,) published centre for OK, surface centroid otherwise
 
@@ -54,6 +55,8 @@ def classify_clusters(ranges, angle_min: float, angle_increment: float,
             out.append(Cluster(cluster, FEW, width, centroid))
         elif width > params.max_width:
             out.append(Cluster(cluster, WIDE, width, centroid))
+        elif width < params.min_width:
+            out.append(Cluster(cluster, NARROW, width, centroid))
         else:
             norm = np.linalg.norm(centroid)
             centre = centroid + centroid / norm * params.cone_radius if norm > 1e-6 else centroid
@@ -67,4 +70,4 @@ def accepted_centres(clusters: List[Cluster]) -> np.ndarray:
 
 
 def summary(clusters: List[Cluster]) -> dict:
-    return {kind: sum(1 for k in clusters if k.kind == kind) for kind in (OK, WIDE, FEW)}
+    return {kind: sum(1 for k in clusters if k.kind == kind) for kind in (OK, WIDE, FEW, NARROW)}
