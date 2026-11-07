@@ -3,6 +3,9 @@
 
 `backend: none` publishes empty arrays, so the rest of the stack can run before a model exists.
 """
+import os
+from pathlib import Path
+
 import numpy as np
 import rclpy
 from clothoid_interfaces.msg import Detection, DetectionArray
@@ -27,33 +30,49 @@ DEFAULT_MODEL_PATH = "../models/best.pt"
 
 def resolve_model_path(path_str: str) -> str:
     """Resolve model path supporting relative paths like ../models/best_fp16.engine."""
-    from pathlib import Path
     p = Path(path_str)
     if p.is_absolute() and p.exists():
         return str(p)
 
-    node_dir = Path(__file__).resolve().parent
-    pkg_root = node_dir.parent
+    target_name = p.name  # e.g. best.pt or best_fp16.engine
 
-    # Check candidates in order
-    candidates = [
-        (node_dir / p).resolve(),
-        (pkg_root / p).resolve(),
-        (pkg_root / "models" / p.name).resolve(),
-        (Path(os.getcwd()) / p).resolve(),
-        (Path.home() / "Clothoid-A/ros2_ws/src/clothoid_yolo/models" / p.name).resolve(),
+    # Candidate directories to search
+    cwd = Path.cwd()
+    search_dirs = [
+        cwd,
+        cwd / "models",
+        cwd / "src/clothoid_yolo/models",
+        cwd / "ros2_ws/src/clothoid_yolo/models",
+        Path(__file__).resolve().parent.parent / "models",
+        Path.home() / "Clothoid-A/ros2_ws/src/clothoid_yolo/models",
+        Path("/home/a/Clothoid-A/ros2_ws/src/clothoid_yolo/models"),
+        Path("/home/user/Clothoid-A/ros2_ws/src/clothoid_yolo/models"),
     ]
-    for cand in candidates:
-        if cand.exists():
-            return str(cand)
+    cur = cwd
+    for _ in range(4):
+        search_dirs.append(cur)
+        search_dirs.append(cur / "models")
+        search_dirs.append(cur / "src/clothoid_yolo/models")
+        search_dirs.append(cur / "ros2_ws/src/clothoid_yolo/models")
+        cur = cur.parent
 
-    # Fallback: if .engine doesn't exist, try best.pt or yolo26n.pt
-    for fallback_name in ["best.pt", "best.onnx", "yolo26n.pt"]:
-        fb = (pkg_root / "models" / fallback_name).resolve()
-        if fb.exists():
-            return str(fb)
+    # 1. Exact relative or target filename match
+    for d in search_dirs:
+        cand1 = (d / p).resolve()
+        if cand1.exists() and cand1.is_file():
+            return str(cand1)
+        cand2 = (d / target_name).resolve()
+        if cand2.exists() and cand2.is_file():
+            return str(cand2)
 
-    return str(candidates[0])
+    # 2. Fallback to best.pt or best_fp16.engine if specified model not found
+    for d in search_dirs:
+        for fallback in ["best_fp16.engine", "best.pt", "best.onnx"]:
+            cand = (d / fallback).resolve()
+            if cand.exists() and cand.is_file():
+                return str(cand)
+
+    return path_str
 
 
 class YoloNode(Node):
