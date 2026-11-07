@@ -49,3 +49,18 @@ cone_follower:
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
+
+# Camera red/orange share for the cone course check (/camera/red_ratio, Float32 0..1).
+# HSV: flat list, 6 numbers per range (h_lo, s_lo, v_lo, h_hi, s_hi, v_hi), OR-ed. Integers.
+# 1105 bags (full frame, 2025 red): cone course 20-39 %, obstacle zone (cone stand-ins) <= 6 %,
+# start threshold candidate 0.10 (0.07-0.15 all worked). NOT final: competition cone colour and
+# camera white balance are unknown. The threshold belongs to the consumer (cone course start).
+red_ratio:
+  ros__parameters:
+    image_topic: /camera/color/image_raw
+    output_topic: /camera/red_ratio
+    every_n: 3
+    hsv_ranges: [0, 100, 100, 10, 255, 255, 170, 100, 0, 180, 255, 255]
+    width: 160
+    roi_top: 0.0
+    roi_bottom: 1.0
