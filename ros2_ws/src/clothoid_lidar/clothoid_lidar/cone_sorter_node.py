@@ -15,13 +15,22 @@ from std_msgs.msg import Bool
 from clothoid_lidar.cone_sorter import ConeMission, ConeSorter, SorterParams
 
 _FIELDS = [
+    ('trace_method', str),
     ('max_dist_between_cones', float), ('max_trace_length', int),
-    ('threshold_directional_angle_deg', float), ('angle_from_left_first_cone', float),
+    ('threshold_directional_angle_deg', float), ('first_step_angle_deg', float),
+    ('angle_from_left_first_cone', float),
     ('dist_from_left_first_cone', float), ('dist_from_right_first_cone', float),
     ('start_x_min', float), ('start_x_max', float), ('start_y_min', float),
     ('start_y_max', float), ('start_min_count', int),
     ('ing_x_min', float), ('ing_x_max', float), ('ing_y_min', float),
     ('ing_y_max', float), ('ing_min_count', int),
+    ('max_n_neighbors', int), ('threshold_absolute_angle_deg', float),
+    ('ellipse_major_radius_factor', float), ('ellipse_minor_radius_factor', float),
+    ('len_override_factor', float), ('car_size', float), ('angle_cost_threshold_deg', float),
+    ('residual_dist_threshold', float), ('wrong_dir_threshold_deg', float),
+    ('w_angle_cost', float), ('w_residual_dist_cost', float), ('w_num_cones_cost', float),
+    ('w_initial_dir_cost', float), ('w_change_dir_cost', float), ('w_wrong_dir_cost', float),
+    ('max_search_nodes', int),
 ]
 
 

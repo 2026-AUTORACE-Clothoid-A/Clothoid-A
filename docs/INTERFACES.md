@@ -31,6 +31,7 @@ Pixel boxes refer to the 640x480 color image.
 | `/lidar/obstacles` | `geometry_msgs/PoseArray` | `clothoid_lidar` `obstacle_extractor` | obstacle centres in `base_link` (positions only), shared by the cone and static obstacle missions |
 | `/cone/left_boundary`, `/cone/right_boundary` | `nav_msgs/Path` | `clothoid_lidar` `cone_sorter` | sorted cones of each side while the cone course runs |
 | `/cone/mission_active` | `std_msgs/Bool` | `clothoid_lidar` `cone_sorter` | cone course start / end |
+| `/cone/target` | `geometry_msgs/PointStamped` | `clothoid_lidar` `cone_follower` | look-ahead point on the centre line, `base_link` |
 | `/parking_done` | `std_msgs/Bool` | `clothoid_parking` | true once after the last parking step |
 | `/lane/target_warp` | `geometry_msgs/PointStamped` | `clothoid_lane` `lane_main`, only with `debug` on | target in warped image pixels, `z` = 1 found, 0 lost |
 | `/lane/left_warp`, `/lane/right_warp` | `geometry_msgs/PolygonStamped` | `clothoid_lane` `lane_main`, only with `debug` on | windows that really held lane pixels, warped image pixels |
@@ -59,7 +60,7 @@ out, and `limo_base` then sends a stop after 0.5 s. Priorities and timeouts:
 
 Steering: compute a steering angle δ (rad, positive = left) and send
 `linear.x = v`, `angular.z = v * tan(δ) / 0.2` (wheelbase 0.2 m). `limo_base` turns this into a steering value with the
-official scale (inner wheel angle / 2.47, cut at 28°, value 0.197). With `linear.x = 0` the steering centres. Real wheel
+measured scale (inner wheel angle / 1.06, cut at 28°, value 0.46; official 2.47 turned half as much, see `FIELD_TEST.md` 4). With `linear.x = 0` the steering centres. Real wheel
 angles still need measuring, see Open points.
 
 ## Open points

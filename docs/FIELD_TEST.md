@@ -55,8 +55,19 @@ ros2 bag record -o ~/bags/run1 /camera/color/image_raw /camera/color/camera_info
 
 **측정 (2026-11-03, 조종기 RC):** 후축 중심(`base_link` 기준 축) 최소 회전 **지름 82.5~83 cm → 반경 약 0.41 m**. 공식 0.46 m보다 약 10% 작고, 규정 트랙에 필요한 0.875 m에는 충분하다. RC는 `/cmd_vel`과 `limo_base`의 스케일을 거치지 않으므로 이것은 **차체의 최대 조향 능력**이다. 아래 `/cmd_vel` 경로의 `steering_scale`, 28° 제한이 실제로 이 반경까지 나오는지는 아직 확인 전이다. 보낸 `angular.z`·`linear.x`, 좌우 차이는 기록하지 않았다.
 
+**측정 (2026-11-06, limo2, `/cmd_vel`, 0.2 m/s, 바닥):** 공식 2.47은 28° 명령에서 반경 약 1.03 m(0.4 m/s 콘 주행)로 절반밖에 안 꺾였다. `steering_scale` 1.06으로 바꾼 결과는 아래와 같고, 이 값을 launch 기본값으로 했다. 반경은 자이로와 바퀴 속도로 계산했고(후축 중심 기준) 줄자로 재지 않았으며, 각 한 번씩이다.
+
+| 명령 | 예상 반경 | 실측 |
+|---|---|---|
+| 차량 중심 10° 왼쪽 | 1.13 m | 약 1.27 m |
+| 차량 중심 20° 왼쪽 | 0.55 m | 약 0.49 m |
+| 최대(28° 제한) 왼쪽 | 0.46 m | 0.47 m |
+| 최대(28° 제한) 오른쪽 | 0.46 m | 0.43 m |
+
+작은 각에서 덜 꺾이고 큰 각에서 더 꺾이며, 좌우가 약 9% 다르다. 다른 차에는 따로 재야 한다.
+
 - `limo_base`만 따로 띄우고(`ros2 launch limo_base limo_base.launch.py steering_scale:=… max_inner_angle:=…`) `/cmd_vel`을 직접 보낸다.
-  `bringup`은 `limo_base`에 인자를 넘기지 않는다.
+  `bringup`, `full`도 `steering_scale:=`, `max_inner_angle:=`을 넘긴다.
   ```bash
   ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.2}, angular: {z: 1.0}}"
   ```
