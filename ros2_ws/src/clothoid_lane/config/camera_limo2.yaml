@@ -10,3 +10,7 @@
     warp_y_h: 120
     warp_y_l: 2
     camera_pitch: -0.021
+    # lane target row: 180 = 0.45 m ahead of the camera, 0.68 m ahead of base_link (120 = 0.76 m).
+    # 2026-11-07 drive with 120: the car cut the first right corner (radius ~0.6 m) and crossed the
+    # inner line; replaying that drive, 180 steers 6 deg there instead of 9
+    look_row: 180

@@ -156,3 +156,14 @@ def test_tracker_takes_the_centre_of_zigzag_lines():
     assert result.zigzag
     assert not det.detect(draw([(160, YELLOW, 8, 0, 479), (480, YELLOW, 8, 0, 479)]),
                           SIDE_BOTH, lane_width=160).zigzag
+
+
+def test_tracker_keeps_the_longer_trace_of_one_line():
+    # 2026-11-07 on limo2: the same line traced from two seeds with a different number of windows
+    # made `list.index` compare the numpy point arrays and lane_main died with a ValueError
+    frame = draw([(160, YELLOW, 8, 0, 479), (480, YELLOW, 8, 200, 479)])
+    det = tracker()
+    det._sides[SIDE_RIGHT].bottom_x = 245.0     # a seed beside the right line, as from the last frame
+    det._sides[SIDE_LEFT].bottom_x = 85.0
+    for _ in range(3):
+        assert det.detect(frame, SIDE_RIGHT, lane_width=160).found

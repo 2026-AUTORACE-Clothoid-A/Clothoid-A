@@ -57,7 +57,7 @@ class TrackerParams:
     zigzag_width_ratio: float = 1.07  # zone lane width / normal: bags 182/170 px, drawing 570/520 mm
 
 
-@dataclass
+@dataclass(eq=False)   # compared by identity: the generated __eq__ would compare numpy arrays
 class Line:
     points: np.ndarray                # (N, 2) window centres with pixels, warped x, y
     coeff: np.ndarray                 # x = polyval(coeff, y)
@@ -184,7 +184,7 @@ class LaneTracker:
                 o.coeff, line.points[:, 1]))) < p.margin]
             if same:
                 if len(line.points) > len(same[0].points):
-                    lines[lines.index(same[0])] = line
+                    lines = [line if o is same[0] else o for o in lines]
                 continue
             lines.append(line)
         return lines

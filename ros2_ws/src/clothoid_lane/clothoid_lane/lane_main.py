@@ -46,6 +46,9 @@ class LaneMainNode(Node):
         self.declare_parameter('base_speed', 0.3)
         self.declare_parameter('wheelbase', 0.2)
         self.declare_parameter('max_steer_rad', 0.48869)  # LIMO inner wheel limit, 28 deg
+        # multiplies the 2025 steering law before the limit. 1.0 = 2025; limo2 turned too little in
+        # the first right corner with 1.0 (2026-11-07 drives: 8.5 deg where about 13 is needed)
+        self.declare_parameter('steer_gain', 1.0)
         self.declare_parameter('speed_limit_timeout', 0.5)
         # mission 6 (slow guide lines): speed while track2026 sees the zigzag lines, 0 = no change
         self.declare_parameter('zigzag_speed', 0.2)
@@ -213,6 +216,7 @@ class LaneMainNode(Node):
             y = warp_h - result.target_y
             # 2025: angle = -atan(x / y) / (pi / 2) * max_angle with max_angle = 1.0 rad
             steer = -math.atan2(x, max(y, 1e-6)) / (math.pi / 2)
+            steer *= self.get_parameter('steer_gain').value
             max_steer = self.get_parameter('max_steer_rad').value
             steer = max(-max_steer, min(max_steer, steer))
 
