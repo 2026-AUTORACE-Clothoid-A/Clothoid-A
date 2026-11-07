@@ -80,6 +80,39 @@ Visualization Manager:
       Enabled: false
       Topic:
         Value: /lidar/debug/zones
+    - Class: rviz_default_plugins/Map
+      Name: Avoid costmap (static_avoid)
+      Enabled: false
+      Topic:
+        Value: /avoid/costmap
+      Color Scheme: costmap
+      Alpha: 0.6
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Avoid candidates (static_avoid)
+      Enabled: false
+      Topic:
+        Value: /avoid/candidates
+    - Class: rviz_default_plugins/Path
+      Name: Avoid path (static_avoid)
+      Enabled: false
+      Topic:
+        Value: /avoid/path
+      Color: 255; 80; 200
+      Line Style: Billboards
+      Line Width: 0.03
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Avoid cues (entry line, island)
+      Enabled: false
+      Topic:
+        Value: /avoid/cues
+    - Class: rviz_default_plugins/PoseArray
+      Name: LIMO clusters /lidar/limos
+      Enabled: false
+      Topic:
+        Value: /lidar/limos
+      Shape: Arrow (Flat)
+      Color: 80; 160; 255
+      Arrow Length: 0.1
     - Class: rviz_default_plugins/MarkerArray
       Name: Decision markers
       Enabled: true
