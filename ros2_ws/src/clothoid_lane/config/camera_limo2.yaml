@@ -3,12 +3,24 @@
 # looks 6.5 deg higher than limo1's (pitch -0.021 rad, slightly up). The warp below is limo1's ground
 # area seen with that pitch, moved 4 cm forward because limo2 does not see the floor closer than
 # 0.37 m: 0.37~0.69 m ahead, same width, a straight lane is again parallel and 170 px wide.
+# 2026-11-07 evening: the top moved from image row 360 to 320 (warp_y_h 120 -> 80, warp_x_h -16 -> 89,
+# on the same side lines through the vanishing point): 0.38~1.01 m ahead. The first right corner
+# was lost with 0.69 m (the outer line only in the top rows); replaying those bags with 1.01 m keeps
+# the line and steers -17 deg at the corner entry instead of -6. Same lateral scale (170 px lane),
+# half the vertical one (about 380 px/m), so dashes are half as long in pixels.
+# Driving the 1.0 m warp with the target 0.75 m ahead (2026-11-07 20:16) cut every right corner and hit
+# the cone inside the third one. A sweep over the bags: the line stays found at the first corner from a
+# 0.9 m top (0.69 m: 80 % lost, 0.8 m: up to 52 %), and the target distance sets how early it turns
+# (0.46 m: -5..-9 deg at the corner entry, 0.55 m: -7..-12, 0.75 m: -15..-17). Now 0.38~0.90 m, target 0.55 m.
+# Earlier values: 0.69 m warp_x_h -16, warp_y_h 120, look_row 180, white_min_length 40;
+#                 1.0 m  warp_x_h 89,  warp_y_h 80,  look_row 100, white_min_length 20.
 /**:
   ros__parameters:
-    warp_x_h: -16
+    warp_x_h: 60
     warp_x_l: 327
-    warp_y_h: 120
+    warp_y_h: 91
     warp_y_l: 2
+    white_min_length: 24.0     # px, divider dash; 40 with the 0.69 m warp (scales with the warp depth)
     camera_pitch: -0.021       # rad; the user reads the mount as level within +-1 deg (2026-11-07)
     # colour camera lens, measured 2026-11-07: 19 cm above the floor (the bag gives 0.185 m from the
     # lane width), 5 cm ahead of the front axle and 1 cm right of the car's centre line.
@@ -21,8 +33,14 @@
     # 340 makes the 0.5 m lane 170 px; the 2026-11-07 bag straights measure 165~168 px (330~336).
     # Measure again whenever the warp changes: straight lane px / real lane width.
     warp_px_per_m: 340.0
-    # lane target row: 180 = 0.45 m ahead of the camera, 0.50 m ahead of the front axle and 0.60 m
-    # ahead of base_link (120 = 0.53 / 0.58 / 0.68 m). The warp starts 0.37 m ahead of the camera.
-    # 2026-11-07 drive with 120: the car cut the first right corner (radius ~0.6 m) and crossed the
-    # inner line; replaying that drive, 180 steers 6 deg there instead of 9
-    look_row: 180
+    # lane target row: 203 = 0.46 m ahead of the camera (180 = 0.51 m, 162 = 0.55 m, 140 = 0.6 m; rows
+    # are about linear in distance). 2026-11-07 20:59 with 162: the car turned early and gently (radius
+    # 1.1~1.3 m) and the right front tyre ran over the inner line in every right corner; the dawn lap
+    # (0.45 m) turned at 0.5 m and stayed in. Note: the 2025 steering law counts warp pixels, so at the
+    # same distance this warp steers 1.6x harder on straights than the 0.69 m one (steer_gain 0.62
+    # matches it). Turning too early / cutting the inside: larger row; too late: smaller row.
+    # 185 (0.50 m) since 2026-11-07 22:50: replaying the dawn lap (stayed in the lane) with this warp,
+    # look_row 185 + steer_gain 0.55 came closest to the commands the car really gave there (straights
+    # 1.1 deg RMS, corners +0.3 deg); 205+ jitters on straights (lines at the edge of the camera view in
+    # the bottom rows), 215+ under-steers in corners, 165- turns earlier before corners.
+    look_row: 185

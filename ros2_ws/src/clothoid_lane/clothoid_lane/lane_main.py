@@ -21,15 +21,51 @@ from std_msgs.msg import Bool, Float32, Int32
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
+from clothoid_lane.steering import MAX_STEER_RAD, WHEELBASE, angular_z, steer_angle
 
 DETECTORS = ('track2026', 'sliding2025')
 TRACKER_FIELDS = tuple(TrackerParams.__dataclass_fields__)
-# parameters that need a new detector (rebuilding one also clears the tracked lines)
 # parameters that set the lane width in the warped image
 WIDTH_PARAMS = {'lane_width_m', 'parking_lane_width_m', 'warp_px_per_m'}
-DETECTOR_PARAMS = {'detector', 'width', 'height', 'warp_w', 'warp_h', 'warp_x_h', 'warp_x_l',
-                   'warp_y_h', 'warp_y_l', 'nwindows', 'margin', 'min_pixels', 'hsv_lower',
-                   'hsv_upper', 'canny_low', 'canny_high', *TRACKER_FIELDS}
+
+
+def detector_defaults() -> dict:
+    """Parameters that build the detector, with their defaults (also used by clothoid_debug's
+    lane_viewer, which builds the same detector from the yaml files without ROS)."""
+    d = LaneParams()
+    values = {'detector': 'track2026',   # or sliding2025 (the 2025 port, lane_detector.py)
+              'width': d.width, 'height': d.height, 'warp_w': d.warp_w, 'warp_h': d.warp_h,
+              'warp_x_h': d.x_h, 'warp_x_l': d.x_l, 'warp_y_h': d.y_h, 'warp_y_l': d.y_l,
+              'nwindows': d.nwindows, 'margin': d.margin, 'min_pixels': d.min_pixels,
+              'hsv_lower': list(d.hsv_lower), 'hsv_upper': list(d.hsv_upper),
+              'canny_low': d.canny_low, 'canny_high': d.canny_high}
+    values.update(TrackerParams().__dict__)
+    return values
+
+
+# parameters that need a new detector (rebuilding one also clears the tracked lines)
+DETECTOR_PARAMS = set(detector_defaults())
+
+
+def lane_params(value) -> LaneParams:
+    return LaneParams(
+        width=value('width'), height=value('height'),
+        warp_w=value('warp_w'), warp_h=value('warp_h'),
+        x_h=value('warp_x_h'), x_l=value('warp_x_l'), y_h=value('warp_y_h'), y_l=value('warp_y_l'),
+        nwindows=value('nwindows'), margin=value('margin'), min_pixels=value('min_pixels'),
+        hsv_lower=tuple(value('hsv_lower')), hsv_upper=tuple(value('hsv_upper')),
+        canny_low=value('canny_low'), canny_high=value('canny_high'))
+
+
+def make_detector(value):
+    """LaneTracker or LaneDetector from a `value(name)` lookup of the DETECTOR_PARAMS."""
+    kind = value('detector')
+    if kind not in DETECTORS:
+        raise ValueError(f'detector must be one of {DETECTORS}, got {kind!r}')
+    if kind == 'sliding2025':
+        return LaneDetector(lane_params(value))
+    return LaneTracker(lane_params(value),
+                       TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}))
 
 
 class LaneMainNode(Node):
@@ -46,8 +82,8 @@ class LaneMainNode(Node):
 
         # driving
         self.declare_parameter('base_speed', 0.3)
-        self.declare_parameter('wheelbase', 0.2)
-        self.declare_parameter('max_steer_rad', 0.48869)  # LIMO inner wheel limit, 28 deg
+        self.declare_parameter('wheelbase', WHEELBASE)
+        self.declare_parameter('max_steer_rad', MAX_STEER_RAD)  # LIMO inner wheel limit, 28 deg
         # multiplies the 2025 steering law before the limit. 1.0 = 2025; limo2 turned too little in
         # the first right corner with 1.0 (2026-11-07 drives: 8.5 deg where about 13 is needed)
         self.declare_parameter('steer_gain', 1.0)
@@ -67,26 +103,9 @@ class LaneMainNode(Node):
         self.declare_parameter('warp_px_per_m', 340.0)
 
         # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or
-        # sliding2025 (the 2025 port, lane_detector.py)
-        self.declare_parameter('detector', 'track2026')
-        for name, value in TrackerParams().__dict__.items():
+        # sliding2025 (the 2025 port, lane_detector.py), its warp, masks and windows
+        for name, value in detector_defaults().items():
             self.declare_parameter(name, value)
-        defaults = LaneParams()
-        self.declare_parameter('width', defaults.width)
-        self.declare_parameter('height', defaults.height)
-        self.declare_parameter('warp_w', defaults.warp_w)
-        self.declare_parameter('warp_h', defaults.warp_h)
-        self.declare_parameter('warp_x_h', defaults.x_h)
-        self.declare_parameter('warp_x_l', defaults.x_l)
-        self.declare_parameter('warp_y_h', defaults.y_h)
-        self.declare_parameter('warp_y_l', defaults.y_l)
-        self.declare_parameter('nwindows', defaults.nwindows)
-        self.declare_parameter('margin', defaults.margin)
-        self.declare_parameter('min_pixels', defaults.min_pixels)
-        self.declare_parameter('hsv_lower', list(defaults.hsv_lower))
-        self.declare_parameter('hsv_upper', list(defaults.hsv_upper))
-        self.declare_parameter('canny_low', defaults.canny_low)
-        self.declare_parameter('canny_high', defaults.canny_high)
         self.declare_parameter('debug', False)
 
         self.detector = self._make_detector(lambda name: self.get_parameter(name).value)
@@ -120,28 +139,13 @@ class LaneMainNode(Node):
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
 
-    @staticmethod
-    def _lane_params(value) -> LaneParams:
-        return LaneParams(
-            width=value('width'), height=value('height'),
-            warp_w=value('warp_w'), warp_h=value('warp_h'),
-            x_h=value('warp_x_h'), x_l=value('warp_x_l'), y_h=value('warp_y_h'), y_l=value('warp_y_l'),
-            nwindows=value('nwindows'), margin=value('margin'), min_pixels=value('min_pixels'),
-            hsv_lower=tuple(value('hsv_lower')), hsv_upper=tuple(value('hsv_upper')),
-            canny_low=value('canny_low'), canny_high=value('canny_high'))
-
     def _lane_width_px(self, value) -> float:
         name = 'parking_lane_width_m' if self.parking_width else 'lane_width_m'
         return value(name) * value('warp_px_per_m')
 
-    def _make_detector(self, value):
-        kind = value('detector')
-        if kind not in DETECTORS:
-            raise ValueError(f'detector must be one of {DETECTORS}, got {kind!r}')
-        if kind == 'sliding2025':
-            return LaneDetector(self._lane_params(value))
-        return LaneTracker(self._lane_params(value),
-                           TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}))
+    @staticmethod
+    def _make_detector(value):
+        return make_detector(value)
 
     def on_parameters(self, params):
         # `ros2 param set` takes effect on the next frame. The new values are only applied
@@ -226,15 +230,10 @@ class LaneMainNode(Node):
         if result.zigzag:
             self.last_zigzag_stamp = now
         if result.found:
-            warp_w = self.detector.p.warp_w
-            warp_h = self.detector.p.warp_h
-            x = result.target_x - warp_w / 2
-            y = warp_h - result.target_y
-            # 2025: angle = -atan(x / y) / (pi / 2) * max_angle with max_angle = 1.0 rad
-            steer = -math.atan2(x, max(y, 1e-6)) / (math.pi / 2)
-            steer *= self.get_parameter('steer_gain').value
-            max_steer = self.get_parameter('max_steer_rad').value
-            steer = max(-max_steer, min(max_steer, steer))
+            steer = steer_angle(result.target_x, result.target_y,
+                                self.detector.p.warp_w, self.detector.p.warp_h,
+                                self.get_parameter('steer_gain').value,
+                                self.get_parameter('max_steer_rad').value)
 
             speed = self.current_speed()
             zigzag_speed = self.get_parameter('zigzag_speed').value
@@ -244,7 +243,7 @@ class LaneMainNode(Node):
                 speed = min(speed, zigzag_speed)
             cmd = Twist()
             cmd.linear.x = speed
-            cmd.angular.z = speed * math.tan(steer) / self.get_parameter('wheelbase').value
+            cmd.angular.z = angular_z(speed, steer, self.get_parameter('wheelbase').value)
             self.last_cmd = cmd
             self.last_found_stamp = now
             self.cmd_pub.publish(cmd)

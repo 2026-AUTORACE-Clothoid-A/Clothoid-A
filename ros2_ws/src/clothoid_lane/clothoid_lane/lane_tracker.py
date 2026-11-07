@@ -64,6 +64,8 @@ class Line:
     color: str
     zigzag: bool = False
     bottom_x: float = 0.0
+    # every sliding window tried, (x_lo, y_top, x_hi, y_bottom, had pixels), for the debug image
+    windows: list = field(default_factory=list, repr=False)
 
     def straighten(self) -> None:
         """Replace the fit by a straight line (the centre line of a zigzag)."""
@@ -105,6 +107,7 @@ class LaneTracker:
     def reset(self) -> None:
         self._sides = {SIDE_LEFT: _Side(), SIDE_RIGHT: _Side()}
         self._zigzag_left = 0     # frames the school zone state still lasts
+        self._attempts = []       # (windows, became a line) of every trace this frame, debug image
 
     # --- masks ------------------------------------------------------------------
     def _masks(self, bgr: np.ndarray):
@@ -139,13 +142,14 @@ class LaneTracker:
         h, w = mask.shape
         win_h = h // p.nwindows
         x, dx = float(seed), 0.0
-        points = []
+        points, windows = [], []
         for k in range(p.nwindows):
             y1, y0 = h - k * win_h, h - (k + 1) * win_h
             lo, hi = int(round(x - p.margin)), int(round(x + p.margin))
             if hi <= 0 or lo >= w:
                 break
             ys, xs = np.nonzero(mask[y0:y1, max(lo, 0):min(hi, w)])
+            windows.append((lo, y0, hi, y1, len(xs) > p.min_pixels))
             if len(xs) > p.min_pixels:
                 new_x = float(xs.mean()) + max(lo, 0)
                 if points:
@@ -154,12 +158,14 @@ class LaneTracker:
                 x = new_x
             else:
                 x += dx   # follow the curve through gaps (dashes)
-        if len(points) < self.t.min_line_windows:
+        found_line = len(points) >= self.t.min_line_windows
+        self._attempts.append((windows, found_line))
+        if not found_line:
             return None
         pts = np.array(points)
         degree = 2 if len(pts) >= 6 else 1
         coeff = np.polyfit(pts[:, 1], pts[:, 0], degree)
-        line = Line(pts, coeff, color, zigzag=self._is_zigzag(pts, coeff))
+        line = Line(pts, coeff, color, zigzag=self._is_zigzag(pts, coeff), windows=windows)
         line.bottom_x = line.x_at(h - 1)
         return line
 
@@ -319,6 +325,7 @@ class LaneTracker:
     def detect(self, bgr: np.ndarray, side: int, lane_width: int, debug: bool = False) -> LaneResult:
         p = self.p
         h, w = p.warp_h, p.warp_w
+        self._attempts = []
         yellow, white = self._masks(bgr)
         seeds = [s.bottom_x for s in self._sides.values() if s.bottom_x is not None]
         yellow_lines = self._lines(yellow, YELLOW, seeds)
@@ -340,35 +347,90 @@ class LaneTracker:
         # rules: 450 mm between the inner tips, 690 mm between the outer tips)
         half_lane = float(lane_width) * (self.t.zigzag_width_ratio if zigzag_zone else 1.0)
         target = None
+        reference = ''      # which boundary the target was built from
+        bases = []          # point(s) on the boundary at look_row the target is measured from
         if side == SIDE_BOTH and left is not None and right is not None:
             y = float(self.t.look_row)
             target = ((left.x_at(y) + right.x_at(y)) / 2.0, y)
+            reference = 'both'
+            bases = [(left.x_at(y), y), (right.x_at(y), y)]
         else:
             order = (right, left) if side == SIDE_RIGHT else (left, right)
             for line in order:
                 if line is not None:
                     toward = +1 if line is left else -1
                     target = self._offset_point(line, toward, half_lane)
+                    reference = 'left' if line is left else 'right'
+                    bases = [(line.x_at(float(self.t.look_row)), float(self.t.look_row))]
                     break
         found = target is not None
         tx, ty = target if found else (w / 2.0, h / 2.0)
 
         canvas = None
         if debug:
-            canvas = np.zeros((h, w, 3), np.uint8)
-            canvas[yellow] = (0, 200, 255)
-            canvas[comps.kept] = (255, 255, 255)
-            canvas[comps.rejected] = (90, 90, 90)
-            for line, colour in ((left, (255, 80, 0)), (right, (0, 0, 255))):
-                if line is not None:
-                    ys = np.arange(0, h, 4, dtype=float)
-                    pts = np.column_stack((np.polyval(line.coeff, ys), ys)).astype(np.int32)
-                    cv2.polylines(canvas, [pts], False, colour, 2)
-            cv2.circle(canvas, (int(tx), int(ty)), 5, (0, 255, 0), -1)
+            canvas = self._draw(yellow, comps, lines, left, right, bases, (tx, ty), found)
 
         def as_points(line):
             return [] if line is None else [(int(x), int(y)) for x, y in line.points]
 
         return LaneResult(found=found, target_x=float(tx), target_y=float(ty), debug_image=canvas,
                           left_points=as_points(left), right_points=as_points(right),
-                          zigzag=zigzag_zone)
+                          zigzag=zigzag_zone, reference=reference)
+
+    # --- debug image ------------------------------------------------------------
+    LEFT_COLOUR, RIGHT_COLOUR = (255, 80, 0), (0, 0, 255)       # BGR: blue, red
+    MISS_DIM = 0.45                                              # windows that found no pixels
+
+    def _draw(self, yellow, comps, lines, left, right, bases, target, found):
+        """Masks, sliding windows, the look row and how the target was built.
+
+        yellow / white: line pixels (white = accepted divider), grey: white rejected as a divider.
+        Rectangles: sliding windows of the left (blue) and right (red) boundary, thick where the
+        window found pixels, thin and dark where it only carried on; dots: window centres.
+        Dark magenta windows: lines that were found but not used as a boundary.
+        Thin grey / orange windows: a trace that found fewer than min_line_windows windows with
+        pixels (orange) and so gave no line, e.g. a line only in the top of the image.
+        Grey row: look_row. White dot: the boundary at look_row; green dot: the target, half a lane
+        from it (red ring when the lane is lost and nothing is published).
+        """
+        h, w = self.p.warp_h, self.p.warp_w
+        canvas = np.zeros((h, w, 3), np.uint8)
+        canvas[yellow] = (0, 200, 255)
+        canvas[comps.kept] = (255, 255, 255)
+        canvas[comps.rejected] = (90, 90, 90)
+        row = int(self.t.look_row)
+        cv2.line(canvas, (0, row), (w - 1, row), (110, 110, 110), 1)
+
+        for wins, became_line in self._attempts:
+            if not became_line:
+                for lo, y0, hi, y1, hit in wins:
+                    cv2.rectangle(canvas, (lo, y0), (hi, y1 - 1),
+                                  (0, 140, 255) if hit else (70, 70, 70), 1)
+
+        def windows(line, colour, hit_width):
+            dim = tuple(int(c * self.MISS_DIM) for c in colour)
+            for lo, y0, hi, y1, hit in line.windows:
+                cv2.rectangle(canvas, (lo, y0), (hi, y1 - 1), colour if hit else dim,
+                              hit_width if hit else 1)
+            for x, y in line.points:
+                cv2.circle(canvas, (int(x), int(y)), 2, colour, -1)
+            ys = np.arange(0, h, 4, dtype=float)
+            fit = np.column_stack((np.polyval(line.coeff, ys), ys)).astype(np.int32)
+            cv2.polylines(canvas, [fit], False, colour, 1)
+
+        for line in lines:
+            if line is not left and line is not right:
+                windows(line, (140, 0, 140), 1)
+        for line, colour in ((left, self.LEFT_COLOUR), (right, self.RIGHT_COLOUR)):
+            if line is not None:
+                windows(line, colour, 2)
+
+        tx, ty = int(round(target[0])), int(round(target[1]))
+        if found:
+            for bx, by in bases:
+                cv2.line(canvas, (int(round(bx)), int(round(by))), (tx, ty), (0, 255, 0), 1)
+                cv2.circle(canvas, (int(round(bx)), int(round(by))), 3, (255, 255, 255), -1)
+            cv2.circle(canvas, (tx, ty), 5, (0, 255, 0), -1)
+        else:
+            cv2.circle(canvas, (tx, ty), 6, (0, 0, 255), 2)
+        return canvas

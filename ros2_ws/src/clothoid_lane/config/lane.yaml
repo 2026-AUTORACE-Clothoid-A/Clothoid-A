@@ -10,7 +10,11 @@ lane_main:
     # multiplies the 2025 steering law. limo2 drives on 2026-11-07 turned too little in the first
     # right corner with 1.0 (8.5 deg, lane lost); the RC bags say 1.0 already turns more than the
     # driver at the driver's positions, so a higher value has to be tried on the car
-    steer_gain: 1.0
+    # 0.62 since 2026-11-07 22:30: with the 0.9 m warp and look_row 203 the 2025 law steers 1.6x harder
+    # per cm than the dawn setup (0.69 m warp, 180), and the 21:58 drive weaved on the straights with
+    # 1.0. 0.62 gives the dawn 2.0 deg per cm back. The cone section has its own steering (cone_follower).
+    # 0.55 since 22:50 with look_row 185 (see camera_limo2.yaml): closest match to the dawn lap commands.
+    steer_gain: 0.55
     initial_side: 1            # 0 left lane, 1 right lane, 2 both
     # lane width, line centre to centre in metres: 0.5 m on our track (measured 2026-11-07). The rule
     # book says 550 mm, so check it at the venue and change only this value. In the warped image it
@@ -33,10 +37,14 @@ lane_main:
     # track2026: white lane dividers between the yellow lines (warped image px)
     white_s_max: 50          # white = S <= 50 and V >= 170
     white_v_min: 170
-    white_min_length: 40.0   # divider dash >= 40 px; letter strokes pass this, the offset below drops them
+    # white_min_length (divider dash >= this many px) depends on the warp: camera_limo1.yaml / camera_limo2.yaml
     white_max_width: 14.0    # divider 8 px; crosswalk bars 25+, diamond 38+
     white_max_angle_deg: 25.0  # from the nearest yellow line; stop lines are ~90
     white_offset_tol: 0.3    # divider at 0.7~1.3 lane widths from the nearest yellow line
+    # TEST 2026-11-07: a lost boundary is forgotten after this many frames (code default 5 = 0.17 s at
+    # 30 Hz). 0 = forget at the first missed frame, as the 2025 detector (no memory). Delete the line to
+    # go back to 5.
+    track_hold: 0
     # look_row (target row) is per car, in camera_limo1.yaml / camera_limo2.yaml. Do not set it here:
     # under `lane_main:` it would win over the `/**` camera file when started from a launch file.
 

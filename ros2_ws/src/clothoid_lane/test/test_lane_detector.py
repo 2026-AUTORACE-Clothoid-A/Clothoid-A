@@ -167,3 +167,24 @@ def test_tracker_keeps_the_longer_trace_of_one_line():
     det._sides[SIDE_LEFT].bottom_x = 85.0
     for _ in range(3):
         assert det.detect(frame, SIDE_RIGHT, lane_width=160).found
+
+
+def test_tracker_debug_image_shows_windows_and_reference():
+    det = tracker()
+    result = det.detect(draw([(160, YELLOW, 8, 0, 479), (480, YELLOW, 8, 0, 479)]), SIDE_RIGHT,
+                        lane_width=160, debug=True)
+    assert result.found and result.reference == 'right'
+    assert result.debug_image is not None and result.debug_image.shape[:2] == (240, 320)
+    # the right boundary's sliding windows are drawn in its colour
+    assert (result.debug_image == np.array(LaneTracker.RIGHT_COLOUR, np.uint8)).all(axis=2).any()
+    assert det.detect(np.zeros((480, 640, 3), np.uint8), SIDE_RIGHT, 160).reference == ''
+
+
+def test_steering_law_matches_2025():
+    import math
+    from clothoid_lane.steering import angular_z, steer_angle
+    assert steer_angle(160, 120, 320, 240) == 0.0
+    # target 60 px right, 60 px up: -atan(1) / (pi / 2) = -0.5 rad, clamped to 28 deg
+    assert steer_angle(220, 180, 320, 240) == -0.48869
+    assert abs(steer_angle(190, 120, 320, 240) - (-math.atan2(30, 120) / (math.pi / 2))) < 1e-12
+    assert abs(angular_z(0.3, 0.2) - 0.3 * math.tan(0.2) / 0.2) < 1e-12
