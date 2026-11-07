@@ -3,6 +3,7 @@
     ros2 launch clothoid_bringup full.launch.py
     ros2 launch clothoid_bringup full.launch.py use_yolo:=false use_parking:=false
     ros2 launch clothoid_bringup full.launch.py debug:=true backend:=ultralytics model_path:=/path/best.pt
+    ros2 launch clothoid_bringup full.launch.py camera:=limo2      # per car warp, see clothoid_lane/config
 
 `debug:=true` also starts clothoid_debug/decision_viz; open clothoid_debug/rviz/decision.rviz to watch it.
 
@@ -38,6 +39,8 @@ def generate_launch_description():
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('camera', default_value='limo2',
+                              description='camera profile: limo1 or limo2 (clothoid_lane/config)'),
         DeclareLaunchArgument('backend', default_value='ultralytics',
                               description='yolo backend: ultralytics (default) | none'),
         DeclareLaunchArgument('model_path', default_value=''),
@@ -54,7 +57,8 @@ def generate_launch_description():
         include('clothoid_bringup', 'bringup.launch.py',
                 args={name: LaunchConfiguration(name) for name in platform_args}),
 
-        include('clothoid_lane', 'lane.launch.py', {'debug': debug}, enabled('use_lane')),
+        include('clothoid_lane', 'lane.launch.py',
+                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_lane')),
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
@@ -63,5 +67,6 @@ def generate_launch_description():
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
         # with debug on, also publish what rviz/decision.rviz shows
-        include('clothoid_debug', 'viz.launch.py', condition=enabled('debug')),
+        include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},
+                enabled('debug')),
     ])
