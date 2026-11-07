@@ -12,8 +12,9 @@ def generate_launch_description():
     bringup_share = get_package_share_directory('clothoid_bringup')
 
     return LaunchDescription([
-        DeclareLaunchArgument('backend', default_value='none'),
+        DeclareLaunchArgument('backend', default_value='ultralytics'),
         DeclareLaunchArgument('model_path', default_value=''),
+        DeclareLaunchArgument('show', default_value='false'),
         Node(
             package='clothoid_yolo',
             executable='yolo',
@@ -23,7 +24,8 @@ def generate_launch_description():
                 os.path.join(bringup_share, 'config', 'topics.yaml'),
                 os.path.join(yolo_share, 'config', 'yolo.yaml'),
                 {'backend': LaunchConfiguration('backend'),
-                 'model_path': LaunchConfiguration('model_path')},
+                 'model_path': LaunchConfiguration('model_path'),
+                 'show': LaunchConfiguration('show')},
             ],
         ),
     ])

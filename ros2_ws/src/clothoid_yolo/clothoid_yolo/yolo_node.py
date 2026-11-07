@@ -14,6 +14,48 @@ from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
 
 
+# ==============================================================================
+# [YOLO Model Configuration]
+# 모델을 변경하고 싶을 때 아래 DEFAULT_MODEL_PATH 변수를 직접 수정하시면 됩니다!
+# 상대경로(../models/...) 또는 파일명만 적어도 알아서 완벽하게 찾아 로드합니다.
+# 예시:
+#   DEFAULT_MODEL_PATH = "../models/best_fp16.engine"  # TensorRT 고속 엔진 (실차용)
+#   DEFAULT_MODEL_PATH = "../models/best.pt"           # PyTorch 가중치 (테스트용)
+# ==============================================================================
+DEFAULT_MODEL_PATH = "../models/best_fp16.engine"
+
+
+def resolve_model_path(path_str: str) -> str:
+    """Resolve model path supporting relative paths like ../models/best_fp16.engine."""
+    from pathlib import Path
+    p = Path(path_str)
+    if p.is_absolute() and p.exists():
+        return str(p)
+
+    node_dir = Path(__file__).resolve().parent
+    pkg_root = node_dir.parent
+
+    # Check candidates in order
+    candidates = [
+        (node_dir / p).resolve(),
+        (pkg_root / p).resolve(),
+        (pkg_root / "models" / p.name).resolve(),
+        (Path(os.getcwd()) / p).resolve(),
+        (Path.home() / "Clothoid-A/ros2_ws/src/clothoid_yolo/models" / p.name).resolve(),
+    ]
+    for cand in candidates:
+        if cand.exists():
+            return str(cand)
+
+    # Fallback: if .engine doesn't exist, try best.pt or yolo26n.pt
+    for fallback_name in ["best.pt", "best.onnx", "yolo26n.pt"]:
+        fb = (pkg_root / "models" / fallback_name).resolve()
+        if fb.exists():
+            return str(fb)
+
+    return str(candidates[0])
+
+
 class YoloNode(Node):
     def __init__(self):
         super().__init__('yolo')
@@ -21,8 +63,8 @@ class YoloNode(Node):
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('detections_topic', '/detections')
         self.declare_parameter('debug_image_topic', '/yolo/debug_image')
-        self.declare_parameter('backend', 'none')   # ultralytics | none
-        self.declare_parameter('model_path', '')           # .pt / .onnx / .engine
+        self.declare_parameter('backend', 'ultralytics')   # ultralytics | none
+        self.declare_parameter('model_path', '')           # .pt / .onnx / .engine (빈 값이면 DEFAULT_MODEL_PATH 사용)
         self.declare_parameter('imgsz', 640)
         self.declare_parameter('device', '')               # '' = auto, 'cuda:0', 'cpu'
         self.declare_parameter('model_conf', 0.25)         # threshold inside the model
@@ -35,37 +77,13 @@ class YoloNode(Node):
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.backend = None
         backend = get('backend')
-        model_path = get('model_path')
-
-        if not model_path:
-            # Auto-detect trained model from standard locations
-            # Priorities: .engine > .onnx > .pt
-            from pathlib import Path
-            pkg_root = Path(__file__).resolve().parent.parent
-            candidates = [
-                pkg_root / 'models' / 'best_fp16.engine',
-                pkg_root / 'models' / 'best.engine',
-                pkg_root / 'models' / 'best.onnx',
-                pkg_root / 'models' / 'best.pt',
-                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best_fp16.engine',
-                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best.engine',
-                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best.onnx',
-                Path.home() / 'Clothoid-A/ros2_ws/src/clothoid_yolo/models/best.pt',
-            ]
-            for cand in candidates:
-                if cand.exists():
-                    model_path = str(cand)
-                    break
-
-        if backend == 'none' and model_path:
-            backend = 'ultralytics'
+        model_path = get('model_path') or DEFAULT_MODEL_PATH
 
         if backend == 'ultralytics':
-            if not model_path:
-                raise RuntimeError('yolo: set model_path (or place best_fp16.engine / best.pt in models/)')
+            resolved_path = resolve_model_path(model_path)
             self.backend = UltralyticsBackend(
-                model_path, get('imgsz'), get('device'), get('model_conf'))
-            self.get_logger().info(f"Loaded YOLO model: {model_path}")
+                resolved_path, get('imgsz'), get('device'), get('model_conf'))
+            self.get_logger().info(f"Loaded YOLO model: {resolved_path}")
         elif backend != 'none':
             raise RuntimeError(f"yolo: unknown backend '{backend}'")
 
