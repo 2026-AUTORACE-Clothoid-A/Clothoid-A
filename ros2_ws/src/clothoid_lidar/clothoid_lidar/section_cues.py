@@ -120,8 +120,13 @@ class EntryLineTracker:
     """Turns per-frame sightings into crossings: when a line seen close ahead disappears, the base
     crosses it `ahead` metres (odometer) after the last sighting."""
 
-    def __init__(self, max_last_ahead: float = 0.9, lost_after: float = 0.3, keep: float = 20.0):
+    def __init__(self, max_last_ahead: float = 0.9, lost_after: float = 0.3, keep: float = 20.0,
+                 max_slant: float = math.radians(40.0)):
         self.max_last_ahead = max_last_ahead   # the last sighting must be this close (not a far wall)
+        # the entry line looked slanted by +6..+31 deg in the 11-05 / 11-08 bags (the car leaves the
+        # corner before it; the slant is NOT the car's heading to the lane, the lidar frame matched
+        # the tape best without using it); other white marks that pass the shape test were 43..60 deg
+        self.max_slant = max_slant
         self.lost_after = lost_after           # s without a sighting = passed
         self.keep = keep                       # m of odometer to remember crossings
         self.last: Optional[Tuple[float, float, EntryLine]] = None   # (t, odometer, line)
@@ -135,16 +140,21 @@ class EntryLineTracker:
             return None
         t0, odo0, ln = self.last
         self.last = None
-        if ln.ahead > self.max_last_ahead:
+        if ln.ahead > self.max_last_ahead or abs(ln.heading) > self.max_slant:
             return None
         c = Crossing(odometer=odo0 + ln.ahead, heading=ln.heading, t=t0)
         self.crossings.append(c)
         self.crossings = [x for x in self.crossings if odometer - x.odometer <= self.keep]
         return c
 
-    def recent(self, odometer: float, max_back: float) -> Optional[Crossing]:
-        """Last crossing at most max_back metres behind (or slightly ahead of) the car."""
-        for c in reversed(self.crossings):
-            if -0.3 <= odometer - c.odometer <= max_back:
-                return c
-        return None
+    def recent(self, odometer: float, max_back: float, max_ahead: float = 1.0) -> Optional[Crossing]:
+        """The latest crossing at most max_back metres behind the car, or already seen but still up
+        to max_ahead metres ahead of it (the base crosses it soon). A line seen ahead wins over an
+        older one behind: in the 1108 bags the stop line before the corner is 1.7 m before the entry
+        line, and the start often comes just before the entry line."""
+        best = None
+        for c in self.crossings:
+            if -max_ahead <= odometer - c.odometer <= max_back:
+                if best is None or c.odometer > best.odometer:
+                    best = c
+        return best

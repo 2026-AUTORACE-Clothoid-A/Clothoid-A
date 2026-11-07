@@ -58,6 +58,10 @@ class AvoidParams:
     island_s_min: float = 3.3         # fallback, from the activation point
     island_s_max: float = 5.0
     island_handover: float = 1.0      # m, hand over to lane_main when the island front is this close
+    # past the entry line, something in lane 2 from here on is the island's sign stand, not a LIMO:
+    # lane_main takes the car into A / B there (1108 run 4 started on it)
+    island_object_margin: float = 0.25
+    entry_late_max: float = 1.2       # m: an entry line crossed after the start must be this close
     fork_commit: float = 2.0          # m travelled before the A/B lane is pulled hard without a flag
     # costmap
     resolution: float = 0.02
@@ -124,8 +128,10 @@ class PoseTracker:
     """Dead reckoning in a local world frame: /odom linear speed, /imu yaw. Keeps a short history so
     a scan can be placed with the pose at its own time."""
 
-    def __init__(self, history: float = 2.0):
+    def __init__(self, history: float = 2.0, distance_history: float = 10.0):
         self.history = history
+        self.distance_history = distance_history     # m of odometer kept for poses by distance
+        self.by_distance: List[Tuple[float, float, float, float]] = []   # (odometer, x, y, yaw)
         self.yaw: Optional[float] = None
         self.last_t: Optional[float] = None
         self.x = self.y = 0.0
@@ -150,6 +156,18 @@ class PoseTracker:
         self.trace.append((t, self.x, self.y, self.yaw))
         while self.trace and self.trace[0][0] < t - self.history:
             self.trace.pop(0)
+        if not self.by_distance or self.distance - self.by_distance[-1][0] >= 0.01:
+            self.by_distance.append((self.distance, self.x, self.y, self.yaw))
+            while self.by_distance and self.by_distance[0][0] < self.distance - self.distance_history:
+                self.by_distance.pop(0)
+
+    def at_distance(self, odometer: float) -> Optional[Tuple[float, float, float]]:
+        """Pose where the odometer read `odometer` (1 cm steps), None outside the kept range."""
+        bd = self.by_distance
+        if not bd or odometer < bd[0][0] - 0.02 or odometer > bd[-1][0] + 0.02:
+            return None
+        k = min(range(len(bd)), key=lambda i: abs(bd[i][0] - odometer))
+        return bd[k][1:]
 
     @property
     def ready(self) -> bool:
@@ -460,21 +478,29 @@ class StaticAvoid:
         self.event = ''                      # last state change, for the log
 
     # ---- trigger --------------------------------------------------------------------------
-    def blocked(self, limos: np.ndarray) -> bool:
+    def blocked(self, limos: np.ndarray, since_entry: Optional[float] = None) -> bool:
+        """A LIMO-sized cluster in our lane ahead. With the entry line behind us (since_entry m),
+        clusters at the island front or beyond are the sign stand / island, not a LIMO."""
         p = self.p
         if len(limos) == 0:
             return False
         ahead = ((limos[:, 0] > 0.0) & (limos[:, 0] < p.activate_range)
                  & (np.abs(limos[:, 1]) < p.block_half_width))
+        if since_entry is not None and -0.3 <= since_entry <= p.island_from_entry_max:
+            at_island = since_entry + limos[:, 0] >= p.island_from_entry_min - p.island_object_margin
+            ahead &= ~at_island
         return bool(ahead.any())
 
     def on_limos(self, t: float, limos: np.ndarray, inhibit: Inhibit, speed: float,
                  pose_world: Optional[Tuple[float, float, float]],
-                 entry_back: Optional[float] = None) -> bool:
+                 entry_back: Optional[float] = None,
+                 entry_pose: Optional[Tuple[float, float, float]] = None) -> bool:
         """Call per LIMO cluster message (base_link). Returns True when the mission starts.
-        entry_back: metres driven since the base crossed the white entry line, if it was seen."""
+        entry_back: metres driven since the base crossed the white entry line, if it was seen
+        (anchors the section within entry_max_back; tells the island's sign stand from a LIMO).
+        entry_pose: world pose where the base crossed the line (frame origin and lane direction)."""
         p = self.p
-        blocked = self.blocked(limos)
+        blocked = self.blocked(limos, entry_back)
         if self.state == ACTIVE:
             return False
         if not blocked:
@@ -493,11 +519,12 @@ class StaticAvoid:
         self.blocked_scans += 1
         if self.blocked_scans < p.activate_scans:
             return False
-        self.activate(pose_world, entry_back)
+        self.activate(pose_world, entry_back, entry_pose)
         return True
 
     def activate(self, pose_world: Tuple[float, float, float],
-                 entry_back: Optional[float] = None) -> None:
+                 entry_back: Optional[float] = None,
+                 entry_pose: Optional[Tuple[float, float, float]] = None) -> None:
         """Start. Inside the section of an earlier start (car still within max_travel of its origin
         and on the road) that frame and costmap are kept: the car may now be in lane 1 or 3, or at an
         angle, and a new frame would wrongly put it at the centre of lane 2."""
@@ -509,11 +536,19 @@ class StaticAvoid:
                 self.blocked_scans = 0
                 self.event = 'start (same section)'
                 return
-        self.frame = SectionFrame(*pose_world)
-        self.costmap = Costmap(self.p)
         p = self.p
-        if entry_back is not None and -0.3 <= entry_back <= p.entry_max_back:
-            self.entry_s = -entry_back
+        self.costmap = Costmap(self.p)
+        # a line still ahead (entry_back < 0) is handled by reanchor() when the base reaches it
+        anchored = entry_back is not None and 0.0 <= entry_back <= p.entry_max_back
+        if anchored and entry_pose is not None:
+            # the section frame starts on the entry line, along the car's heading there: the car may
+            # still be turning out of the corner before the section when it starts (1108 bags), and a
+            # frame along that heading would skew the lanes, the yellow lines and the island
+            self.frame = SectionFrame(*entry_pose)
+        else:
+            self.frame = SectionFrame(*pose_world)
+        if anchored:
+            self.entry_s = 0.0 if entry_pose is not None else -entry_back
             self.island = (self.entry_s + p.island_from_entry_min,
                            self.entry_s + p.island_from_entry_max)
             self.island_source = 'entry line'
@@ -551,7 +586,9 @@ class StaticAvoid:
             return
         s, d, _ = self.frame.to_section(*pose_world)
         s += ahead
-        if -1.0 <= s <= self.p.max_travel and abs(d) < 1.5 * self.p.lane_width:
+        # the entry line is before the LIMOs: a white line far past the start (e.g. on the A / B
+        # road, 1108 run 4) is something else
+        if -1.0 <= s <= self.p.entry_late_max and abs(d) < 1.5 * self.p.lane_width:
             self.entry_s = s
             self.island = (s + self.p.island_from_entry_min, s + self.p.island_from_entry_max)
             self.island_source = 'entry line'

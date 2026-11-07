@@ -129,7 +129,8 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         tracker.odom(t, 0.986 * cmd[0])
         if see_entry and entry_odo is None and bx >= 0.0:
             entry_odo = tracker.distance          # the camera's entry-line crossing
-            avoid.on_entry_crossing(tracker.latest())
+            if avoid.state == ACTIVE:
+                avoid.on_entry_crossing(tracker.latest())
         entry_back = tracker.distance - entry_odo if entry_odo is not None else None
         inh = inhibit or Inhibit()
         flag = direction
@@ -141,7 +142,8 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
             obstacles = transform_points(
                 extract_obstacles(r, ang[0], ang[1] - ang[0], LIMO_PARAMS), LIDAR_X, 0.0, 0.0)
             pose = tracker.latest()
-            if avoid.on_limos(t, obstacles, inh, cmd[0], pose, entry_back):
+            entry_pose = tracker.at_distance(entry_odo) if entry_odo is not None else None
+            if avoid.on_limos(t, obstacles, inh, cmd[0], pose, entry_back, entry_pose):
                 out['activated'] = True
                 out['events'].append((round(t, 2), 'start', round(bx, 2)))
                 out['island_source'] = avoid.island_source
@@ -343,3 +345,22 @@ def test_no_new_start_at_the_island():
     started = [a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0))
                for k in range(5)]                          # far beyond the section: normal again
     assert any(started)
+
+
+def test_sign_stand_at_the_island_does_not_start():
+    a = StaticAvoid(AvoidParams())
+    sign = np.array([[1.2, 0.0]])                 # in lane 2, 1.2 m ahead
+    for k in range(5):                            # car 3.1 m past the entry line: sign at 4.3 m
+        assert not a.on_limos(0.1 * k, sign, Inhibit(), 0.3, (0.0, 0.0, 0.0), entry_back=3.1)
+    started = [a.on_limos(1 + 0.1 * k, sign, Inhibit(), 0.3, (0.0, 0.0, 0.0), entry_back=1.0)
+               for k in range(5)]                 # 1.0 m past the line: a LIMO at 2.2 m
+    assert any(started)
+
+
+def test_white_line_far_past_the_start_is_not_the_entry():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    a.on_entry_crossing((3.0, 0.0, 0.0))           # a line 3 m past the start: not the entry
+    assert a.island_source == 'estimate'
+    a.on_entry_crossing((0.5, 0.0, 0.0))
+    assert a.island_source == 'entry line' and a.entry_s == pytest.approx(0.5)

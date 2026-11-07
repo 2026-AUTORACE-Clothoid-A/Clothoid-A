@@ -84,11 +84,15 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
             c = entry.update(s, tracker.distance, find_entry_line(image_bgr(msg), cam, white))
             if c is not None:
                 rec['crossings'].append((s, c))
-                if avoid.state == ACTIVE:
-                    avoid.on_entry_crossing(tracker.latest(), c.odometer - tracker.distance)
             continue
         if topic == '/odom':
             tracker.odom(s, msg.twist.twist.linear.x)
+            if avoid.state == ACTIVE and avoid.island_source == 'estimate':
+                c = entry.recent(tracker.distance, 0.3, 0.0)     # same as the node
+                if c is not None:
+                    avoid.on_entry_crossing(tracker.at_distance(c.odometer))
+                    if avoid.island_source == 'entry line':
+                        rec['events'].append((s, 'entry line crossed after the start'))
             if avoid.frame is not None and tracker.ready:
                 sec = avoid.section_pose(tracker.latest())
                 rec['trail'].append((s, sec[0], sec[1], avoid.state == ACTIVE))
@@ -103,9 +107,10 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
                                  LIDAR_X, 0.0, 0.0)
         inh = Inhibit(cone_active=cone.running and not ignore_cone)
         pose = tracker.at(s + 0.05)
-        c = entry.recent(tracker.distance, p.entry_max_back)
+        c = entry.recent(tracker.distance, p.island_from_entry_max + 1.0)
         entry_back = tracker.distance - c.odometer if c is not None else None
-        if avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back):
+        entry_pose = tracker.at_distance(c.odometer) if c is not None else None
+        if avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose):
             rec['events'].append((s, avoid.event.upper() + f' (odometer {tracker.distance:.2f} m)'))
             on_since = s
         if avoid.state != ACTIVE:

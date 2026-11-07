@@ -149,6 +149,19 @@ class StaticAvoidNode(Node):
 
     def on_odom(self, msg: Odometry):
         self.tracker.odom(self.stamp(msg), msg.twist.twist.linear.x)
+        self.maybe_reanchor()
+
+    def maybe_reanchor(self):
+        """Started before the entry line: once the base is on it, place the island from it. Only the
+        distance along the road: the car is already steering, so its pose there is not the lane's."""
+        if self.avoid.state != ACTIVE or self.avoid.island_source != 'estimate':
+            return
+        c = self.entry.recent(self.tracker.distance, 0.3, 0.0)
+        if c is not None:
+            self.avoid.on_entry_crossing(self.tracker.at_distance(c.odometer))
+            if self.avoid.island_source == 'entry line':
+                self.get_logger().info(f'entry line crossed after the start: island '
+                                       f'{self.avoid.island[0]:.2f} m')
 
     def on_cone(self, msg: Bool):
         self.cone_active = msg.data
@@ -200,9 +213,6 @@ class StaticAvoidNode(Node):
             return
         self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m, '
                                f'heading {math.degrees(crossing.heading):+.1f} deg to the lane')
-        if self.avoid.state == ACTIVE:
-            self.avoid.on_entry_crossing(self.tracker.latest(),
-                                         crossing.odometer - self.tracker.distance)
 
     def on_island(self, msg: PointStamped):
         if self.avoid.state != ACTIVE or not self.tracker.ready:
@@ -226,10 +236,11 @@ class StaticAvoidNode(Node):
         limos = (np.array([[p.position.x, p.position.y] for p in msg.poses])
                  if msg.poses else np.zeros((0, 2)))
         pose = self.tracker.latest() if self.tracker.ready else None
-        c = self.entry.recent(self.tracker.distance, self.p.entry_max_back)
+        c = self.entry.recent(self.tracker.distance, self.p.island_from_entry_max + 1.0)
         entry_back = self.tracker.distance - c.odometer if c is not None else None
+        entry_pose = self.tracker.at_distance(c.odometer) if c is not None else None
         if self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
-                               entry_back):
+                               entry_back, entry_pose):
             self.get_logger().info(f'static obstacle START (blocked ahead) at odometer '
                                    f'{self.tracker.distance:.2f} m, island '
                                    f'{self.avoid.island[0]:.2f} m ({self.avoid.island_source})')
