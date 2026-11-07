@@ -83,7 +83,7 @@
 
 ## 6. 1105 연습 트랙 bag에서 본 콘 코스 (통합 세션 분석 + 확인)
 
-데이터: `/home/a/autorace_bags/1105/0X_*`. 8호차, RC 수동 주행. 통합 세션 보고서는 `/home/a/autorace_bags/1105/analysis/README.md`.
+데이터: `/home/a/autorace_bags/1105/0X_*`. 7호차(= limo2, 2026-11-08 정정. 통합 분석 README에는 8호차로 적혀 있음), RC 수동 주행. 통합 세션 보고서는 `/home/a/autorace_bags/1105/analysis/README.md`.
 
 1. **엉뚱한 곳에서 시작됨.** 시작 조건(전방 상자 안 콘 6개)이 정적 장애물 구간(01 46.9 s, 04 40~42 s)과 주차 구역(03 94~101 s)에서도 켜졌다.
    - 그날 장애물은 작은 콘 4개를 뭉쳐 LIMO를 흉내 낸 것이라 콘으로 잡히는 게 당연했다.
