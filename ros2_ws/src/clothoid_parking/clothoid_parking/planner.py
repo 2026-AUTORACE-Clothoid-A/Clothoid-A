@@ -63,7 +63,7 @@ class PlanParams:
     freeze_distance: float = 0.20  # m before the turn point: stop moving the target
     max_reversals: int = 2         # ENTER direction changes before accepting where it is
     turn_max_sec: float = 8.0
-    enter_max_sec: float = 6.0
+    enter_max_sec: float = 12.0    # a second-row bay is 0.6 m further in
     front_stop: float = 0.10       # m, lidar front clearance that ends a forward ENTER
     park_hold_sec: float = 3.0     # s standing in the bay before backing out
     exit_enabled: bool = True

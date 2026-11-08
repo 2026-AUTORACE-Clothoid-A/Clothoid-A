@@ -33,6 +33,13 @@ class BayParams:
                                   # beside the first car must not count as the car's end)
     max_row_angle_deg: float = 12.0
     face_to_centre: float = 0.161  # m from a parked LIMO's near end to its centre (322 mm long)
+    # second row (behind the lane-side row, 620 mm further): used when the lane-side row has no
+    # gap, through an empty lane-side bay in front of it
+    inner_row: bool = True
+    far2: float = 1.45            # m, band far..far2 holds the second row's near ends (~1.03 m)
+    corridor_margin: float = 0.06  # m kept off the gap edges when checking the way in is empty
+    min_flank: float = 0.12       # m along the row a flank must cover: a LIMO's end is 0.22 m wide,
+                                  # the sign pole 0.04 m (it once made a skewed 'bay' with one car)
 
 
 @dataclass
@@ -94,11 +101,13 @@ def row_slope_angle(points: np.ndarray, ref_x: float, ref_y: float, ref_yaw: flo
     u = dx * c + dy * s
     lat = (-dx * s + dy * c) * p.side
     # a wider lateral band than the search: tilted, the far cars drift out of near..far
-    keep = (lat > p.near) & (lat < p.far + 0.3) & (u > -p.behind) & (u < p.ahead)
+    keep = (lat > p.near) & (lat < (p.far2 if p.inner_row else p.far + 0.3)) & (u > -p.behind) & (u < p.ahead)
     # both ends of every cluster: the sign pole merges with the first car, and its end then reads
     # the pole, while the far end of that cluster is still the car's face
     faces = []
     for cl in clusters_along_row(u[keep], lat[keep], p):
+        if cl.u_max - cl.u_min < p.min_flank:
+            continue
         w = p.face_window
         if cl.u_max - cl.u_min < 2 * w:
             faces.append(cl.face_point())
@@ -111,12 +120,15 @@ def row_slope_angle(points: np.ndarray, ref_x: float, ref_y: float, ref_yaw: flo
         return 0.0
     fu = np.array([f[0] for f in faces])
     fl = np.array([f[1] for f in faces])
+    # pairs of near ends in one row only (the two rows are 0.62 m apart)
     slopes = [(fl[j] - fl[i]) / (fu[j] - fu[i]) for i in range(len(fu)) for j in range(i + 1, len(fu))
-              if fu[j] - fu[i] > 0.3]
+              if fu[j] - fu[i] > 0.3 and abs(fl[j] - fl[i]) < 0.3]
     if not slopes:
         return 0.0
     k = float(np.median(slopes))
-    b = float(np.median(fl - k * fu))
+    # offset of the row with most near ends on it (either row fits the same slope)
+    res = fl - k * fu
+    b = max((res[np.abs(res - r) < p.face_tolerance].size, r) for r in res)[1]
     on = np.abs(fl - (b + k * fu)) < p.face_tolerance
     if on.sum() >= 2 and np.ptp(fu[on]) > 0.3:
         k = float(np.polyfit(fu[on], fl[on], 1)[0])
@@ -137,8 +149,31 @@ def find_bay(points: np.ndarray, ref_x: float, ref_y: float, ref_yaw: float,
     dx, dy = points[:, 0] - ref_x, points[:, 1] - ref_y
     u = dx * c + dy * s
     lat = (-dx * s + dy * c) * p.side          # positive towards the bays
-    keep = (lat > p.near) & (lat < p.far) & (u > -p.behind) & (u < p.ahead)
-    clusters = clusters_along_row(u[keep], lat[keep], p)
+    ahead = (u > -p.behind) & (u < p.ahead)
+    row1 = ahead & (lat > p.near) & (lat < p.far)
+    found = _gap(u[row1], lat[row1], p)
+    if found is None and p.inner_row:
+        row2 = ahead & (lat >= p.far) & (lat < p.far2)
+        found = _gap(u[row2], lat[row2], p)
+        if found is not None:
+            # the lane-side bay in front must be empty: nothing in the first band across the gap
+            lo, hi = found[0] - found[2] / 2 + p.corridor_margin, found[0] + found[2] / 2 - p.corridor_margin
+            if np.any(row1 & (u > lo) & (u < hi)):
+                found = None
+    if found is None:
+        return None
+    uc, w_face, gap, row = found
+    fx, fy = ref_x + uc * c - w_face * s, ref_y + uc * s + w_face * c
+    row_yaw = ref_yaw + row
+    entry_yaw = row_yaw + p.side * math.pi / 2
+    return Bay(x=fx + p.face_to_centre * math.cos(entry_yaw),
+               y=fy + p.face_to_centre * math.sin(entry_yaw),
+               row_yaw=row_yaw, entry_yaw=entry_yaw, width=gap, face_x=fx, face_y=fy)
+
+
+def _gap(u: np.ndarray, lat: np.ndarray, p: BayParams):
+    """Nearest gap between two clusters of one row: (u of its centre, near-end w, width, row angle)."""
+    clusters = [cl for cl in clusters_along_row(u, lat, p) if cl.u_max - cl.u_min >= p.min_flank]
     for a, b in zip(clusters, clusters[1:]):
         gap = b.u_min - a.u_max
         if not (p.gap_min <= gap <= p.gap_max):
@@ -148,16 +183,8 @@ def find_bay(points: np.ndarray, ref_x: float, ref_y: float, ref_yaw: float,
         if not abs(fa - fb) <= p.face_tolerance:
             continue
         # row direction from the two near ends; w = lat * side
-        du = gap + p.face_window
-        row = math.atan2((fb - fa) * p.side, du)
+        row = math.atan2((fb - fa) * p.side, gap + p.face_window)
         if abs(row) > math.radians(p.max_row_angle_deg):
             continue
-        uc = 0.5 * (a.u_max + b.u_min)
-        w_face = 0.5 * (fa + fb) * p.side
-        fx, fy = ref_x + uc * c - w_face * s, ref_y + uc * s + w_face * c
-        row_yaw = ref_yaw + row
-        entry_yaw = row_yaw + p.side * math.pi / 2
-        return Bay(x=fx + p.face_to_centre * math.cos(entry_yaw),
-                   y=fy + p.face_to_centre * math.sin(entry_yaw),
-                   row_yaw=row_yaw, entry_yaw=entry_yaw, width=gap, face_x=fx, face_y=fy)
+        return 0.5 * (a.u_max + b.u_min), 0.5 * (fa + fb) * p.side, gap, row
     return None

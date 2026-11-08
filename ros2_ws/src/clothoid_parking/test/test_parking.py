@@ -61,7 +61,7 @@ def drive(empty=1, lane_offset=0.0, heading_deg=0.0, start_x=5.5, gyro_bias=0.00
           odom_scale=1.015, slew=1.5, seed=0, plan=None, extra_cars=(), sign=True,
           spikes=0.0, dropout=0.0, until=(Phase.PARKED, Phase.ABORT), seconds=25.0):
     rng = np.random.default_rng(seed)
-    cars = scene.parked_cars(empty) + list(extra_cars)
+    cars = (scene.parked_cars(empty) if empty is not None else []) + list(extra_cars)
     segs = scene.segments(cars, sign)
     car = scene.Car(start_x, scene.LANE_Y + lane_offset, math.radians(heading_deg), slew=slew)
     core = ParkingCore(plan or PlanParams(**SCENE_PLAN))
@@ -170,3 +170,31 @@ def test_exit_can_be_switched_off():
                       until=(Phase.DONE, Phase.ABORT), seconds=35.0)
     assert core.phase == Phase.DONE
     assert scene.corners_outside(car, scene.bay_rect(1), line=0.02) == 0
+
+
+def inner_scenario(upper_middle=False):
+    """Lane-side row empty, second row with its middle bay empty (LIMOs on both sides)."""
+    cars = [(scene.COLUMNS[0], scene.INNER_Y, math.pi / 2), (scene.COLUMNS[2], scene.INNER_Y, math.pi / 2)]
+    if upper_middle:
+        cars.append((scene.COLUMNS[1], scene.UPPER_Y, math.pi / 2))
+    return cars
+
+
+def test_parks_in_the_second_row_through_an_empty_lane_side_bay():
+    core, car = drive(empty=None, extra_cars=inner_scenario())
+    assert core.phase == Phase.PARKED, core.planner.reason
+    assert scene.corners_outside(car, scene.bay_rect(1, scene.INNER_Y), line=0.02) == 0
+    assert car.yaw == pytest.approx(-math.pi / 2, abs=math.radians(4))
+
+
+def test_second_row_exit_backs_into_the_lane():
+    core, car = drive(empty=None, extra_cars=inner_scenario(), until=(Phase.DONE, Phase.ABORT), seconds=50.0)
+    assert core.phase == Phase.DONE, core.planner.reason
+    assert abs(math.degrees(car.yaw)) < 10.0
+    assert car.y == pytest.approx(scene.LANE_Y, abs=0.08)
+
+
+def test_second_row_not_taken_when_the_bay_in_front_is_occupied():
+    core, car = drive(empty=None, extra_cars=inner_scenario(upper_middle=True))
+    assert core.phase == Phase.ABORT
+
