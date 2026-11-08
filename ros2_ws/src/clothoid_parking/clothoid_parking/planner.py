@@ -88,6 +88,7 @@ class Planner:
         self._enter_dir = 0.0
         self._reversals = 0
         self._arc_end: Optional[Pose2D] = None
+        self.row_hint: Optional[float] = None   # row direction from the lidar before a bay is found
 
     @property
     def active(self) -> bool:
@@ -97,6 +98,7 @@ class Planner:
         self._start = Pose2D(pose.x, pose.y, pose.yaw)
         self.bay = None
         self._enter_dir, self._reversals, self._arc_end = 0.0, 0, None
+        self.row_hint = None
         self._go(Phase.SEARCH, now, 'flag')
 
     def _go(self, phase: Phase, now: float, reason: str):
@@ -172,7 +174,8 @@ class Planner:
                 if driven > p.max_search:
                     self._go(Phase.ABORT, now, f'no empty bay within {p.max_search:.1f} m')
                     return 0.0, 0.0
-                return p.search_speed, self._hold(pose, self._start.yaw, p.search_speed)
+                yaw_ref = self._start.yaw if self.row_hint is None else self.row_hint
+                return p.search_speed, self._hold(pose, yaw_ref, p.search_speed)
             remaining = self.turn_remaining(pose)
             if remaining <= 0.0:
                 if remaining < -0.10:

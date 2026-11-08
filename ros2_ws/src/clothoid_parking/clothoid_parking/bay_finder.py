@@ -53,6 +53,12 @@ class Cluster:
         m = (self.u >= from_u) & (self.u <= to_u)
         return float(np.percentile(self.lat[m], 10)) if m.any() else float('nan')
 
+    def face_point(self):
+        """(u, lat) of the near end: the 10 % nearest lateral distance and where along it lies."""
+        near = float(np.percentile(self.lat, 10))
+        sel = self.lat <= near + 0.02
+        return float(np.median(self.u[sel])), near
+
 
 @dataclass
 class Bay:
@@ -78,11 +84,55 @@ def clusters_along_row(u: np.ndarray, lat: np.ndarray, p: BayParams) -> List[Clu
     return out
 
 
+def row_slope_angle(points: np.ndarray, ref_x: float, ref_y: float, ref_yaw: float,
+                    p: BayParams) -> float:
+    """Angle (rad, lat-towards-the-bays per metre along) of the line through the parked cars' near
+    ends, 0 when it cannot be told. Theil-Sen over the cluster faces, then a fit without the faces
+    off that line (the sign pole, a box)."""
+    c, s = math.cos(ref_yaw), math.sin(ref_yaw)
+    dx, dy = points[:, 0] - ref_x, points[:, 1] - ref_y
+    u = dx * c + dy * s
+    lat = (-dx * s + dy * c) * p.side
+    # a wider lateral band than the search: tilted, the far cars drift out of near..far
+    keep = (lat > p.near) & (lat < p.far + 0.3) & (u > -p.behind) & (u < p.ahead)
+    # both ends of every cluster: the sign pole merges with the first car, and its end then reads
+    # the pole, while the far end of that cluster is still the car's face
+    faces = []
+    for cl in clusters_along_row(u[keep], lat[keep], p):
+        w = p.face_window
+        if cl.u_max - cl.u_min < 2 * w:
+            faces.append(cl.face_point())
+            continue
+        for lo, hi in ((cl.u_min, cl.u_min + w), (cl.u_max - w, cl.u_max)):
+            m = (cl.u >= lo) & (cl.u <= hi)
+            near = float(np.percentile(cl.lat[m], 10))
+            faces.append((float(np.median(cl.u[m & (cl.lat <= near + 0.02)])), near))
+    if len(faces) < 2:
+        return 0.0
+    fu = np.array([f[0] for f in faces])
+    fl = np.array([f[1] for f in faces])
+    slopes = [(fl[j] - fl[i]) / (fu[j] - fu[i]) for i in range(len(fu)) for j in range(i + 1, len(fu))
+              if fu[j] - fu[i] > 0.3]
+    if not slopes:
+        return 0.0
+    k = float(np.median(slopes))
+    b = float(np.median(fl - k * fu))
+    on = np.abs(fl - (b + k * fu)) < p.face_tolerance
+    if on.sum() >= 2 and np.ptp(fu[on]) > 0.3:
+        k = float(np.polyfit(fu[on], fl[on], 1)[0])
+    angle = math.atan(k)
+    return angle if abs(angle) <= math.radians(p.max_row_angle_deg) else 0.0
+
+
 def find_bay(points: np.ndarray, ref_x: float, ref_y: float, ref_yaw: float,
              p: BayParams = BayParams()) -> Optional[Bay]:
     """Nearest empty bay ahead of (ref_x, ref_y) along ref_yaw, or None."""
     if points is None or len(points) == 0:
         return None
+    # The search frame starts along the car's heading. If the car is not parallel to the row, the
+    # near ends of the parked cars look staggered in it (0.93 m x tan(4 deg) = 6.5 cm, past
+    # face_tolerance), so first turn the frame onto the row the near ends actually lie on.
+    ref_yaw = ref_yaw + p.side * row_slope_angle(points, ref_x, ref_y, ref_yaw, p)
     c, s = math.cos(ref_yaw), math.sin(ref_yaw)
     dx, dy = points[:, 0] - ref_x, points[:, 1] - ref_y
     u = dx * c + dy * s

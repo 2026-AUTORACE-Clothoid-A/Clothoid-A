@@ -113,7 +113,9 @@ def test_parks_in_the_empty_bay(empty):
 
 
 @pytest.mark.parametrize('lane_offset,heading_deg', [
-    (0.05, 0.0), (-0.05, 0.0), (0.0, 3.0), (0.0, -3.0), (0.04, -2.0)])
+    (0.05, 0.0), (-0.05, 0.0), (0.0, 3.0), (0.0, -3.0), (0.04, -2.0),
+    # tilted at the start (limo2 2026-11-09 missed the bay from ~+4 deg): the row is fitted first
+    (0.0, 6.0), (0.0, -6.0), (0.0, 8.0), (0.0, -8.0)])
 def test_parks_from_an_imperfect_lane_position(lane_offset, heading_deg):
     core, car = drive(lane_offset=lane_offset, heading_deg=heading_deg)
     assert core.phase == Phase.PARKED, core.planner.reason

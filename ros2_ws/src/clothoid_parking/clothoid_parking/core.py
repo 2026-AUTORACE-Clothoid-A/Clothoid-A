@@ -4,7 +4,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from clothoid_parking.bay_finder import BayParams, find_bay
+from clothoid_parking.bay_finder import BayParams, find_bay, row_slope_angle
 from clothoid_parking.planner import Phase, PlanParams, Planner
 from clothoid_parking.tracker import Tracker
 
@@ -68,6 +68,11 @@ class ParkingCore:
                 self.cells[key] = [px, py, 1]
         points = self.points()
         start = self.planner._start
+        if len(points):
+            # the row's direction is known before the gap is: drive along it, not along a tilted start
+            angle = row_slope_angle(points, pose.x, pose.y, start.yaw, self.bay_params)
+            if angle:
+                self.planner.row_hint = start.yaw + self.bay_params.side * angle
         bay = find_bay(points, pose.x, pose.y, start.yaw, self.bay_params)
         self.planner.offer_bay(bay, pose)
 
