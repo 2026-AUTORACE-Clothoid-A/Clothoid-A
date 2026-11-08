@@ -26,6 +26,8 @@ class MissionNode(Node):
         self.declare_parameter('speed_limit_topic', '/speed_limit')
         self.declare_parameter('direction_topic', '/direction_flag')
         self.declare_parameter('parking_topic', '/parking_flag')
+        # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
+        self.declare_parameter('parking_sign_topic', '/parking_sign')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line older than this are dropped
@@ -40,6 +42,7 @@ class MissionNode(Node):
         self.declare_parameter('cooldown_sec', d.cooldown_sec)
         self.declare_parameter('fork_left_direction', d.fork_left_direction)
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
+        self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.logic = MissionLogic(MissionParams(
@@ -47,11 +50,14 @@ class MissionNode(Node):
             pedestrian_wait_sec=get('pedestrian_wait_sec'), stop_on_yellow=get('stop_on_yellow'),
             arm_timeout_sec=get('arm_timeout_sec'), cooldown_sec=get('cooldown_sec'),
             fork_left_direction=get('fork_left_direction'),
-            fork_right_direction=get('fork_right_direction')))
+            fork_right_direction=get('fork_right_direction'),
+            parking_at_stopline=get('parking_at_stopline')))
 
         self.seen, self.seen_time = set(), None
         self.stopline, self.stopline_time = False, None
         self.parking_done = False
+        self.sign_time = None            # last /parking_sign true
+        self.parking_log = (False, False)
         self.state = self.logic.state
         self.sent = {}   # topic key -> (value, time) for change / refresh publishing
 
@@ -62,6 +68,7 @@ class MissionNode(Node):
         self.create_subscription(DetectionArray, get('detections_topic'), self.on_detections, 1)
         self.create_subscription(Bool, get('stopline_topic'), self.on_stopline, 1)
         self.create_subscription(Bool, get('parking_done_topic'), self.on_parking_done, 1)
+        self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
         self.get_logger().info('mission started')
 
@@ -73,6 +80,10 @@ class MissionNode(Node):
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()
+
+    def on_parking_sign(self, msg: Bool):
+        if msg.data:
+            self.sign_time = self.now_sec()
 
     def on_parking_done(self, msg: Bool):
         self.parking_done = msg.data
@@ -91,12 +102,20 @@ class MissionNode(Node):
             self.sent[key] = (value, now)
 
     def on_timer(self):
+        seen = set(self.seen) if self._fresh(self.seen_time) else set()
+        if self._fresh(self.sign_time):
+            seen.add('sign_parking')
         out = self.logic.step(Inputs(
             now=self.now_sec(),
-            seen=self.seen if self._fresh(self.seen_time) else set(),
+            seen=seen,
             stopline=self.stopline if self._fresh(self.stopline_time) else False,
             parking_done=self.parking_done))
 
+        log = (self.logic.parking_armed, out.parking_flag)
+        if log != self.parking_log:
+            self.get_logger().info('parking sign seen: waiting for the stop line' if not log[1]
+                                   else 'stop line: parking flag on')
+            self.parking_log = log
         if out.state != self.state:
             self.get_logger().info(f'{self.state} -> {out.state}')
             self.state = out.state
