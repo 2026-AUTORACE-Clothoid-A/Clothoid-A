@@ -1,0 +1,57 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 0.1
+      Plane Cell Count: 40
+      Color: 70; 70; 70
+      Reference Frame: <Fixed Frame>
+    - Class: rviz_default_plugins/LaserScan
+      Name: Scan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+        Durability Policy: Volatile
+        Depth: 5
+      Size (m): 0.025
+      Style: Flat Squares
+      Color Transformer: FlatColor
+      Color: 255; 40; 40
+      Decay Time: 0
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Parking
+      Enabled: true
+      Topic:
+        Value: /parking/markers
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        Depth: 5
+    - Class: rviz_default_plugins/Axes
+      Name: base_link
+      Enabled: true
+      Reference Frame: base_link
+      Length: 0.15
+      Radius: 0.01
+  Global Options:
+    Background Color: 25; 25; 30
+    Fixed Frame: base_link
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Scale: 250
+      X: 0.6
+      Y: -0.3
+      Angle: 0
+Window Geometry:
+  Width: 1100
+  Height: 800
