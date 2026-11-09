@@ -35,8 +35,8 @@ static_avoid:
     island_handover: 1.0         # m before the island front: hand over, lane_main enters A / B
     island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
     image_every: 3               # entry line: every 3rd camera frame
-    # camera geometry and the white threshold are NOT set here: avoid.launch.py passes the lane
-    # package's camera_<car>.yaml and lane.yaml lane_main white_s_max / white_v_min
+    # camera geometry and the paint colours are NOT set here: avoid.launch.py passes the lane
+    # package's camera_<car>.yaml and lane.yaml lane_main white_s_max / white_v_min / hsv_*
     # control
     speed: 0.30
     slow_speed: 0.20

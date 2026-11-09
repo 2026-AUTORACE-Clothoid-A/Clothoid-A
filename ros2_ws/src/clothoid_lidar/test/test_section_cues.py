@@ -4,8 +4,8 @@ import cv2
 import numpy as np
 import pytest
 
-from clothoid_lidar.section_cues import (CameraModel, EntryLineTracker, WhiteParams,
-                                         find_entry_line)
+from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker, WhiteParams,
+                                         find_entry_line, find_lane_lines)
 
 CAM = CameraModel()
 
@@ -82,3 +82,29 @@ def test_far_line_is_not_a_crossing():
     tr.update(0.0, 0.0, find_entry_line(floor_image([band(0.8)]), CAM, WhiteParams()))
     tr.last = (tr.last[0], tr.last[1], type(tr.last[2])(row=0, ahead=1.4, heading=0.0))
     assert tr.update(1.0, 0.5, None) is None
+
+
+def lane_strip(y, yaw=0.0, half=0.012, x0=0.5, x1=1.5):
+    """A floor line through (0, y) at angle yaw from the car's x axis."""
+    t = math.tan(yaw)
+    return [(x0, y + t * x0 - half), (x1, y + t * x1 - half), (x1, y + t * x1 + half),
+            (x0, y + t * x0 + half)]
+
+
+@pytest.mark.parametrize('yaw_deg, offset', [(0.0, 0.0), (6.0, 0.0), (-9.0, 0.05), (4.0, -0.08)])
+def test_lane_lines_give_direction_and_offset(yaw_deg, offset):
+    yaw = math.radians(yaw_deg)
+    img = floor_image([lane_strip(0.25 + offset, yaw), lane_strip(-0.25 + offset, yaw)])
+    obs = find_lane_lines(img, CAM, ColourParams(), 0.0, math.radians(15))
+    assert obs is not None
+    assert obs.angle == pytest.approx(yaw, abs=math.radians(1.5))
+    ys = sorted(ln.y0 for ln in obs.lines)
+    assert len(ys) == 2
+    assert ys[0] == pytest.approx(-0.25 + offset, abs=0.03)
+    assert ys[1] == pytest.approx(0.25 + offset, abs=0.03)
+
+
+def test_cross_line_does_not_turn_the_lane_direction():
+    img = floor_image([lane_strip(0.25), lane_strip(-0.25), band(0.8, width=0.08)])
+    obs = find_lane_lines(img, CAM, ColourParams(), 0.0, math.radians(15))
+    assert obs is not None and abs(obs.angle) < math.radians(2)

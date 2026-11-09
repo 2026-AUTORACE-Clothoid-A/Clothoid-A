@@ -20,7 +20,7 @@ from launch_ros.actions import Node
 
 
 def _lane_files(camera):
-    """(camera profile path or None, {white_s_max, white_v_min} from lane.yaml or {})."""
+    """(camera profile path or None, {white_*, yellow_*} from lane.yaml or {})."""
     try:
         lane = get_package_share_directory('clothoid_lane')
     except PackageNotFoundError:
@@ -31,6 +31,9 @@ def _lane_files(camera):
         with open(os.path.join(lane, 'config', 'lane.yaml')) as f:
             main = (yaml.safe_load(f) or {}).get('lane_main', {}).get('ros__parameters', {})
         white = {k: int(main[k]) for k in ('white_s_max', 'white_v_min') if k in main}
+        # the node refuses main's 2025 yellow (S >= 215) with a warning
+        white.update({new: [int(x) for x in main[old]] for old, new in
+                      (('hsv_lower', 'yellow_lower'), ('hsv_upper', 'yellow_upper')) if old in main})
     except OSError:
         pass
     return (cam if os.path.exists(cam) else None), white

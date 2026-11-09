@@ -41,6 +41,15 @@ class CameraModel:
         scale = self.height / down
         return self.x + scale * forward, self.y - scale * x
 
+    def image_to_floor_array(self, px: np.ndarray, py: np.ndarray) -> np.ndarray:
+        """image_to_floor for arrays: (N, 2) floor points of the pixels below the horizon."""
+        x, y = (px - self.cx) / self.fx, (py - self.cy) / self.fy
+        c, s = math.cos(self.pitch), math.sin(self.pitch)
+        forward, down = c - y * s, y * c + s
+        ok = down > 1e-6
+        scale = self.height / down[ok]
+        return np.column_stack((self.x + scale * forward[ok], self.y - scale * x[ok]))
+
     def floor_to_image(self, fx_: float, fy_: float) -> Tuple[float, float]:
         """Inverse of image_to_floor (tests, drawing)."""
         X, Y = fx_ - self.x, fy_ - self.y            # from the lens, X forward, Y left
@@ -158,3 +167,93 @@ class EntryLineTracker:
                 if best is None or c.odometer > best.odometer:
                     best = c
         return best
+
+
+@dataclass
+class ColourParams:
+    """Lane paint, same thresholds as lane_main (white_s_max, white_v_min, hsv_lower, hsv_upper)."""
+    white_s_max: int = 50
+    white_v_min: int = 170
+    yellow_lower: Tuple[int, int, int] = (18, 60, 90)    # 11-05 tape, namgyu/lane
+    yellow_upper: Tuple[int, int, int] = (35, 255, 255)
+    roi_top: float = 0.55         # fraction of the image height
+    pixel_step: int = 3           # use every n-th painted pixel
+    x_min: float = 0.45           # m, floor window in base_link
+    x_max: float = 1.5
+    y_max: float = 1.0
+    min_total: int = 30           # floor points in a frame
+    min_points: int = 12          # floor points on one line
+    min_extent: float = 0.12      # m of floor along x covered by one line
+    max_lines: int = 6            # per colour
+
+
+@dataclass
+class LaneLine:
+    y0: float                     # m, line's lateral position at base_link (x = 0), left positive
+    colour: str                   # 'white' | 'yellow'
+    n: int
+    extent: float
+
+
+@dataclass
+class LaneObservation:
+    angle: float                  # rad, direction of the parallel lane lines relative to the car
+    lines: List[LaneLine]
+
+
+def _floor_points(mask: np.ndarray, cam: CameraModel, p: ColourParams, sx: float,
+                  sy: float) -> np.ndarray:
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return np.zeros((0, 2))
+    pts = cam.image_to_floor_array(xs[::p.pixel_step] * sx, ys[::p.pixel_step] * sy)
+    ok = (pts[:, 0] > p.x_min) & (pts[:, 0] < p.x_max) & (np.abs(pts[:, 1]) < p.y_max)
+    return pts[ok]
+
+
+def find_lane_lines(bgr: np.ndarray, cam: CameraModel, p: ColourParams, centre: float = 0.0,
+                    half_range: float = math.radians(10.0)) -> Optional[LaneObservation]:
+    """White and yellow paint projected on the floor; one common direction for all the parallel lane
+    lines (searched around `centre`, relative to the car), then a peak per line. Cross lines and
+    letters do not pile up along that direction."""
+    h, w = bgr.shape[:2]
+    sx, sy = cam.width / float(w), cam.height_px / float(h)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    white = cv2.inRange(hsv, (0, 0, int(p.white_v_min)), (180, int(p.white_s_max), 255))
+    yellow = cv2.inRange(hsv, tuple(int(v) for v in p.yellow_lower),
+                         tuple(int(v) for v in p.yellow_upper))
+    top = int(h * p.roi_top)
+    white[:top] = 0
+    yellow[:top] = 0
+    groups = (('white', _floor_points(white, cam, p, sx, sy)),
+              ('yellow', _floor_points(yellow, cam, p, sx, sy)))
+    pts = np.vstack([g[1] for g in groups])
+    if len(pts) < p.min_total:
+        return None
+    edges = np.linspace(-1.5, 1.5, 201)
+    best_score, best_angle = -1.0, centre
+    for a in centre + np.radians(np.arange(-math.degrees(half_range),
+                                           math.degrees(half_range) + 0.5, 1.0)):
+        y0 = pts[:, 1] - math.tan(a) * pts[:, 0]
+        hist = np.histogram(y0, bins=edges)[0].astype(float)
+        score = float((hist ** 2).sum())
+        if score > best_score:
+            best_score, best_angle = score, float(a)
+    lines: List[LaneLine] = []
+    tan_a = math.tan(best_angle)
+    for colour, q in groups:
+        if len(q) < p.min_points:
+            continue
+        y0 = q[:, 1] - tan_a * q[:, 0]
+        hist = np.histogram(y0, bins=edges)[0]
+        for i in np.argsort(hist)[::-1][:p.max_lines]:
+            if hist[i] < p.min_points:
+                break
+            c = float(edges[i] + edges[i + 1]) / 2.0
+            if any(abs(c - ln.y0) < 0.08 for ln in lines):
+                continue
+            on = np.abs(y0 - c) < 0.025
+            extent = float(np.ptp(q[on, 0]))
+            if extent >= p.min_extent:
+                lines.append(LaneLine(y0=c, colour=colour, n=int(on.sum()), extent=extent))
+    return LaneObservation(angle=best_angle, lines=lines)

@@ -14,8 +14,10 @@ import numpy as np
 import pytest
 
 from clothoid_lidar.obstacle_extractor import ExtractorParams, extract_obstacles, transform_points
+from clothoid_lidar.section_cues import LaneLine, LaneObservation
 from clothoid_lidar.static_avoid import (ACTIVE, IDLE, AvoidParams, Costmap, Inhibit, PoseTracker,
-                                         StaticAvoid, lane_of, plan_paths, pure_pursuit)
+                                         SectionFrame, StaticAvoid, lane_of, line_residuals,
+                                         plan_paths, pure_pursuit)
 
 L, TRACK, SCALE, MAX_INNER = 0.2, 0.175, 1.06, 0.48869
 LIDAR_X = 0.103
@@ -103,9 +105,11 @@ def min_gap(car_poly, limos):
 
 
 def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, remove_at=None,
-        seed=1, t_max=45.0, params=None, see_entry=True):
+        seed=1, t_max=45.0, params=None, see_entry=True, skew_deg=None):
     """Drive the section once. Returns a dict of what happened.
-    direction: 0 / 1 / None, or (value, x) for a fork sign first seen when the car passes x."""
+    direction: 0 / 1 / None, or (value, x) for a fork sign first seen when the car passes x.
+    skew_deg: the section frame is wrong by this much until the camera lane fit, 0.5 m past the entry
+    line (a start while leaving the corner)."""
     rng = np.random.default_rng(seed)
     w = lane_width
     p = params or replace(AvoidParams(), lane_width=w)
@@ -147,6 +151,11 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
                 out['activated'] = True
                 out['events'].append((round(t, 2), 'start', round(bx, 2)))
                 out['island_source'] = avoid.island_source
+                if skew_deg is not None:
+                    avoid.frame = SectionFrame(pose[0], pose[1], pose[2] + math.radians(skew_deg))
+            if skew_deg is not None and avoid.state == ACTIVE and bx >= 0.5 and avoid.lane_frame is None:
+                # the lane is the world x axis; origin on lane 2 centre at the entry line
+                avoid.on_lane_fit(SectionFrame(pose[0] - bx, pose[1] - by, 0.0))
             ok = np.isfinite(r)
             hits = np.column_stack((r[ok] * np.cos(ang[ok]) + LIDAR_X, r[ok] * np.sin(ang[ok])))
             free = np.column_stack((np.cos(ang[~ok]), np.sin(ang[~ok])))
@@ -325,7 +334,7 @@ def test_hands_over_before_the_island():
 
 def test_limo_close_to_the_island_is_still_avoided():
     w = 0.50
-    out = run([(1.2, 0.0), (3.7, -w)], direction=1)     # last LIMO in lane 3 just before the island
+    out = run([(1.2, 0.0), (3.2, -w)], direction=1)     # last LIMO in lane 3 before the island
     check(out, w, 3)
 
 
@@ -335,16 +344,64 @@ def test_without_the_entry_line_the_guess_is_used():
     assert out['island_source_end'] == 'estimate'
 
 
-def test_no_new_start_at_the_island():
+def finished_section():
     a = StaticAvoid(AvoidParams())
     a.activate((0.0, 0.0, 0.0), entry_back=0.7)          # island 3.7~5.45 m
-    a.stop('hand over 1.00 m before the island (entry line), lane 2')
+    a.seen_entry = (-0.7, 0.0, 0.0)
+    a.stop('hand over 1.00 m before the island (entry line), lane 2', True)
+    return a
+
+
+def test_no_new_start_after_reaching_the_fork():
+    a = finished_section()
     limo = np.array([[1.0, 0.0]])
     for k in range(5):                                    # something blocks the lane at the island
         assert not a.on_limos(10 + 0.1 * k, limo, Inhibit(), 0.3, (3.2, 0.0, 0.0))
-    started = [a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0))
-               for k in range(5)]                          # far beyond the section: normal again
-    assert any(started)
+    for k in range(5):                                    # far on, still the same entry line
+        assert not a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0),
+                              entry_back=2.0, entry_pose=(-0.7, 0.0, 0.0))
+    assert a.locked
+
+
+def test_new_line_without_a_blocker_keeps_the_lock():
+    a = finished_section()
+    for k in range(5):
+        assert not a.on_limos(20 + 0.1 * k, np.zeros((0, 2)), Inhibit(), 0.3, (12.0, 0.0, 0.0),
+                              entry_back=1.0, entry_pose=(11.0, 0.0, 0.0))
+    assert a.locked
+
+
+def test_retry_after_a_new_entry_line_starts_a_new_section():
+    a = finished_section()
+    limo = np.array([[1.0, 0.0]])
+    started = [a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (-5.0, 3.0, 1.0), entry_back=1.0,
+                          entry_pose=(-6.0, 3.0, 1.0)) for k in range(4)]
+    assert any(started) and not a.locked
+    assert a.frame.x0 == pytest.approx(-6.0) and a.island_source == 'entry line'
+
+
+def test_one_scan_after_a_new_line_keeps_the_finished_section():
+    a = finished_section()
+    frame = a.frame
+    assert not a.on_limos(20.0, np.array([[1.0, 0.0]]), Inhibit(), 0.3, (12.0, 0.0, 0.0),
+                          entry_back=1.0, entry_pose=(11.0, 0.0, 0.0))
+    assert a.locked and a.frame is frame
+
+
+def test_handover_mid_section_does_not_lock():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    a.stop('hand over in lane 1')
+    assert not a.locked
+
+
+def test_alignment_is_not_waited_for_right_at_the_island():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
+    a.plan = plan_paths((3.6, 0.25, 0.0), 3.6, a.costmap, None, None, a.p, island=a.island)
+    assert a.control((4.0, 0.25, 0.0), Inhibit()) is not None    # 0.4 m before it: still waits
+    assert a.control((4.15, 0.25, 0.0), Inhibit()) is None       # 0.25 m before it: goes
+    assert a.locked
 
 
 def test_sign_stand_at_the_island_does_not_start():
@@ -364,3 +421,87 @@ def test_white_line_far_past_the_start_is_not_the_entry():
     assert a.island_source == 'estimate'
     a.on_entry_crossing((0.5, 0.0, 0.0))
     assert a.island_source == 'entry line' and a.entry_s == pytest.approx(0.5)
+
+
+def test_skewed_frame_is_corrected_by_the_lane_fit():
+    """Run 10 of 1108: started leaving the corner, the frame 12 deg off the lanes."""
+    w = 0.50
+    out = run([(1.5, 0.0), (3.5, 0.0), (3.0, -w)], direction=0, skew_deg=-12.0)
+    check(out, w, 1)
+
+
+def test_lane_frame_moves_the_lanes_not_the_costmap():
+    p = AvoidParams()
+    a = StaticAvoid(p)
+    a.activate((0.0, 0.0, 0.0))
+    yaw = math.radians(-12.0)
+    assert a.on_lane_fit(SectionFrame(0.2, 0.0, yaw))
+    assert a.island == (p.island_from_entry_min, p.island_from_entry_max)
+    s, d, psi = a.lane_pose((0.2, 0.0, yaw))
+    assert s == pytest.approx(0.0) and d == pytest.approx(0.0) and psi == pytest.approx(0.0)
+    # an obstacle on lane 2 in lane coordinates, seen in the unrotated costmap
+    hits = SectionFrame(0.2, 0.0, yaw).points_from(np.array([[2.0, y] for y in np.arange(-.1, .1, .01)]))
+    for _ in range(3):
+        a.costmap.update(hits, np.array([0.0, 0.0]))
+    assert not a.road_clear(1.8, 2.3) and a.road_clear(3.0, 3.5)
+
+
+def test_lane_fit_ignores_other_lines_and_big_turns():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    assert not a.on_lane_fit(SectionFrame(-1.7, 0.0, 0.0))        # stop line before the corner
+    assert not a.on_lane_fit(SectionFrame(4.0, 0.0, 0.0))         # a line on the A / B road
+    assert not a.on_lane_fit(SectionFrame(0.1, 0.0, math.radians(25.0)))
+    assert a.lane_frame is None
+
+
+def test_slow_update_pulls_towards_the_lines_and_is_limited():
+    a = StaticAvoid(AvoidParams(lane_step_dist=0.01))   # sideways part is off by default
+    a.activate((0.0, 0.0, 0.0))
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    # lines say the lanes are turned 3 deg left and the car is 4 cm right of lane 2 centre
+    obs = LaneObservation(math.radians(3.0), [LaneLine(0.29, 'white', 50, 0.3),
+                                              LaneLine(-0.21, 'white', 50, 0.3)])
+    assert a.update_lane((1.0, 0.0, 0.0), obs)
+    assert a.lane_frame.yaw0 == pytest.approx(math.radians(0.5))       # one step only
+    assert a.lane_pose((1.0, 0.0, 0.0))[1] == pytest.approx(-0.008, abs=2e-3)
+    far = LaneObservation(math.radians(9.0), obs.lines)           # not lane lines
+    assert not a.update_lane((1.0, 0.0, 0.0), far)
+
+
+def test_line_residuals_match_nearest_expected_line():
+    p = AvoidParams()
+    obs = LaneObservation(0.0, [LaneLine(0.27, 'white', 40, 0.3), LaneLine(0.12, 'white', 40, 0.3)])
+    r = line_residuals(0.0, obs, p)
+    assert len(r) == 1 and r[0] == pytest.approx(-0.02)
+
+
+def test_known_direction_hands_over_only_in_the_target_lane():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
+    a.direction = 0
+    a.plan = plan_paths((3.5, 0.0, 0.0), 3.5, a.costmap, 0, None, a.p, island=a.island)
+    assert a.control((3.6, 0.0, 0.0), Inhibit()) is not None     # lane 2, island 0.8 m ahead: keep on
+    assert a.state == ACTIVE
+    assert a.control((3.6, 0.5, 0.0), Inhibit()) is None         # lane 1 = target: hand over
+    assert a.event.startswith('hand over in target lane 1')
+
+
+def test_unknown_direction_waits_for_the_car_to_be_aligned():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
+    a.plan = plan_paths((3.6, 0.25, 0.0), 3.6, a.costmap, None, None, a.p, island=a.island)
+    assert a.control((3.6, 0.25, 0.0), Inhibit()) is not None    # on the line between two lanes
+    assert a.control((3.6, 0.5, 0.0), Inhibit()) is None
+
+
+def test_island_forbidden_when_measured_unless_nothing_else():
+    p = AvoidParams()
+    cm = Costmap(p)
+    # direction left, right beside the island: nothing may cross it
+    plan = plan_paths((4.2, 0.45, 0.0), 4.2, cm, 0, None, p, island=(4.4, 6.15), forbid_island=True)
+    on = (plan.path[:, 0] >= 4.4) & (np.abs(plan.path[:, 1]) < 0.25 + p.car_half_width)
+    assert plan.feasible and not on.any()
+    # on the island already: still a plan, it must not freeze
+    plan = plan_paths((5.0, 0.0, 0.0), 5.0, cm, 0, None, p, island=(4.4, 6.15), forbid_island=True)
+    assert plan.feasible

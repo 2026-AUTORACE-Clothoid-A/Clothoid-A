@@ -7,7 +7,8 @@ In:  limos_topic (PoseArray, base_link, from the `limo_extractor` instance), sca
      /cmd_vel_state (mission stop commands), direction_topic,
      image_topic (raw or .../compressed; every `image_every`-th frame) for the white entry line,
      island_topic (optional PointStamped in base_link: the island front from the lane tracker),
-     /parameter_events (follows lane_main's white_s_max / white_v_min so venue tuning applies).
+     /parameter_events (follows lane_main's white_s_max / white_v_min / hsv_lower / hsv_upper so
+     venue tuning applies).
      Camera geometry: camera_height / camera_pitch / camera_x / camera_y from the lane package's
      per-car camera file (avoid.launch.py camera:=limo1|limo2).
 Out: cmd_topic (/cmd_vel_avoid, 20 Hz while active, one Twist(0) when it ends),
@@ -34,10 +35,11 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from visualization_msgs.msg import Marker, MarkerArray
 
 from clothoid_lidar.red_ratio_node import image_to_bgr
-from clothoid_lidar.section_cues import (CameraModel, EntryLineTracker, WhiteParams,
+from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker, WhiteParams,
                                          find_entry_line)
-from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, PoseTracker,
-                                         StaticAvoid, section_to_base, yaw_from_quaternion)
+from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,
+                                         PoseTracker, StaticAvoid, section_to_base,
+                                         yaw_from_quaternion)
 
 
 class StaticAvoidNode(Node):
@@ -73,6 +75,9 @@ class StaticAvoidNode(Node):
         wp = WhiteParams()
         self.declare_parameter('white_s_max', wp.s_max)
         self.declare_parameter('white_v_min', wp.v_min)
+        colours = ColourParams()
+        self.declare_parameter('yellow_lower', list(colours.yellow_lower))
+        self.declare_parameter('yellow_upper', list(colours.yellow_upper))
         d = AvoidParams()
         for f in fields(AvoidParams):
             value = getattr(d, f.name)
@@ -88,7 +93,10 @@ class StaticAvoidNode(Node):
                                height=v('camera_height'), pitch=v('camera_pitch'),
                                x=v('camera_x'), y=v('camera_y'))
         self.white = WhiteParams(s_max=int(v('white_s_max')), v_min=int(v('white_v_min')))
+        self.colours = ColourParams(white_s_max=self.white.s_max, white_v_min=self.white.v_min)
+        self.set_yellow(v('yellow_lower'), v('yellow_upper'))
         self.entry = EntryLineTracker()
+        self.lane_fitter = LaneFitter(self.p, self.cam, self.colours)
         self.image_count = 0
         self.cone_active = False
         self.parking = False
@@ -178,19 +186,31 @@ class StaticAvoidNode(Node):
     def on_state_cmd(self, _msg: Twist):
         self.state_seen = self.now()
 
+    def set_yellow(self, lower, upper):
+        """lane_main's yellow, except main's 2025 value (S >= 215), which misses our tape."""
+        if int(lower[1]) >= 200:
+            self.get_logger().warn(f'yellow {list(lower)} is too strict for our tape: using '
+                                   f'{ColourParams().yellow_lower}~{ColourParams().yellow_upper}')
+            lower, upper = ColourParams().yellow_lower, ColourParams().yellow_upper
+        self.colours.yellow_lower = tuple(int(x) for x in lower)
+        self.colours.yellow_upper = tuple(int(x) for x in upper)
+
     def on_param_event(self, msg: ParameterEvent):
-        """Follow the lane tracker's white threshold when it is tuned at the venue."""
+        """Follow the lane tracker's white and yellow thresholds when they are tuned at the venue."""
         if msg.node != self.get_parameter('lane_node').value:
             return
         for prm in list(msg.new_parameters) + list(msg.changed_parameters):
             if prm.name == 'white_s_max':
-                self.white.s_max = int(prm.value.integer_value)
+                self.white.s_max = self.colours.white_s_max = int(prm.value.integer_value)
             elif prm.name == 'white_v_min':
-                self.white.v_min = int(prm.value.integer_value)
+                self.white.v_min = self.colours.white_v_min = int(prm.value.integer_value)
+            elif prm.name == 'hsv_lower':
+                self.set_yellow(list(prm.value.integer_array_value), self.colours.yellow_upper)
+            elif prm.name == 'hsv_upper':
+                self.colours.yellow_upper = tuple(int(x) for x in prm.value.integer_array_value)
             else:
                 continue
-            self.get_logger().info(f'white threshold from {msg.node}: S<={self.white.s_max} '
-                                   f'V>={self.white.v_min}')
+            self.get_logger().info(f'colours from {msg.node}: {self.colours}')
 
     def on_image(self, msg):
         self.image_count += 1
@@ -209,15 +229,17 @@ class StaticAvoidNode(Node):
             return
         line = find_entry_line(bgr, self.cam, self.white)
         crossing = self.entry.update(self.now(), self.tracker.distance, line)
-        if crossing is None:
-            return
-        self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m, '
-                               f'heading {math.degrees(crossing.heading):+.1f} deg to the lane')
+        if crossing is not None:
+            self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m')
+        had_lane = self.avoid.lane_frame
+        self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry)
+        if self.avoid.lane_frame is not None and had_lane is None:
+            self.get_logger().info(f'{self.avoid.event}: island {self.avoid.island[0]:.2f} m')
 
     def on_island(self, msg: PointStamped):
         if self.avoid.state != ACTIVE or not self.tracker.ready:
             return
-        s, _, psi = self.avoid.section_pose(self.tracker.latest())
+        s, _, psi = self.avoid.lane_pose(self.tracker.latest())
         self.avoid.set_island_front(s + math.cos(psi) * msg.point.x - math.sin(psi) * msg.point.y,
                                     'lane tracker')
 
@@ -290,6 +312,7 @@ class StaticAvoidNode(Node):
             self.cmd_pub.publish(Twist())
             self.active_pub.publish(Bool(data=False))
             self.get_logger().info(f'static obstacle END: {self.avoid.event}')
+            self.clear_debug()
             return
         out = Twist()
         out.linear.x, out.angular.z = float(cmd[0]), float(cmd[1])
@@ -302,11 +325,17 @@ class StaticAvoidNode(Node):
         h.stamp = self.get_clock().now().to_msg()
         return h
 
+    def clear_debug(self):
+        """RViz keeps drawing the last message: empty the path and markers when the mission ends."""
+        self.path_pub.publish(Path(header=self._header()))
+        for pub in (self.cand_pub, self.cues_pub):
+            pub.publish(MarkerArray(markers=[Marker(action=Marker.DELETEALL)]))
+
     def publish_plan(self):
         plan = self.avoid.plan
         if plan is None:
             return
-        pose = self.avoid.section_pose(self.tracker.latest())
+        pose = self.avoid.lane_pose(self.tracker.latest())
         header = self._header()
         path = Path(header=header)
         for x, y in section_to_base(plan.path, pose):
@@ -350,10 +379,10 @@ class StaticAvoidNode(Node):
         cost = np.where(cm.cost >= LETHAL, 100, np.clip(cm.cost, 0, 99)).astype(np.int8)
         grid.data = cost.T.ravel().tolist()     # row-major, rows along d
         self.map_pub.publish(grid)
-        self.publish_cues((s, d, psi))
+        self.publish_cues(self.avoid.lane_pose(self.tracker.latest()))
 
     def publish_cues(self, pose):
-        """Entry line and island (section frame) drawn in base_link."""
+        """Entry line, lane lines and island (lane coordinates) drawn in base_link."""
         a, w = self.avoid, self.p.lane_width
         header = self._header()
         out = MarkerArray()
@@ -378,6 +407,14 @@ class StaticAvoidNode(Node):
         t.color = m.color
         t.text = f'island ({a.island_source})'
         out.markers.append(t)
+        for k, c in enumerate((-1.5, -0.5, 0.5, 1.5)):
+            ln = Marker(header=header, ns='lane_model', id=k, type=Marker.LINE_STRIP)
+            ln.pose.orientation.w = 1.0
+            ln.scale.x = 0.01
+            ln.color = ColorRGBA(r=0.1, g=0.9, b=0.9, a=0.8)
+            ends = np.array([(pose[0] - 0.5, c * w), (pose[0] + 2.5, c * w)])
+            ln.points = [Point(x=float(x), y=float(y), z=0.02) for x, y in section_to_base(ends, pose)]
+            out.markers.append(ln)
         if a.entry_s is not None:
             e = Marker(header=header, ns='entry_line', id=0, type=Marker.LINE_STRIP)
             e.pose.orientation.w = 1.0

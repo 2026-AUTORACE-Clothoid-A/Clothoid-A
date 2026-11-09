@@ -21,6 +21,8 @@ from typing import List, Optional, Tuple
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
+from clothoid_lidar.section_cues import CameraModel, ColourParams, LaneObservation, find_lane_lines
+
 LETHAL = 1000.0
 IDLE, ACTIVE = 'idle', 'active'
 
@@ -57,6 +59,8 @@ class AvoidParams:
     entry_max_back: float = 3.0       # m, an entry-line crossing this recent anchors the section
     island_s_min: float = 3.3         # fallback, from the activation point
     island_s_max: float = 5.0
+    island_tip: float = 0.25          # m, the painted island narrows to a point at both ends
+    island_align_until: float = 0.3   # m before the island front: closer, hand over even if not aligned
     island_handover: float = 1.0      # m, hand over to lane_main when the island front is this close
     # past the entry line, something in lane 2 from here on is the island's sign stand, not a LIMO:
     # lane_main takes the car into A / B there (1108 run 4 started on it)
@@ -101,12 +105,30 @@ class AvoidParams:
     w_lateral: float = 2.0            # per m of offset change
     w_short: float = 0.5              # per 1/m of transition length
     w_hysteresis: float = 4.0         # per m away from the last chosen end offset
-    # per m^2 away from the A/B lane centre; weak: lane_main chooses A/B at the island, this leans
-    w_target: float = 20.0
+    # per m^2 away from the A/B lane centre, once /direction_flag is known
+    w_target: float = 150.0
+    w_target_near: float = 400.0      # within target_near of the island: go to the A/B lane now
+    target_near: float = 2.0
     w_lane2: float = 3.0              # lane 2 end without a direction (the island ahead)
     # x share of path samples on the painted island; soft because its position is only estimated
     # and a hard limit can dead-lock the car in lane 2 when the fork sign comes late
     w_island: float = 200.0
+    # lane frame from the camera lines (entry line = s 0, lane lines + IMU = direction, offset)
+    lane_yaw_max_deg: float = 15.0    # largest turn of the lane frame against the section frame
+    lane_offset_max: float = 0.10     # m, largest sideways correction
+    lane_fit_window: float = 0.5      # m past the entry line whose frames set the lane frame
+    lane_fit_give_up: float = 1.0     # m past the entry line
+    lane_fit_frames: int = 5
+    lane_fit_lines: int = 2           # lines per frame
+    lane_fit_spread_deg: float = 3.0  # median absolute deviation of the direction
+    lane_fit_search_deg: float = 20.0
+    lane_track_search_deg: float = 10.0
+    lane_match_deg: float = 8.0       # slow update: a measurement this far off is not a lane line
+    lane_match_dist: float = 0.12     # m
+    lane_gain: float = 0.2
+    lane_step_deg: float = 0.5        # per update
+    # m per update; 0 = off: on the 1108 bags it drifted up to 9 cm and worsened the LIMO positions
+    lane_step_dist: float = 0.0
     # control
     lookahead: float = 0.45
     max_steer: float = 0.49           # rad, central angle
@@ -206,6 +228,18 @@ class SectionFrame:
         dx, dy = x - self.x0, y - self.y0
         return c * dx + s * dy, -s * dx + c * dy, wrap(yaw - self.yaw0)
 
+    def points_from(self, pts: np.ndarray) -> np.ndarray:
+        """(N, 2) points given in this frame -> the parent frame."""
+        c, s = math.cos(self.yaw0), math.sin(self.yaw0)
+        return np.column_stack((self.x0 + c * pts[:, 0] - s * pts[:, 1],
+                                self.y0 + s * pts[:, 0] + c * pts[:, 1]))
+
+    def points_to(self, pts: np.ndarray) -> np.ndarray:
+        """(N, 2) points given in the parent frame -> this frame."""
+        c, s = math.cos(self.yaw0), math.sin(self.yaw0)
+        dx, dy = pts[:, 0] - self.x0, pts[:, 1] - self.y0
+        return np.column_stack((c * dx + s * dy, -s * dx + c * dy))
+
 
 def base_to_section(points: np.ndarray, pose: Tuple[float, float, float]) -> np.ndarray:
     """base_link points (N, 2) -> section frame, car at pose (s, d, psi)."""
@@ -228,7 +262,9 @@ class Costmap:
 
     def __init__(self, p: AvoidParams):
         self.p = p
-        self.d_max = 1.5 * p.lane_width + 0.15
+        # the lanes may turn against this grid by up to lane_yaw_max_deg over the section
+        self.d_max = (1.5 * p.lane_width + 0.15
+                      + math.tan(math.radians(p.lane_yaw_max_deg)) * p.max_travel)
         self.ns = int(round((p.grid_s_max - p.grid_s_min) / p.resolution))
         self.nd = int(round(2 * self.d_max / p.resolution))
         self.count = np.zeros((self.ns, self.nd), np.int16)
@@ -295,6 +331,12 @@ class Costmap:
         out[ok] = self.cost[i[ok], j[ok]]
         return out
 
+    def occupied_at(self, pts: np.ndarray) -> np.ndarray:
+        i, j, ok = self.cells(pts)
+        out = np.zeros(len(pts), bool)
+        out[ok] = self.count[i[ok], j[ok]] >= self.p.occupied_count
+        return out
+
     def occupied_in(self, s0, s1, d0, d1) -> bool:
         p = self.p
         i0 = max(0, int((s0 - p.grid_s_min) / p.resolution))
@@ -344,7 +386,11 @@ def escape_distance(p: AvoidParams) -> float:
 def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Costmap,
                direction: Optional[int], last_end: Optional[float], p: AvoidParams,
                keep_candidates: bool = False,
-               island: Optional[Tuple[float, float]] = None) -> Plan:
+               island: Optional[Tuple[float, float]] = None,
+               lane_in_costmap: Optional[SectionFrame] = None,
+               forbid_island: bool = False) -> Plan:
+    """pose, island and the returned paths are in lane coordinates; lane_in_costmap is the lane frame
+    expressed in the costmap's section frame (None = the same frame)."""
     s0, d0, psi = pose
     island = island or (p.island_s_min, p.island_s_max)
     w = p.lane_width
@@ -368,7 +414,10 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     off = np.asarray(p.footprint_offsets)
     fs = s[..., None] + off * np.cos(theta)[..., None]
     fd = d[..., None] + off * np.sin(theta)[..., None]
-    c = costmap.lookup(np.column_stack((fs.ravel(), fd.ravel()))).reshape(fs.shape)
+    query = np.column_stack((fs.ravel(), fd.ravel()))
+    if lane_in_costmap is not None:
+        query = lane_in_costmap.points_from(query)
+    c = costmap.lookup(query).reshape(fs.shape)
     hit = (c >= LETHAL).any(axis=2) & (ds[None, :] > p.lethal_free_start)     # (P, S)
     near = ds[None, :] <= escape_distance(p)
     lethal = (hit & near).any(axis=1)              # cannot be swerved around: forbidden
@@ -388,6 +437,10 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     beyond_outer = np.maximum(np.abs(d) - w, 0.0).mean(axis=1)   # past lane 1 / 3 centre
     on_island = ((s >= island[0]) & (s <= island[1])
                  & (np.abs(d) < w / 2.0)).mean(axis=1)
+    # the car side must stay off it as well; only with a measured island position
+    tip = np.clip(np.minimum(s - island[0], island[1] - s) / p.island_tip, 0.0, 1.0)  # hexagon
+    island_hit = ((s >= island[0]) & (s <= island[1])
+                  & (np.abs(d) < tip * w / 2.0 + p.car_half_width)).any(axis=1)
 
     centres = lane_centres(p)
     off_centre = np.min((d[..., None] - centres) ** 2, axis=2).mean(axis=1)
@@ -398,13 +451,17 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
         cost += p.w_hysteresis * np.abs(E - last_end)
     tc = target_centre(direction, p)
     if tc is not None:
-        cost += p.w_target * (E - tc) ** 2
+        near_island = island[0] - s0 <= p.target_near
+        cost += (p.w_target_near if near_island else p.w_target) * (E - tc) ** 2
     else:
         lane2 = np.abs(E) < w / 2.0
         weight = p.w_lane2 * (4.0 if travelled >= p.fork_commit else 1.0)
         cost += weight * lane2
 
     bad = lethal | out_of_road
+    # the island is forbidden only while another way exists: it must never freeze the car
+    if forbid_island and tc is not None and not (bad | island_hit).all():
+        bad |= island_hit
     cost = np.where(bad, np.inf, cost)
     best = int(np.argmin(cost))
     feasible = bool(np.isfinite(cost[best]))
@@ -467,7 +524,14 @@ class StaticAvoid:
         self.blocked_scans = 0
         self.clear_since: Optional[float] = None
         self.armed = True
+        # finished at the fork: no new start until a new white line with a blocker right after it
+        self.locked = False
+        self.seen_entry: Optional[Tuple[float, float, float]] = None
+        self.lock_entry: Optional[Tuple[float, float, float]] = None
         self.frame: Optional[SectionFrame] = None
+        self.lane_frame: Optional[SectionFrame] = None    # None = the section frame; else from the camera
+        self.lane_source: Optional[SectionFrame] = None   # the fit it came from
+        self.lane_shift = 0.0                # m of slow sideways correction so far
         self.costmap: Optional[Costmap] = None
         self.plan: Optional[Plan] = None
         self.last_end: Optional[float] = None
@@ -501,7 +565,13 @@ class StaticAvoid:
         entry_pose: world pose where the base crossed the line (frame origin and lane direction)."""
         p = self.p
         blocked = self.blocked(limos, entry_back)
+        self.seen_entry = entry_pose
         if self.state == ACTIVE:
+            return False
+        retry = (self.locked and blocked and entry_pose is not None and entry_pose != self.lock_entry
+                 and entry_back is not None and 0.0 <= entry_back <= p.entry_max_back)
+        if self.locked and not retry:
+            self.blocked_scans = 0
             return False
         if not blocked:
             self.blocked_scans = 0
@@ -513,12 +583,14 @@ class StaticAvoid:
         self.clear_since = None
         reason = inhibit.reason(p)
         if reason or speed < p.min_speed or not self.armed or pose_world is None \
-                or self.past_island(pose_world):
+                or (not retry and self.past_island(pose_world)):
             self.blocked_scans = 0
             return False
         self.blocked_scans += 1
         if self.blocked_scans < p.activate_scans:
             return False
+        if retry:      # a retry from the mission start: nothing of the old section is valid
+            self.locked, self.frame = False, None
         self.activate(pose_world, entry_back, entry_pose)
         return True
 
@@ -538,6 +610,7 @@ class StaticAvoid:
                 return
         p = self.p
         self.costmap = Costmap(self.p)
+        self.lane_frame, self.lane_source, self.lane_shift = None, None, 0.0
         # a line still ahead (entry_back < 0) is handled by reanchor() when the base reaches it
         anchored = entry_back is not None and 0.0 <= entry_back <= p.entry_max_back
         if anchored and entry_pose is not None:
@@ -566,15 +639,17 @@ class StaticAvoid:
         roads are lane_main's, so nothing starts there (a position test, not a sequence latch)."""
         if self.frame is None:
             return False
-        s, d, _ = self.frame.to_section(*pose_world)
-        return (self.island[0] - self.p.island_handover <= s <= self.p.max_travel + 2.0
-                and abs(d) < 2.0 * self.p.lane_width)
+        s = self.lane_pose(pose_world)[0]
+        return self.island[0] - self.p.island_handover <= s <= self.p.max_travel + 2.0
 
-    def stop(self, why: str) -> None:
+    def stop(self, why: str, final: bool = False) -> None:
         """End. After an abort (another mission took over) a new start waits until our lane was
         clear for rearm_clear; after a hand-over nothing is left ahead, so it may start again at
-        once (a LIMO seen later in the new lane must not be ignored)."""
+        once (a LIMO seen later in the new lane must not be ignored). final = the car reached the
+        fork: the mission is done, locked until a retry (see on_limos)."""
         self.state = IDLE
+        if final:
+            self.locked, self.lock_entry = True, self.seen_entry
         self.armed = why.startswith('hand over')
         self.clear_since = None
         self.event = why
@@ -595,7 +670,67 @@ class StaticAvoid:
 
     # ---- while active -----------------------------------------------------------------------
     def section_pose(self, pose_world) -> Tuple[float, float, float]:
+        """Pose in the costmap's frame."""
         return self.frame.to_section(*pose_world)
+
+    def lane_pose(self, pose_world) -> Tuple[float, float, float]:
+        """Pose in lane coordinates: what the plans, lanes, island and hand-over use."""
+        return (self.lane_frame or self.frame).to_section(*pose_world)
+
+    def lane_in_costmap(self) -> Optional[SectionFrame]:
+        if self.lane_frame is None:
+            return None
+        lf = self.lane_frame
+        return SectionFrame(*self.frame.to_section(lf.x0, lf.y0, lf.yaw0))
+
+    def on_lane_fit(self, fit: SectionFrame) -> bool:
+        """A lane frame measured at an entry line. Used if that line is this section's and the turn is
+        believable. Stop lines before the corner and lines on the A / B roads fall outside."""
+        if self.state != ACTIVE or fit is self.lane_source:
+            return False
+        p = self.p
+        s, d, yaw = self.frame.to_section(fit.x0, fit.y0, fit.yaw0)
+        self.lane_source = fit                       # judged once
+        if not -1.0 <= s <= p.entry_late_max or abs(d) >= 1.5 * p.lane_width:
+            return False
+        if abs(yaw) > math.radians(p.lane_yaw_max_deg):
+            self.event = 'lane fit rejected: %.1f deg' % math.degrees(yaw)
+            return False
+        self.lane_frame, self.lane_shift = fit, 0.0
+        self.entry_s = 0.0
+        self.last_end = None
+        if self.island_source != 'lane tracker':
+            self.island = (p.island_from_entry_min, p.island_from_entry_max)
+            self.island_source = 'entry line'
+        self.event = 'lane fit %+.1f deg' % math.degrees(yaw)
+        return True
+
+    def update_lane(self, pose_world, obs: Optional[LaneObservation]) -> bool:
+        """Slow correction of a fitted lane frame from one frame's lines."""
+        if self.state != ACTIVE or self.lane_frame is None or obs is None:
+            return False
+        p = self.p
+        s, d, psi = self.lane_frame.to_section(*pose_world)
+        err = wrap(psi + obs.angle)
+        residual = line_residuals(d, obs, p)
+        if s < 0.0 or abs(err) > math.radians(p.lane_match_deg) or len(residual) < p.lane_fit_lines:
+            return False
+        step = math.radians(p.lane_step_deg)
+        turn = max(-step, min(step, p.lane_gain * err))
+        yaw_new = self.lane_frame.yaw0 + turn
+        if abs(wrap(yaw_new - self.frame.yaw0)) > math.radians(p.lane_yaw_max_deg):
+            turn, yaw_new = 0.0, self.lane_frame.yaw0
+        # about the car, so that the sideways position is only changed by the term below
+        cx, cy = pose_world[0], pose_world[1]
+        c, sn = math.cos(turn), math.sin(turn)
+        rx, ry = self.lane_frame.x0 - cx, self.lane_frame.y0 - cy
+        x0, y0 = cx + c * rx - sn * ry, cy + sn * rx + c * ry
+        r = float(np.median(residual))
+        move = max(-p.lane_step_dist, min(p.lane_step_dist, p.lane_gain * r))
+        shift = max(-p.lane_offset_max, min(p.lane_offset_max, self.lane_shift + move))
+        move, self.lane_shift = shift - self.lane_shift, shift
+        self.lane_frame = SectionFrame(x0 + move * math.sin(yaw_new), y0 - move * math.cos(yaw_new), yaw_new)
+        return True
 
     def on_scan(self, hits_base: np.ndarray, lidar_base: np.ndarray, pose_world,
                 pose_now_world, direction: Optional[int], keep_candidates: bool = False,
@@ -613,9 +748,10 @@ class StaticAvoid:
             c, s = math.cos(at_scan[2]), math.sin(at_scan[2])
             free = free_dirs_base @ np.array([[c, s], [-s, c]])
         self.costmap.update(hits, origin, free)
-        now = self.section_pose(pose_now_world)
+        now = self.lane_pose(pose_now_world)
         self.plan = plan_paths(now, now[0], self.costmap, self.direction, self.last_end,
-                               self.p, keep_candidates, self.island)
+                               self.p, keep_candidates, self.island, self.lane_in_costmap(),
+                               self.island_source == 'entry line')
         if self.plan.feasible:
             self.last_end = self.plan.end_offset
 
@@ -629,16 +765,20 @@ class StaticAvoid:
         if reason:
             self.stop('abort: ' + reason)
             return None
-        pose = self.section_pose(pose_now_world)
+        pose = self.lane_pose(pose_now_world)
+        if self.target_ready(pose):
+            self.stop('hand over in target lane %d, %.2f m before the island (%s)'
+                      % (lane_of(pose[1], p), self.island[0] - pose[0], self.island_source), True)
+            return None
         if self.island_ready(pose):
             self.stop('hand over %.2f m before the island (%s), lane %d'
-                      % (self.island[0] - pose[0], self.island_source, lane_of(pose[1], p)))
+                      % (self.island[0] - pose[0], self.island_source, lane_of(pose[1], p)), True)
             return None
         if self.release_ready(pose):
             self.stop('hand over in lane %d' % lane_of(pose[1], p))
             return None
         if pose[0] > p.max_travel:
-            self.stop('hand over: max travel')
+            self.stop('hand over: max travel', True)
             return None
         if self.plan is None:
             return 0.0, 0.0
@@ -660,22 +800,51 @@ class StaticAvoid:
         self.island_source = source
 
     def road_clear(self, s0: float, s1: float) -> bool:
-        """No occupied cell across the whole road (all three lanes) between s0 and s1."""
-        half = 1.5 * self.p.lane_width
-        return not self.costmap.occupied_in(s0, s1, -half, half)
+        """No occupied cell across the whole road (all three lanes) between s0 and s1, lane
+        coordinates."""
+        p = self.p
+        if s1 <= s0:
+            return True
+        half = 1.5 * p.lane_width
+        ss, dd = np.meshgrid(np.arange(s0, s1, p.resolution), np.arange(-half, half, p.resolution),
+                             indexing='ij')
+        pts = np.column_stack((ss.ravel(), dd.ravel()))
+        rel = self.lane_in_costmap()
+        return not self.costmap.occupied_at(pts if rel is None else rel.points_from(pts)).any()
+
+    def aligned(self, d: float, psi: float, centre: float) -> bool:
+        return (abs(d - centre) <= self.p.release_tol
+                and abs(psi) <= math.radians(self.p.release_heading_deg))
+
+    def target_ready(self, pose) -> bool:
+        """The direction is known: centred and straight in the A / B lane, the island within
+        release_clear (so the whole way to it has been seen) and nothing left on it."""
+        tc = target_centre(self.direction, self.p)
+        if tc is None or self.plan is None:
+            return False
+        s, d, psi = pose
+        if not self.aligned(d, psi, tc):
+            return False
+        if self.island[0] - s > self.p.release_clear:
+            return False
+        return self.road_clear(s + 0.2, self.island[0] - self.p.island_object_margin)
 
     def island_ready(self, pose) -> bool:
-        """Island front within island_handover and no obstacle left in any lane up to it."""
-        s = pose[0]
+        """Direction unknown: island front within island_handover, the car centred and straight in
+        a lane (not waited for inside island_align_until), and no obstacle left in any lane up to it.
+        With a direction, target_ready decides."""
+        s, d, psi = pose
         gap = self.island[0] - s
-        if gap > self.p.island_handover or gap < -0.5:
+        if self.direction in (0, 1) or gap > self.p.island_handover or gap < -0.5:
+            return False
+        if gap > self.p.island_align_until and not self.aligned(d, psi, self.release_target(d)):
             return False
         return self.road_clear(s + 0.2, self.island[0])
 
     def release_ready(self, pose) -> bool:
         p = self.p
         s, d, psi = pose
-        if s < p.min_travel:
+        if s < p.min_travel or self.direction in (0, 1):
             return False
         tc = self.release_target(d)
         if abs(d - tc) > p.release_tol:
@@ -687,4 +856,82 @@ class StaticAvoid:
     def lane(self, pose_world) -> Optional[int]:
         if self.state != ACTIVE:
             return None
-        return lane_of(self.section_pose(pose_world)[1], self.p)
+        return lane_of(self.lane_pose(pose_world)[1], self.p)
+
+
+def line_residuals(d: float, obs: LaneObservation, p: AvoidParams) -> List[float]:
+    """For each seen line near an expected one (+-w/2 dashes and island edge, +-1.5 w yellow): expected
+    minus measured lateral position in lane coordinates, car at lateral d."""
+    expected = p.lane_width * np.array([-1.5, -0.5, 0.5, 1.5])
+    out = []
+    for line in obs.lines:
+        m = d + line.y0 * math.cos(obs.angle)
+        r = expected - m
+        k = int(np.argmin(np.abs(r)))
+        if abs(r[k]) <= p.lane_match_dist:
+            out.append(float(r[k]))
+    return out
+
+
+class LaneFitter:
+    """The H at the section entry: the white entry line gives s = 0, the lane lines seen just after it
+    (+ IMU yaw) the lane direction and sideways position. Lines before the entry line are the corner
+    and are not used; nor is the slant of the entry line (it is not the car's heading, 1108 bags)."""
+
+    def __init__(self, p: AvoidParams, cam: CameraModel, colours: ColourParams):
+        self.p, self.cam, self.colours = p, cam, colours
+        self.crossing: Optional[float] = None    # odometer of the line being measured
+        self.closed: Optional[float] = None      # odometer of the last line finished
+        self.samples: List[Tuple[Tuple[float, float, float], LaneObservation]] = []
+        self.fit: Optional[SectionFrame] = None
+
+    def on_frame(self, bgr: np.ndarray, avoid: StaticAvoid, tracker: PoseTracker, entry) -> None:
+        p = self.p
+        pose = tracker.latest()
+        c = entry.recent(tracker.distance, p.lane_fit_give_up, 0.0)
+        if c is not None and c.odometer != self.closed:
+            entry_pose = tracker.at_distance(c.odometer)
+            if entry_pose is not None:
+                if c.odometer != self.crossing:
+                    self.crossing, self.samples = c.odometer, []
+                obs = find_lane_lines(bgr, self.cam, self.colours, wrap(entry_pose[2] - pose[2]),
+                                      math.radians(p.lane_fit_search_deg))
+                if obs is not None and len(obs.lines) >= p.lane_fit_lines:
+                    self.samples.append((pose, obs))
+                self._try_fit(entry_pose, tracker.distance - c.odometer)
+        if avoid.state == ACTIVE:
+            if self.fit is not None:
+                avoid.on_lane_fit(self.fit)
+            if avoid.lane_frame is not None:
+                obs = find_lane_lines(bgr, self.cam, self.colours, wrap(avoid.lane_frame.yaw0 - pose[2]),
+                                      math.radians(p.lane_track_search_deg))
+                avoid.update_lane(pose, obs)
+
+    def _try_fit(self, entry_pose, past: float) -> None:
+        p = self.p
+        if past < p.lane_fit_window:
+            return
+        fit = self._fit(entry_pose)
+        if fit is not None or past >= p.lane_fit_give_up:
+            self.closed, self.samples = self.crossing, []
+        if fit is not None:
+            self.fit = fit
+
+    def _fit(self, entry_pose) -> Optional[SectionFrame]:
+        p = self.p
+        if len(self.samples) < p.lane_fit_frames:
+            return None
+        base = entry_pose[2]
+        turns = np.array([wrap(q[2] + o.angle - base) for q, o in self.samples])
+        turn = float(np.median(turns))
+        if float(np.median(np.abs(turns - turn))) > math.radians(p.lane_fit_spread_deg):
+            return None
+        yaw = base + turn
+        frame = SectionFrame(entry_pose[0], entry_pose[1], yaw)
+        residual = []
+        for q, o in self.samples:
+            residual += line_residuals(frame.to_section(*q)[1], o, p)
+        r = float(np.median(residual)) if residual else 0.0
+        r = max(-p.lane_offset_max, min(p.lane_offset_max, r))
+        # the true lane 2 centre is -r off the frame's axis (left positive)
+        return SectionFrame(entry_pose[0] + r * math.sin(yaw), entry_pose[1] - r * math.cos(yaw), yaw)
