@@ -11,6 +11,15 @@
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>clothoid_interfaces</depend>
+  <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <!-- light / pedestrian line stop: FinishCore (clothoid_finish) with the parking Tracker -->
+  <exec_depend>clothoid_finish</exec_depend>
+  <exec_depend>clothoid_parking</exec_depend>
+  <exec_depend>clothoid_lane</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

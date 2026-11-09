@@ -15,6 +15,7 @@
   <depend>visualization_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>clothoid_common</depend>
+  <depend>clothoid_interfaces</depend>
   <!-- bag.launch.py also needs clothoid_bringup at run time; not declared because bringup depends on this package -->
   <exec_depend>clothoid_lane</exec_depend>
   <exec_depend>image_transport</exec_depend>

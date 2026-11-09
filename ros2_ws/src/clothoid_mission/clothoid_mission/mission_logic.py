@@ -10,6 +10,11 @@ Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking
   * pedestrian sign  -> arm; stop at the stop line, wait `pedestrian_wait_sec`, then go
   * traffic light    -> arm on red (and yellow if `stop_on_yellow`); stop at the stop line,
                         go when green is seen
+    Where it stops (`use_stop_line`): while armed the node runs clothoid_finish's FinishCore with
+    the cross line in white (line_stop.py); its speed is the speed limit for lane_main (which keeps
+    steering) and the car is held when it reports `arrived` (STOP).
+    `use_stop_line` false: stop the moment the 2025 stripe flag (/stopline_detected) is true; that
+    flag is commented out in clothoid_lane since 2026-11-09, so false means no stop at all.
   * left / right sign (fork) -> direction value for lane_main
   * parking sign     -> arm; parking flag (latched) at the next single stop line right in front
                         (`parking_line`: /stopline_near, not the stripe detector, which needs a
@@ -35,6 +40,8 @@ class MissionParams:
     stop_on_yellow: bool = True        # the rules do not say what yellow means
     arm_timeout_sec: float = 8.0       # a sign/light seen this long ago without a stop line expires
     cooldown_sec: float = 15.0         # ignore the same trigger after a stop
+    use_stop_line: bool = True         # stop with FinishCore (see the docstring)
+    approach_speed: float = 0.2        # m/s under lane_main while armed, before FinishCore drives
     # fork (A/B): lane side to follow when the sign points left / right
     fork_left_direction: int = 0       # lane_main: 0 left lane, 1 right lane, 2 both
     fork_right_direction: int = 1
@@ -47,6 +54,8 @@ class Inputs:
     now: float
     seen: Set[str] = field(default_factory=set)   # class names visible right now
     stopline: bool = False
+    line_phase: Optional[str] = None    # line stop phase (search/commit/arrived/abort)
+    line_speed: Optional[float] = None  # speed limit from the line stop, if any
     parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
 
@@ -58,6 +67,7 @@ class Outputs:
     speed_limit: Optional[float] = None
     direction: Optional[int] = None    # None until a fork sign was seen
     parking_flag: bool = False
+    stop_arm: bool = False             # run the line stop (FinishCore)
 
 
 class MissionLogic:
@@ -89,12 +99,19 @@ class MissionLogic:
 
         self._update_stop(inputs)
 
+        limits = []
+        if now < self.slow_until:
+            limits.append(p.slow_speed)
+        arm = p.use_stop_line and self.state == DRIVE and self._armed()
+        if arm:
+            limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
         return Outputs(
             state=self.state,
             stop=self.state != DRIVE,
-            speed_limit=p.slow_speed if now < self.slow_until else None,
+            speed_limit=min(limits) if limits else None,
             direction=self.direction,
-            parking_flag=self.parking_flag)
+            parking_flag=self.parking_flag,
+            stop_arm=arm)
 
     def _update_stop(self, inputs: Inputs) -> None:
         now, seen, p = inputs.now, inputs.seen, self.p
@@ -116,15 +133,22 @@ class MissionLogic:
             self.light_armed_at = now
         if 'traffic_light_green' in seen:
             self.light_armed_at = None   # green on approach: no stop
-        self.pedestrian_armed_at = self._expire(self.pedestrian_armed_at, now)
-        self.light_armed_at = self._expire(self.light_armed_at, now)
+        if inputs.line_phase not in ('commit', 'arrived'):   # a confirmed line keeps the arm
+            self.pedestrian_armed_at = self._expire(self.pedestrian_armed_at, now)
+            self.light_armed_at = self._expire(self.light_armed_at, now)
 
-        if not inputs.stopline:
+        if p.use_stop_line:
+            if inputs.line_phase != 'arrived' or not self._armed():
+                return
+        elif not inputs.stopline:
             return
         if self.light_armed_at is not None:
             self._enter(STOPPED_LIGHT, now)
         elif self.pedestrian_armed_at is not None:
             self._enter(STOPPED_PEDESTRIAN, now)
+
+    def _armed(self) -> bool:
+        return self.pedestrian_armed_at is not None or self.light_armed_at is not None
 
     def _expire(self, armed_at: Optional[float], now: float) -> Optional[float]:
         if armed_at is not None and now - armed_at > self.p.arm_timeout_sec:

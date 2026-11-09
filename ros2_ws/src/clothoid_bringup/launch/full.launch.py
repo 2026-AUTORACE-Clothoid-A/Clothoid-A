@@ -77,7 +77,9 @@ def generate_launch_description():
         # after /parking_done: left yellow line to the end line (needs the camera)
         include('clothoid_finish', 'finish.launch.py',
                 {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_finish')),
-        include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
+        # mission also runs the light / pedestrian line stop (FinishCore, camera only while armed)
+        include('clothoid_mission', 'mission.launch.py',
+                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_mission')),
         # what rviz/decision.rviz shows, only with viz:=true
         include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},
                 enabled('viz')),

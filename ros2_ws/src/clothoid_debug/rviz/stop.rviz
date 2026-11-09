@@ -1,0 +1,60 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: odom
+    Frame Rate: 30
+    Background Color: 30; 30; 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (0.1 m, base_link)
+      Enabled: true
+      Reference Frame: base_link
+      Cell Size: 0.1
+      Plane Cell Count: 20
+      Color: 70; 70; 70
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Names: false
+      Show Arrows: false
+      Show Axes: true
+      Marker Scale: 0.2
+    - Class: rviz_default_plugins/MarkerArray
+      Name: "Stop: line (white), stop point (red), front bumper (blue)"
+      Enabled: true
+      Topic:
+        Value: /viz/stop_markers
+    - Class: rviz_default_plugins/Image
+      Name: "Camera + YOLO + mission"
+      Enabled: true
+      Topic:
+        Value: /viz/stop_overlay
+        Reliability Policy: Reliable
+      Normalize Range: true
+    - Class: rviz_default_plugins/Image
+      Name: "Line stop BEV (white / yellow, green = left line, magenta = stop line)"
+      Enabled: true
+      Topic:
+        Value: /mission/line_debug_image
+        Reliability Policy: Reliable
+      Normalize Range: true
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/ThirdPersonFollower
+      Name: Current View
+      Target Frame: base_link
+      Distance: 1.6
+      Pitch: 0.75
+      Yaw: 3.14159
+      Focal Point:
+        X: 0.5
+        Y: 0
+        Z: 0
+Window Geometry:
+  Width: 1600
+  Height: 950
