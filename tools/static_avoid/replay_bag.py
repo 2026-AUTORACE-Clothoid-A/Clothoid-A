@@ -22,9 +22,9 @@ sys.path.insert(0, os.path.join(HERE, '..', '..', 'ros2_ws', 'src', 'clothoid_li
 from clothoid_lidar.cone_sorter import ConeMission, ConeSorter, SorterParams  # noqa: E402
 from clothoid_lidar.obstacle_extractor import (ExtractorParams, extract_obstacles,  # noqa: E402
                                                transform_points)
-from clothoid_lidar.section_cues import (CameraModel, EntryLineTracker, WhiteParams,  # noqa: E402
-                                         find_entry_line)
-from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit,  # noqa: E402
+from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker,  # noqa: E402
+                                         WhiteParams, find_entry_line)
+from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,  # noqa: E402
                                          PoseTracker, StaticAvoid, base_to_section, lane_of,
                                          yaw_from_quaternion)
 
@@ -64,6 +64,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
     p = AvoidParams(lane_width=lane_width)
     avoid = StaticAvoid(p)
     tracker = PoseTracker()
+    fitter = LaneFitter(p, cam, ColourParams())
     cone = ConeMission(ConeSorter(SorterParams()))
     rec = dict(events=[], plans=[], trail=[], limos=[], cost_max=None, p=p, avoid=avoid,
                crossings=[])
@@ -81,9 +82,14 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
             frames += 1
             if (frames - 1) % 3 or not tracker.ready or not (t_from - 8.0 <= s <= t_to):
                 continue
-            c = entry.update(s, tracker.distance, find_entry_line(image_bgr(msg), cam, white))
+            bgr = image_bgr(msg)
+            c = entry.update(s, tracker.distance, find_entry_line(bgr, cam, white))
             if c is not None:
                 rec['crossings'].append((s, c))
+            had = avoid.lane_frame
+            fitter.on_frame(bgr, avoid, tracker, entry)
+            if avoid.lane_frame is not None and had is None:
+                rec['events'].append((s, avoid.event))
             continue
         if topic == '/odom':
             tracker.odom(s, msg.twist.twist.linear.x)
@@ -94,8 +100,8 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
                     if avoid.island_source == 'entry line':
                         rec['events'].append((s, 'entry line crossed after the start'))
             if avoid.frame is not None and tracker.ready:
-                sec = avoid.section_pose(tracker.latest())
-                rec['trail'].append((s, sec[0], sec[1], avoid.state == ACTIVE))
+                rec['trail'].append((s, *avoid.section_pose(tracker.latest())[:2],
+                                     avoid.state == ACTIVE))
             continue
         if s < t_from or s > t_to or not tracker.ready:
             continue
@@ -120,17 +126,20 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
         free = np.column_stack((np.cos(ang[~ok]), np.sin(ang[~ok])))
         avoid.on_scan(hits, np.array([LIDAR_X, 0.0]), pose, tracker.latest(), direction,
                       keep_candidates=True, free_dirs_base=free)
-        sec = avoid.section_pose(tracker.latest())
+        sec = avoid.lane_pose(tracker.latest())
         if len(limos):
             rec['limos'].extend(base_to_section(limos, avoid.section_pose(pose)).tolist())
         cm = avoid.costmap.cost
         rec['cost_max'] = cm.copy() if rec['cost_max'] is None or rec['cost_max'].shape != cm.shape \
             else np.maximum(rec['cost_max'], cm)
         rec['plans'].append(dict(t=s, pose=sec, plan=avoid.plan, cost=cm.copy(),
-                                 dmax=avoid.costmap.d_max, lane=avoid.lane(tracker.latest()),
-                                 limos=base_to_section(limos, sec) if len(limos) else limos))
+                                 lane_rel=avoid.lane_in_costmap(),
+                                 lane=avoid.lane(tracker.latest()),
+                                 limos=base_to_section(limos, avoid.section_pose(pose))
+                                 if len(limos) else limos))
         if avoid.control(tracker.latest(), inh) is None:
             rec['events'].append((s, 'END ' + avoid.event))
+            sec = avoid.lane_pose(tracker.latest())
             rec['handover'] = dict(t=s, s=sec[0], d=sec[1], island=avoid.island,
                                    source=avoid.island_source)
             on_total += s - on_since
@@ -140,7 +149,53 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
     rec['on_total'] = on_total
     rec['island'], rec['island_source'], rec['entry_s'] = (avoid.island, avoid.island_source,
                                                            avoid.entry_s)
+    to_final_lane(rec, avoid)
     return rec
+
+
+def to_final_lane(rec, avoid):
+    """Everything in the final lane coordinates, costmaps resampled onto them: a plan made before
+    the lane fit is drawn where it really was on the road."""
+    p, final = rec['p'], avoid.lane_in_costmap()
+    rec['lane_turn'] = None if final is None else math.degrees(final.yaw0)
+
+    def sec2lane(q):
+        return q if final is None or not len(q) else final.points_to(q)
+
+    def lane2final(q, rel):
+        return sec2lane(q if rel is None else rel.points_from(q))
+    dmax = 1.5 * p.lane_width + 0.15
+    ns = int(round((p.grid_s_max - p.grid_s_min) / p.resolution))
+    nd = int(round(2 * dmax / p.resolution))
+    ss, dd = np.meshgrid(p.grid_s_min + (np.arange(ns) + 0.5) * p.resolution,
+                         -dmax + (np.arange(nd) + 0.5) * p.resolution, indexing='ij')
+    grid = np.column_stack((ss.ravel(), dd.ravel()))
+    if final is not None:
+        grid = final.points_from(grid)
+    full = avoid.costmap
+
+    def resample(cost):
+        keep, full.cost = full.cost, cost
+        out = full.lookup(grid).reshape(ns, nd)
+        full.cost = keep
+        return out
+    if rec['cost_max'] is not None:
+        rec['cost_max'] = resample(rec['cost_max'])
+    for pl in rec['plans']:
+        rel = pl['lane_rel']
+        pl['dmax'], pl['cost'] = dmax, resample(pl['cost'])
+        s, d, psi = pl['pose']
+        q = lane2final(np.array([[s, d]]), rel)[0]
+        pl['pose'] = (float(q[0]), float(q[1]), psi)
+        pl['plan'].path = lane2final(pl['plan'].path, rel)
+        pl['plan'].candidates = [(lane2final(c, rel), v) for c, v in pl['plan'].candidates]
+        if len(pl['limos']):
+            pl['limos'] = sec2lane(pl['limos'])
+    if rec['limos']:
+        rec['limos'] = sec2lane(np.array(rec['limos'])).tolist()
+    if rec['trail']:
+        tr = sec2lane(np.array([(s, d) for _, s, d, _ in rec['trail']]))
+        rec['trail'] = [(a[0], float(q[0]), float(q[1]), a[3]) for a, q in zip(rec['trail'], tr)]
 
 
 def compare(rec, ahead):
@@ -173,6 +228,8 @@ def main():
                     help='do not stop on the cone-course flag (the 11-05 obstacles were cones)')
     ap.add_argument('--lane-width', type=float, default=0.50)
     ap.add_argument('--plot', default=None)
+    ap.add_argument('--truth', default='', help='tape-measured objects to draw, lane:distance from '
+                    'the entry line to the rear [m], c prefix = cone, e.g. 2:3.00,3:2.50,c1:1.80')
     ap.add_argument('--snaps', type=int, default=6)
     a = ap.parse_args()
 
@@ -198,6 +255,8 @@ def main():
         h = rec['handover']
         print(f'  hand-over at s {h["s"]:.2f} m, {h["island"][0] - h["s"]:.2f} m before the island '
               f'({h["source"]}), lane {lane_of(h["d"], rec["p"])}')
+    print('  lane fit: ' + ('none' if rec['lane_turn'] is None else f'{rec["lane_turn"]:+.1f} deg '
+                            'against the section frame'))
     print(f'  active {rec["on_total"]:.1f} s, {len(rec["plans"])} plans, '
           f'{sum(not x["plan"].feasible for x in rec["plans"])} blocked')
     for ahead in (0.5, 1.0):
@@ -205,6 +264,7 @@ def main():
         if len(e):
             print(f'  planned vs driven, {ahead:.1f} m ahead: median {100 * np.median(e):.0f} cm, '
                   f'p90 {100 * np.percentile(e, 90):.0f} cm (n {len(e)})')
+    rec['truth'] = [x.split(':') for x in a.truth.split(',') if x]
     if a.plot and rec['plans']:
         plot(a.plot, rec, a.bag, direction, a.snaps)
 
@@ -232,7 +292,21 @@ def draw_island(ax, rec, p):
     ax.add_patch(Polygon(hexagon(p.island_s_min, p.island_s_max), closed=True, fill=False,
                          ec='purple', ls='--', lw=1.0, label='island guess without the line'))
     if rec.get('handover'):
-        ax.axhline(rec['handover']['s'], color='tab:green', lw=1.2, ls=':')
+        h = rec['handover']
+        ax.axhline(h['s'], color='tab:green', lw=1.2, ls=':')
+        ax.plot(-h['d'], h['s'], '*', color='tab:green', ms=13, mec='k', label='hand-over (car)')
+    if rec['entry_s'] is not None:
+        from matplotlib.patches import Circle, Rectangle
+        for k, (lane, dist) in enumerate(rec.get('truth', [])):
+            cone = lane.startswith('c')
+            d, s0 = p.lane_width * (2 - int(lane[-1])), rec['entry_s'] + float(dist)
+            if cone:
+                first = k == 0 or not rec['truth'][k - 1][0].startswith('c')
+                ax.add_patch(Circle((-d, s0 + 0.04), 0.04, fill=False, ec='blue', lw=1.8,
+                                    label='cone (tape)' if first else None))
+            else:
+                ax.add_patch(Rectangle((-d - 0.11, s0), 0.22, 0.32, fill=False, ec='blue', lw=1.8,
+                                       label='LIMO (tape)' if k == 0 else None))
 
 
 def cost_rgba(cost):
