@@ -17,6 +17,7 @@ The camera is subscribed only while armed, as in finish.
 """
 import json
 import math
+import inspect
 
 import cv2
 import numpy as np
@@ -35,7 +36,7 @@ from std_msgs.msg import Bool, Float32, Int32, String
 
 from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
-    Inputs, MissionLogic, MissionParams, classes_seen)
+    Inputs, MissionLogic, MissionParams, DetectionGate, classes_seen)
 
 # FinishCore phase -> what mission_logic expects
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
@@ -60,6 +61,10 @@ class MissionNode(Node):
         self.declare_parameter('debug', False)
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=
         self.declare_parameter('white_v_min', 150)
+        for name, value in [('line_band', 0.22), ('line_min_run', 0.7),
+                            ('line_min_thickness', 0.008), ('line_max_thickness', 0.12),
+                            ('line_max_frame_gap', 0.25)]:
+            self.declare_parameter(name, value)
         # warp and camera pose: clothoid_lane camera_limo*.yaml (as finish)
         for name, default in (('warp_x_h', 60), ('warp_x_l', 327), ('warp_y_h', 91), ('warp_y_l', 2)):
             self.declare_parameter(name, default)
@@ -80,6 +85,11 @@ class MissionNode(Node):
         self.declare_parameter('light_max_offset_height_ratio', 3.5)
         self.declare_parameter('sign_max_offset_height_ratio', 5.0)
         self.declare_parameter('fork_max_offset_height_ratio', 10.0)
+        for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
+                            ('detection_max_age', 0.5), ('detection_confidence', 0.6),
+                            ('sign_min_height', 14), ('light_min_height', 8),
+                            ('detection_edge_margin', 2)]:
+            self.declare_parameter(name, value)
 
         d = MissionParams()
         self.declare_parameter('slow_speed', d.slow_speed)
@@ -95,6 +105,11 @@ class MissionNode(Node):
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
+        self.detection_gate = DetectionGate(
+            hits=get('detection_confirm_hits'), window=get('detection_window'),
+            max_age=get('detection_max_age'), confidence=get('detection_confidence'),
+            sign_height=get('sign_min_height'), light_height=get('light_min_height'),
+            edge_margin=get('detection_edge_margin'))
         self.logic = MissionLogic(MissionParams(
             slow_speed=get('slow_speed'), slow_hold_sec=get('slow_hold_sec'),
             pedestrian_wait_sec=get('pedestrian_wait_sec'), stop_on_yellow=get('stop_on_yellow'),
@@ -128,7 +143,7 @@ class MissionNode(Node):
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
-        self.finish_params = FinishParams(lost_hold_sec=1e9)
+        self.finish_params = FinishParams(lost_hold_sec=1e9, band=get('line_band'))
         self.warp = LaneParams(x_h=get('warp_x_h'), x_l=get('warp_x_l'), y_h=get('warp_y_h'),
                                y_l=get('warp_y_l'))
         self.cam = CameraModel(height=get('camera_height'), pitch=get('camera_pitch'),
@@ -148,17 +163,24 @@ class MissionNode(Node):
 
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
         self.get_logger().info('mission started')
+        self.get_logger().info(
+            f'mission implementation: {inspect.getfile(MissionNode)}; '
+            f'use_stop_line={get("use_stop_line")}; confirmation='
+            f'{get("detection_confirm_hits")}/{get("detection_window")}')
 
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_detections(self, msg: DetectionArray):
-        self.seen = classes_seen(
+        accepted = classes_seen(
             msg.detections, camera_center_x=self.cam.cx,
             light_max_offset_height_ratio=self.get_parameter(
                 'light_max_offset_height_ratio').value,
             sign_max_offset_height_ratio=self.get_parameter('sign_max_offset_height_ratio').value,
             fork_max_offset_height_ratio=self.get_parameter('fork_max_offset_height_ratio').value)
+        self.seen = self.detection_gate.update(
+            self.now_sec(), msg.detections, accepted,
+            width=self.warp.width, height=self.warp.height)
         self.seen_time = self.now_sec()
 
     def on_stopline(self, msg: Bool):
@@ -174,7 +196,11 @@ class MissionNode(Node):
     # ---- line stop (FinishCore) ------------------------------------------------------------------
     def new_core(self) -> LineStopCore:
         get = lambda n: self.get_parameter(n).value  # noqa: E731
-        core = LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'))
+        core = LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'),
+                            get('line_min_run'))
+        core.min_thickness = get('line_min_thickness')
+        core.max_thickness = get('line_max_thickness')
+        core.max_frame_gap = get('line_max_frame_gap')
         core.debug = self.debug_pub is not None
         return core
 
@@ -299,6 +325,7 @@ class MissionNode(Node):
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
         self.mission_state_pub.publish(String(data=json.dumps({
             'state': out.state, 'armed': armed,
+            'seen': sorted(seen),
             'line_phase': None if core is None else LINE_PHASE[core.phase],
             'remaining': None if left is None else round(left, 4),
             'line': None if core is None or core.cross_x is None else round(core.cross_x, 4),

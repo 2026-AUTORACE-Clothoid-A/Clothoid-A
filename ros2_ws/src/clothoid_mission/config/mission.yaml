@@ -14,6 +14,20 @@ mission:
     sign_max_offset_height_ratio: 5.0  # pedestrian, slow, bump, parking; initial track setting
     # Fork signs can enter at the image edge from an outer lane (recorded up to 9.4).
     fork_max_offset_height_ratio: 10.0  # sign_left / sign_right; initial track setting
+    # Confirm on distinct YOLO frames; timer ticks never count as new evidence.
+    detection_confirm_hits: 3
+    detection_window: 5
+    detection_max_age: 0.5
+    detection_confidence: 0.6
+    sign_min_height: 14
+    light_min_height: 8
+    detection_edge_margin: 2
+    # Stop-line corridor and physical thickness, in metres on the ground.
+    line_band: 0.22
+    line_min_run: 0.7
+    line_min_thickness: 0.008
+    line_max_thickness: 0.12
+    line_max_frame_gap: 0.25
     slow_speed: 0.2             # rules: 0.2 m/s or less
     slow_hold_sec: 4.0          # bump length not fixed in the rules yet
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s

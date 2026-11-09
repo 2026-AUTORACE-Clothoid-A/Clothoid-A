@@ -109,3 +109,22 @@ def test_letters_before_the_line_are_not_the_line():
     core, x = run(letters=True)
     assert core.phase == Phase.STOP
     assert -0.01 <= STOP_X - (x + 0.161) <= 0.04      # at the white line, not 20+ cm short
+
+
+def test_committed_target_cannot_jump_to_a_nearer_marking():
+    core = LineStopCore(Bev(LaneParams(), CameraModel()))
+    core.start(0.)
+    for t in (0., .05, .1):
+        core._sighting(t, 1.)
+    assert core.phase == Phase.COMMIT
+    target = core.target
+    core._sighting(.15, .7)
+    assert core.target == target
+
+
+def test_stale_line_sightings_do_not_form_a_confirmation():
+    core = LineStopCore(Bev(LaneParams(), CameraModel()))
+    core.start(0.)
+    for t in (0., .5, 1.):
+        core._sighting(t, 1.)
+    assert core.phase == Phase.FOLLOW

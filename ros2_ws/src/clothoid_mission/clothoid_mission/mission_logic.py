@@ -24,10 +24,48 @@ Driving nodes keep working underneath: `stop` only means "publish zero on the st
 """
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Set
+from collections import deque
 
 DRIVE = 'drive'
 STOPPED_PEDESTRIAN = 'stopped_pedestrian'
 STOPPED_LIGHT = 'stopped_light'
+
+
+class DetectionGate:
+    """Confirm spatially consistent boxes on distinct detector frames, not timer ticks."""
+    def __init__(self, hits=3, window=5, max_age=0.5, confidence=0.6,
+                 sign_height=14, light_height=8, edge_margin=2):
+        self.hits, self.window, self.max_age = hits, window, max_age
+        self.confidence, self.sign_height = confidence, sign_height
+        self.light_height, self.edge_margin = light_height, edge_margin
+        self.history = deque(maxlen=window)
+
+    @staticmethod
+    def matches(a, b):
+        # Allow detector jitter and the motion of a sign during corner entry.
+        aw, ah = a.x_max-a.x_min, a.y_max-a.y_min
+        bw, bh = b.x_max-b.x_min, b.y_max-b.y_min
+        return (a.class_name == b.class_name and
+                abs((a.x_min+a.x_max-b.x_min-b.x_max)/2) <= max(aw, bw) and
+                abs((a.y_min+a.y_max-b.y_min-b.y_max)/2) <= max(ah, bh) and
+                0.5 <= ah / bh <= 2.0)
+
+    def update(self, now, detections, accepted, width=640, height=480):
+        if self.history and now < self.history[-1][0]:
+            self.history.clear()
+        boxes = []
+        for d in detections:
+            minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
+            if (d.class_name in accepted and d.confidence >= self.confidence and
+                    d.y_max-d.y_min >= minimum and d.x_max > d.x_min and
+                    d.x_min >= self.edge_margin and d.y_min >= self.edge_margin and
+                    d.x_max <= width-self.edge_margin and d.y_max <= height-self.edge_margin):
+                boxes.append(d)
+        self.history.append((now, boxes))
+        return {d.class_name for d in boxes if sum(
+            any(self.matches(d, old) for old in frame)
+            for stamp, frame in self.history if 0 <= now-stamp <= self.max_age
+        ) >= self.hits}
 
 
 @dataclass
