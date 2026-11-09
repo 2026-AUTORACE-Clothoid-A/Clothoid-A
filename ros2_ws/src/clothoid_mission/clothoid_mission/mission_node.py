@@ -28,6 +28,8 @@ class MissionNode(Node):
         self.declare_parameter('parking_topic', '/parking_flag')
         # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
         self.declare_parameter('parking_sign_topic', '/parking_sign')
+        # one stop line right in front (clothoid_lane stopline node): where parking starts
+        self.declare_parameter('parking_line_topic', '/stopline_near')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line older than this are dropped
@@ -57,6 +59,7 @@ class MissionNode(Node):
         self.stopline, self.stopline_time = False, None
         self.parking_done = False
         self.sign_time = None            # last /parking_sign true
+        self.line, self.line_time = False, None
         self.parking_log = (False, False)
         self.state = self.logic.state
         self.sent = {}   # topic key -> (value, time) for change / refresh publishing
@@ -69,6 +72,7 @@ class MissionNode(Node):
         self.create_subscription(Bool, get('stopline_topic'), self.on_stopline, 1)
         self.create_subscription(Bool, get('parking_done_topic'), self.on_parking_done, 1)
         self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
+        self.create_subscription(Bool, get('parking_line_topic'), self.on_parking_line, 1)
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
         self.get_logger().info('mission started')
 
@@ -80,6 +84,9 @@ class MissionNode(Node):
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()
+
+    def on_parking_line(self, msg: Bool):
+        self.line, self.line_time = msg.data, self.now_sec()
 
     def on_parking_sign(self, msg: Bool):
         if msg.data:
@@ -109,6 +116,7 @@ class MissionNode(Node):
             now=self.now_sec(),
             seen=seen,
             stopline=self.stopline if self._fresh(self.stopline_time) else False,
+            parking_line=self.line if self._fresh(self.line_time) else False,
             parking_done=self.parking_done))
 
         log = (self.logic.parking_armed, out.parking_flag)

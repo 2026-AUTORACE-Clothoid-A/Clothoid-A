@@ -11,8 +11,10 @@ Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking
   * traffic light    -> arm on red (and yellow if `stop_on_yellow`); stop at the stop line,
                         go when green is seen
   * left / right sign (fork) -> direction value for lane_main
-  * parking sign     -> arm; parking flag (latched) at the next stop line (the lidar search starts
-                        there, about 2 m before the bay; `parking_at_stopline` false: at the sign)
+  * parking sign     -> arm; parking flag (latched) at the next single stop line right in front
+                        (`parking_line`: /stopline_near, not the stripe detector, which needs a
+                        crosswalk; the lidar search starts there, about 2 m before the bay;
+                        `parking_at_stopline` false: at the sign)
 Driving nodes keep working underneath: `stop` only means "publish zero on the state input".
 """
 from dataclasses import dataclass, field
@@ -45,6 +47,7 @@ class Inputs:
     now: float
     seen: Set[str] = field(default_factory=set)   # class names visible right now
     stopline: bool = False
+    parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
 
 
@@ -81,7 +84,7 @@ class MissionLogic:
             self.direction = p.fork_right_direction
         if 'sign_parking' in seen:
             self.parking_armed = True
-        if self.parking_armed and (inputs.stopline or not p.parking_at_stopline):
+        if self.parking_armed and (inputs.parking_line or not p.parking_at_stopline):
             self.parking_flag = True
 
         self._update_stop(inputs)
