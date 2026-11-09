@@ -58,7 +58,6 @@ ros2 launch clothoid_debug rviz.launch.py use_sim_time:=false
 | 작은 회색 점 | 명령에 안 쓰이는 차선 추종점(콘 코스 중, 또는 차선을 놓쳤을 때) |
 | 파랑 / 노랑 점 | 왼쪽 / 오른쪽 윈도우가 실제로 잡은 차선 |
 | 차 앞 초록 곡선 | 지금 명령을 내는 노드의 조향을 유지할 때 갈 경로(1 m) |
-| 굵은 궤적선 (`Trail`) | 차가 지나온 길. 색은 그 지점에서 명령을 낸 입력이다. Displays의 `Trail`로 따로 끌 수 있다 |
 | 빨간 점과 축 표시 | 라이다 스캔, `/lidar/obstacles` |
 | 이름 붙은 좌표축 | TF (`track`, `base_link`, 센서 좌표계) |
 | 파랑·노랑·초록 경로 | 콘 코스의 왼쪽 경계, 오른쪽 경계, 중심선 |
@@ -67,12 +66,37 @@ ros2 launch clothoid_debug rviz.launch.py use_sim_time:=false
 | `Avoid costmap / candidates / path`, `LIMO clusters` (기본 꺼짐) | 정적 장애물 회피: 비용 지도(밝을수록 위험), 후보 경로(초록~빨강 = 비용, 회색 = 막힘), 고른 경로(분홍), LIMO 크기 군집. `ros2 launch clothoid_lidar avoid.launch.py`가 돌 때 나온다 |
 | `Lidar clusters A/B`, `Cone zones` (기본 꺼짐) | 라이다 군집 판정: 초록 채택, 빨강 폭 초과, 보라 빔 부족, 라벨 "폭cm/빔수". A는 `lidar.yaml` 값, B는 비교용. `ros2 launch clothoid_lidar lidar_debug.launch.py`를 같이 띄워야 나온다(bag이면 `use_sim_time:=true`) |
 
-궤적선 색: 초록 `lane`, 하늘색 `avoid`, 빨강 `state`, 노랑 `parking`, 보라는 명령 없음.
+## lane_viewer: bag에서 차선 탐지와 추종점 보기
+
+ROS를 띄우지 않고 bag을 직접 읽어서, 카메라 프레임마다 lane_main과 같은 탐지기와 조향 계산을 돌려 보여준다. 파라미터는 `lane.yaml` + `config/camera_<camera>.yaml`이고 `-p`로 바꿔 볼 수 있다. bag에 `/lane/target_warp`가 있으면(차에서 `debug:=true`) 차의 lane_main이 처리한 프레임만 같은 순서로 넣고, 차가 낸 목표점(하늘색 X)과 조향 명령을 같이 그린다.
+
+```
+ros2 run clothoid_debug lane_viewer bag/lane_1107_043151                    # 창, 멈춘 상태로 시작
+ros2 run clothoid_debug lane_viewer bag/lane_1107_043151 --start 10 -p look_row=120
+ros2 run clothoid_debug lane_viewer bag/lane_1107_043151 --out lane.mp4     # 창 없이 영상으로
+```
+
+키: space 재생/멈춤, d 또는 → 다음 프레임, a 또는 ← 이전(최근 300장), w/s 빠르게/느리게, p png 저장(bag 옆), y 지금 파라미터 출력(yaml과 `-p` 형태), q 종료. 시간은 첫 lane 프레임부터 잰다.
+
+`--tune`을 붙이면 슬라이더 창(`lane_params`)이 같이 뜬다: BEV 먼 끝(영상 행, 사다리꼴 옆선을 따라 움직여 직선 차선이 평행하게 유지됨), look_row, steer_gain, 차로 폭, 노랑 H/S/V, 흰색 S/V, 흰 점선 최소 길이, 윈도우 폭, 최소 윈도우 수, 따라갈 쪽. 슬라이더를 놓고 잠깐(0.3초) 있으면 적용된다: 그 앞 1초(30프레임)를 새 값으로 다시 돌려 추적 상태를 맞춘 뒤 지금 프레임을 다시 그리고, 이후 프레임도 새 값으로 계산한다. 정보 칸에 BEV 범위와 목표점이 카메라 앞 몇 m인지 나온다. 마음에 드는 값은 y로 출력해서 `camera_<car>.yaml`/`lane.yaml`에 옮긴다.
+
+```
+ros2 run clothoid_debug lane_viewer ../bag/lane_1107_201620 --tune
+```
+
+| 칸 | 내용 |
+|---|---|
+| 왼쪽 위 | 카메라 영상, 변환 영역(보라), look_row(회색), 목표점(초록 점, 차의 것은 하늘색 X) |
+| 오른쪽 위 | 변환 이미지: 노랑/흰색 선 픽셀(회색: 분리선이 아니라고 버린 흰색), 왼쪽(파랑)·오른쪽(빨강) 경계의 슬라이딩 윈도우(굵은 칸: 픽셀을 찾음, 어두운 칸: 못 찾고 이어감), 보라 칸: 찾았지만 경계로 안 쓴 선, 회색·주황 얇은 칸: 윈도우가 모자라 선이 안 된 시도, 흰 점: look_row의 경계, 초록 선과 점: 반 차로 떨어진 목표점, 빨간 원: 차선을 잃음(명령 안 나감) |
+| 왼쪽 아래 | 찾음/잃음, 기준 경계, 목표점(재생과 차), 윈도우 탐색 수, 조향(재생, 차의 명령, 자이로로 잰 실제), 파라미터, 조종 모드 |
+| 오른쪽 아래 | 최근 8초 조향(초록 재생, 하늘색 차의 명령, 주황 자이로), 회색 ±23.4°는 차가 실제로 꺾을 수 있는 한계 |
+
+같은 그림이 차에서 `debug:=true`일 때 `/lane/debug_image`로도 나온다.
 
 ## 알아둘 점
 - **로컬라이저가 아니다.** `track` 좌표계는 시작 위치를 원점으로 `/imu` yaw와 `/odom` 바퀴 속도를 적분한 값이다. 보정이 없어 오래 달릴수록 오차가 쌓이고, 지도와 맞춘 위치도 아니다. 화면 표시에만 쓰고 주행 노드는 이 값을 쓰지 않는다.
 - **`/odom` yaw를 쓰지 않는 이유:** 조향값으로 계산한 값이라 실제 회전과 다르다. 2026-11-05 bag에서 회전 중 자이로의 약 1.9배였고, 한 주행 누적 287~354°로 자이로의 약 450°와 달랐다.
-- **bag에서 궤적은 녹화 때의 경로다.** 노드의 명령이 차를 움직이지 않으므로 초록 곡선은 "그 위치에서 노드가 내린 판단"이다. 노드가 직접 몰았을 때의 결과가 아니다.
+- **bag에서 차 위치는 녹화 때의 경로다.** 노드의 명령이 차를 움직이지 않으므로 초록 곡선은 "그 위치에서 노드가 내린 판단"이다. 노드가 직접 몰았을 때의 결과가 아니다.
 - **명령 입력 판정:** bag 재생 때는 `twist_mux`가 없어서, `twist_mux.yaml`의 우선순위와 타임아웃을 이 노드 안에서 흉내 내어 판정한다. 값을 바꾸면 `decision_viz.py`의 `MUX_INPUTS`도 맞춘다.
 - **TF:** `track → base_link`를 발행하므로 `use_ekf:=true`, `pub_odom_tf:=true`와 함께 쓰지 않는다(`base_link`의 부모가 둘이 된다).
 - **실차 미확인:** 로봇에서는 아직 돌려 보지 않았다. 노트북과 로봇 사이 통신, Wi-Fi로 영상을 보낼 때의 부하, Jetson의 `debug:=true` 부하를 확인해야 한다. 끊기면 RViz의 영상 패널부터 끈다.

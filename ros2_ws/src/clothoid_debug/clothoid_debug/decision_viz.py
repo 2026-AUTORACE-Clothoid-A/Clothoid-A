@@ -10,7 +10,7 @@ localization, no correction, it drifts. /odom yaw is not used because it is comp
 value and does not match the real rotation (2026-11-05 bags: about 1.9 x gyro in turns, 287-354 deg
 against 450 deg for a whole run). This TF needs base_link to have no other parent, so do not use it
 with `use_ekf:=true` or `pub_odom_tf:=true`. In the simulator `use_odom_pose` is true: it publishes
-odom -> base_link and a true /odom pose, so the trail uses that and `track` is fixed to `odom`.
+odom -> base_link and a true /odom pose, so `track` is fixed to `odom`.
 """
 import math
 
@@ -32,13 +32,8 @@ from clothoid_debug.geometry import GroundProjection, arc_points
 from clothoid_lane.lane_detector import LaneParams, make_warp_matrix
 
 # twist_mux.yaml: name, topic, timeout, highest priority first
-MUX_INPUTS = (('state', '/cmd_vel_state', 0.3), ('parking', '/cmd_vel_parking', 0.3),
+MUX_INPUTS = (('parking', '/cmd_vel_parking', 0.3), ('state', '/cmd_vel_state', 0.3),
               ('avoid', '/cmd_vel_avoid', 0.3), ('lane', '/cmd_vel_lane', 0.3))
-
-# trail colour: which input was deciding at that point (None = no node sent a command)
-COLORS = {'lane': (0.1, 0.9, 0.2), 'avoid': (0.1, 0.8, 1.0), 'parking': (1.0, 0.8, 0.0),
-          'state': (1.0, 0.1, 0.1), None: (0.75, 0.2, 1.0)}
-
 
 def rgba(rgb, a=1.0) -> ColorRGBA:
     return ColorRGBA(r=float(rgb[0]), g=float(rgb[1]), b=float(rgb[2]), a=float(a))
@@ -56,7 +51,7 @@ class DecisionViz(Node):
         # horizon of the warp trapezoid is at row 178, cy 217, fy 489 -> atan(39 / 489)
         self.declare_parameter('camera_pitch', 0.080)
         self.declare_parameter('camera_x', 0.23)
-        self.declare_parameter('camera_y', 0.05)
+        self.declare_parameter('camera_y', 0.0)   # left of the centre line, per car in camera_*.yaml
         self.declare_parameter('wheelbase', 0.2)
         self.declare_parameter('rear_axle_x', -0.1)
         self.declare_parameter('fx', 489.14)
@@ -82,11 +77,9 @@ class DecisionViz(Node):
         self.x = self.y = self.yaw = self.speed = 0.0
         self.last_imu = self.last_odom = None
         self.pose_stamp = RosTime()
-        self.trail = []           # (x, y, deciding input)
 
         self.overlay_pub = self.create_publisher(Image, '/viz/overlay', 1)
         self.marker_pub = self.create_publisher(MarkerArray, '/viz/markers', 1)
-        self.trail_pub = self.create_publisher(Marker, '/viz/trail', 1)   # its own RViz display
         self.tf_pub = TransformBroadcaster(self)
 
         self.create_subscription(Image, '/camera/color/image_raw', self.on_image,
@@ -167,9 +160,6 @@ class DecisionViz(Node):
         self.last_odom = t
         self.tf_pub.sendTransform(tf)
         self.pose_stamp = msg.header.stamp
-
-        if not self.trail or math.hypot(self.x - self.trail[-1][0], self.y - self.trail[-1][1]) > 0.03:
-            self.trail.append((self.x, self.y, self.winner()[0]))
 
     # --- state ------------------------------------------------------------------
     def winner(self):
@@ -292,12 +282,6 @@ class DecisionViz(Node):
         text.text = self.status()
         out.markers.append(text)
 
-        trail = self.marker(7, Marker.LINE_LIST, frame='track', scale=0.05)
-        for a, b in zip(self.trail, self.trail[1:]):
-            color = rgba(COLORS[b[2]])
-            trail.points += [Point(x=a[0], y=a[1]), Point(x=b[0], y=b[1])]
-            trail.colors += [color, color]
-        self.trail_pub.publish(trail)
         self.marker_pub.publish(out)
 
 

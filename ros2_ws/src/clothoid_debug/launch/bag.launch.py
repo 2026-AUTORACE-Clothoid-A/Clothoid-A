@@ -26,9 +26,17 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true',
                               description='true needs `ros2 bag play --clock`'),
+        DeclareLaunchArgument('camera', default_value='limo2',
+                              description='camera profile of the car that recorded the bag'),
         GroupAction([
             SetParameter(name='use_sim_time', value=LaunchConfiguration('use_sim_time')),
-            include('clothoid_lane', 'lane.launch.py', {'debug': 'true'}),
+            include('clothoid_lane', 'lane.launch.py',
+                    {'debug': 'true', 'camera': LaunchConfiguration('camera')}),
+            # limo2 bags hold only the compressed camera image, lane_main reads raw
+            Node(package='image_transport', executable='republish', name='camera_decompress',
+                 arguments=['compressed', 'raw'],
+                 remappings=[('in/compressed', '/camera/color/image_raw/compressed'),
+                             ('out', '/camera/color/image_raw')]),
             include('clothoid_lidar', 'cone.launch.py'),
             include('clothoid_mission', 'mission.launch.py'),
             # the bag has this TF only in its first moment, a start offset would skip it (URDF value)
@@ -36,6 +44,6 @@ def generate_launch_description():
                  name='base_link_to_laser_link',
                  arguments=['--x', '0.103', '--z', '-0.034',
                             '--frame-id', 'base_link', '--child-frame-id', 'laser_link']),
-            include('clothoid_debug', 'viz.launch.py'),
+            include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')}),
         ]),
     ])

@@ -9,7 +9,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -39,9 +39,29 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare(package), *path])),
             launch_arguments=(args or {}).items())
 
+    twist_mux_arm_params = os.path.join(bringup_share, 'config', 'twist_mux_arm.yaml')
+
+    def twist_mux_node(parameters, condition):
+        return Node(
+            package='twist_mux',
+            executable='twist_mux',
+            name='twist_mux',
+            output='screen',
+            parameters=parameters,
+            remappings=[('cmd_vel_out', LaunchConfiguration('mux_output'))],
+            condition=condition,
+        )
+
     camera_pitch = LaunchConfiguration('camera_pitch')
 
     return LaunchDescription([
+        DeclareLaunchArgument('require_arm', default_value='false',
+                              description='true: autonomy moves only while /estop receives false, '
+                                          'see config/twist_mux_arm.yaml'),
+        DeclareLaunchArgument('mux_output', default_value='/cmd_vel',
+                              description='twist_mux output; /cmd_vel_dry = shadow run, nothing drives'),
+        DeclareLaunchArgument('cmd_timeout', default_value='0.5',
+                              description='limo_base: stop after this long without /cmd_vel'),
         DeclareLaunchArgument('camera_pitch', default_value='0.0',
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
@@ -56,15 +76,19 @@ def generate_launch_description():
         # URDF: base_link -> laser_link, imu_link, wheels
         include('limo_description', 'launch', 'load_urdf.launch.py'),
 
-        # camera mounting (same nominal values as wego/camera_tilt_launch.py; measure and update)
+        # colour camera lens of the DaBai, measured on limo2 2026-11-07 (wego had 0.23, 0.05, 0.06):
+        # x 5 cm ahead of the front axle (base_link is midway between the axles, wheelbase 0.2),
+        # y 1 cm right of the centre line, z 19 cm above the floor = 0.045 above base_link (URDF:
+        # wheel centres 0.10 below base_link, wheel radius 0.045)
         static_tf('base_link_to_camera_link', 'base_link', 'camera_link',
-                  xyz=(0.23, 0.05, 0.06), pitch=camera_pitch),
+                  xyz=(0.15, -0.01, 0.045), pitch=camera_pitch),
         # optical frame (z forward, x right, y down)
         static_tf('camera_link_to_optical', 'camera_link', 'camera_color_optical_frame',
                   xyz=(0, 0, 0), rpy=('-1.5708', '0', '-1.5708')),
 
         include('limo_base', 'launch', 'limo_base.launch.py', args={
-            name: LaunchConfiguration(name) for name in ('steering_scale', 'max_inner_angle')}),
+            name: LaunchConfiguration(name)
+            for name in ('steering_scale', 'max_inner_angle', 'cmd_timeout')}),
 
         # DaBai DC1 runs on astra_stereo_u3.launch.py. Color only; the driver's own TF has a
         # unit error (29 m), so publish_tf is off and we publish the TF above.
@@ -90,12 +114,9 @@ def generate_launch_description():
                 [FindPackageShare('robot_localization'), 'launch', 'limo_ekf_launch.py'])),
             condition=IfCondition(LaunchConfiguration('use_ekf'))),
 
-        Node(
-            package='twist_mux',
-            executable='twist_mux',
-            name='twist_mux',
-            output='screen',
-            parameters=[twist_mux_params],
-            remappings=[('cmd_vel_out', '/cmd_vel')],
-        ),
+        # require_arm: add the /estop lock (twist_mux_arm.yaml), autonomy needs a heartbeat
+        twist_mux_node([twist_mux_params, twist_mux_arm_params],
+                       IfCondition(LaunchConfiguration('require_arm'))),
+        twist_mux_node([twist_mux_params],
+                       UnlessCondition(LaunchConfiguration('require_arm'))),
     ])

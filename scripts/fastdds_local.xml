@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Fast DDS profile for the LIMO, loaded by env_jetson.sh through FASTRTPS_DEFAULT_PROFILES_FILE.
+  The 640x480 camera images are 0.9 MB. They do not fit the default 0.5 MB shared-memory segment, so
+  they went over UDP loopback, whose 208 KB socket buffer lost whole images: lane_main and stopline
+  stalled for up to 1.5 s at a time at 19-24 Hz (limo2, 2026-11-07). With a 16 MB segment the
+  images stay in shared memory: every frame at 29.9 Hz, 42 ms longest interval.
+  UDP is limited to 127.0.0.1, as ROS_LOCALHOST_ONLY=1 does; fastdds_remote.xml drops that limit.
+  The camera driver must load this profile too, so start everything after sourcing env_jetson.sh.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_16mb</transport_id>
+      <type>SHM</type>
+      <segment_size>16777216</segment_size>
+    </transport_descriptor>
+    <transport_descriptor>
+      <transport_id>udp_localhost</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList><address>127.0.0.1</address></interfaceWhiteList>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="clothoid_local" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>shm_16mb</transport_id>
+        <transport_id>udp_localhost</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

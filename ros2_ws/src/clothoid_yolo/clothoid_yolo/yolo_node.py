@@ -3,6 +3,9 @@
 
 `backend: none` publishes empty arrays, so the rest of the stack can run before a model exists.
 """
+import os
+from pathlib import Path
+
 import numpy as np
 import rclpy
 from clothoid_interfaces.msg import Detection, DetectionArray
@@ -14,6 +17,64 @@ from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
 
 
+# ==============================================================================
+# [YOLO Model Configuration]
+# 모델을 변경하고 싶을 때 아래 DEFAULT_MODEL_PATH 변수를 직접 수정하시면 됩니다!
+# 상대경로(../models/...) 또는 파일명만 적어도 알아서 완벽하게 찾아 로드합니다.
+# 예시:
+#   DEFAULT_MODEL_PATH = "../models/best_fp16.engine"  # TensorRT 고속 엔진 (실차용)
+#   DEFAULT_MODEL_PATH = "../models/best.pt"           # PyTorch 가중치 (테스트용)
+# ==============================================================================
+DEFAULT_MODEL_PATH = "../models/best_fp16.engine"
+
+
+def resolve_model_path(path_str: str) -> str:
+    """Resolve model path supporting relative paths like ../models/best_fp16.engine."""
+    p = Path(path_str)
+    if p.is_absolute() and p.exists():
+        return str(p)
+
+    target_name = p.name  # e.g. best.pt or best_fp16.engine
+
+    # Candidate directories to search
+    cwd = Path.cwd()
+    search_dirs = [
+        cwd,
+        cwd / "models",
+        cwd / "src/clothoid_yolo/models",
+        cwd / "ros2_ws/src/clothoid_yolo/models",
+        Path(__file__).resolve().parent.parent / "models",
+        Path.home() / "Clothoid-A/ros2_ws/src/clothoid_yolo/models",
+        Path("/home/a/Clothoid-A/ros2_ws/src/clothoid_yolo/models"),
+        Path("/home/user/Clothoid-A/ros2_ws/src/clothoid_yolo/models"),
+    ]
+    cur = cwd
+    for _ in range(4):
+        search_dirs.append(cur)
+        search_dirs.append(cur / "models")
+        search_dirs.append(cur / "src/clothoid_yolo/models")
+        search_dirs.append(cur / "ros2_ws/src/clothoid_yolo/models")
+        cur = cur.parent
+
+    # 1. Exact relative or target filename match
+    for d in search_dirs:
+        cand1 = (d / p).resolve()
+        if cand1.exists() and cand1.is_file():
+            return str(cand1)
+        cand2 = (d / target_name).resolve()
+        if cand2.exists() and cand2.is_file():
+            return str(cand2)
+
+    # 2. Fallback to best.pt or best_fp16.engine if specified model not found
+    for d in search_dirs:
+        for fallback in ["best_fp16.engine", "best.pt", "best.onnx"]:
+            cand = (d / fallback).resolve()
+            if cand.exists() and cand.is_file():
+                return str(cand)
+
+    return path_str
+
+
 class YoloNode(Node):
     def __init__(self):
         super().__init__('yolo')
@@ -21,8 +82,8 @@ class YoloNode(Node):
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('detections_topic', '/detections')
         self.declare_parameter('debug_image_topic', '/yolo/debug_image')
-        self.declare_parameter('backend', 'none')   # ultralytics | none
-        self.declare_parameter('model_path', '')           # .pt / .onnx / .engine
+        self.declare_parameter('backend', 'ultralytics')   # ultralytics | none
+        self.declare_parameter('model_path', '')           # .pt / .onnx / .engine (빈 값이면 DEFAULT_MODEL_PATH 사용)
         self.declare_parameter('imgsz', 640)
         self.declare_parameter('device', '')               # '' = auto, 'cuda:0', 'cpu'
         self.declare_parameter('model_conf', 0.25)         # threshold inside the model
@@ -34,13 +95,16 @@ class YoloNode(Node):
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.backend = None
-        if get('backend') == 'ultralytics':
-            if not get('model_path'):
-                raise RuntimeError('yolo: set model_path (or backend:=none)')
+        backend = get('backend')
+        model_path = get('model_path') or DEFAULT_MODEL_PATH
+
+        if backend == 'ultralytics':
+            resolved_path = resolve_model_path(model_path)
             self.backend = UltralyticsBackend(
-                get('model_path'), get('imgsz'), get('device'), get('model_conf'))
-        elif get('backend') != 'none':
-            raise RuntimeError(f"yolo: unknown backend '{get('backend')}'")
+                resolved_path, get('imgsz'), get('device'), get('model_conf'))
+            self.get_logger().info(f"Loaded YOLO model: {resolved_path}")
+        elif backend != 'none':
+            raise RuntimeError(f"yolo: unknown backend '{backend}'")
 
         self.aliases = dict(item.split(':', 1) for item in get('class_aliases') if ':' in item)
         self.warned_unknown = set()

@@ -6,6 +6,7 @@
 # Non-interactive replacement for the choice prompt in the factory ~/.bashrc, which stays untouched.
 #   ROS_DOMAIN_ID      per robot, default 0 (set a unique value at the venue)
 #   CLOTHOID_REMOTE=1  unset ROS_LOCALHOST_ONLY so a laptop can see the topics
+#   CLOTHOID_FASTDDS=0 skip the Fast DDS profile below (back to the default transports)
 
 source /opt/ros/humble/setup.bash
 [ -f "$HOME/wego_ws/install/setup.bash" ] && source "$HOME/wego_ws/install/setup.bash"
@@ -16,9 +17,20 @@ CLOTHOID_WS="${CLOTHOID_WS:-$HOME/Clothoid-A/ros2_ws}"
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 if [ "${CLOTHOID_REMOTE:-0}" = "1" ]; then
     unset ROS_LOCALHOST_ONLY
+    clothoid_fastdds=fastdds_remote.xml
 else
     export ROS_LOCALHOST_ONLY=1
+    clothoid_fastdds=fastdds_local.xml
 fi
+# Fast DDS profile with a 16 MB shared-memory segment: the 0.9 MB camera images were lost for up to
+# 1.5 s at a time with the default transports (limo2, 2026-11-07; see fastdds_local.xml). Every node,
+# the camera driver included, has to be started from a shell that sourced this file.
+if [ "${CLOTHOID_FASTDDS:-1}" = "1" ]; then
+    export FASTRTPS_DEFAULT_PROFILES_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$clothoid_fastdds"
+else
+    unset FASTRTPS_DEFAULT_PROFILES_FILE
+fi
+unset clothoid_fastdds
 
 # CUDA / TensorRT as set up by the factory image (only when present)
 if [ -d /usr/local/cuda-12.6 ]; then

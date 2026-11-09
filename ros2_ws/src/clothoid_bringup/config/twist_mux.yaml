@@ -12,10 +12,10 @@ twist_mux:
         topic: cmd_vel_state
         timeout: 0.3
         priority: 100
-      parking:
+      parking:               # above state: a false stop must not freeze the car inside the parking run
         topic: cmd_vel_parking
         timeout: 0.3
-        priority: 90
+        priority: 110
       avoid:                 # static obstacle avoidance, rubber cones
         topic: cmd_vel_avoid
         timeout: 0.3
