@@ -14,9 +14,7 @@ from sensor_msgs.msg import Imu
 from std_msgs.msg import Bool, Float32, Int32
 
 from clothoid_mission.mission_logic import (
-    Inputs, MissionLogic, MissionParams, classes_seen)
-from clothoid_mission.speed_bump_detector import (
-    SpeedBumpParams, quaternion_to_pitch_deg)
+    Inputs, MissionLogic, MissionParams, classes_seen, quaternion_to_pitch_deg)
 
 
 class MissionNode(Node):
@@ -37,14 +35,13 @@ class MissionNode(Node):
         self.declare_parameter('refresh_sec', 1.0)
 
         d = MissionParams()
-        bp = d.bump_params
         self.declare_parameter('slow_speed', d.slow_speed)
         self.declare_parameter('slow_hold_sec', d.slow_hold_sec)
-        self.declare_parameter('bump_pitch_thresh', bp.pitch_climb_thresh)
-        self.declare_parameter('bump_level_thresh', bp.pitch_level_thresh)
-        self.declare_parameter('bump_level_duration', bp.level_duration_sec)
-        self.declare_parameter('bump_arm_timeout', bp.arm_timeout_sec)
-        self.declare_parameter('bump_cooldown', bp.cooldown_sec)
+        self.declare_parameter('bump_pitch_thresh', d.bump_pitch_thresh)
+        self.declare_parameter('bump_level_thresh', d.bump_level_thresh)
+        self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
+        self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
+        self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
 
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
@@ -54,19 +51,18 @@ class MissionNode(Node):
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
-        bump_params = SpeedBumpParams(
-            slow_speed=get('slow_speed'),
-            pitch_climb_thresh=get('bump_pitch_thresh'),
-            pitch_level_thresh=get('bump_level_thresh'),
-            level_duration_sec=get('bump_level_duration'),
-            arm_timeout_sec=get('bump_arm_timeout'),
-            cooldown_sec=get('bump_cooldown')
-        )
         self.logic = MissionLogic(MissionParams(
-            slow_speed=get('slow_speed'), slow_hold_sec=get('slow_hold_sec'),
-            bump_params=bump_params,
-            pedestrian_wait_sec=get('pedestrian_wait_sec'), stop_on_yellow=get('stop_on_yellow'),
-            arm_timeout_sec=get('arm_timeout_sec'), cooldown_sec=get('cooldown_sec'),
+            slow_speed=get('slow_speed'),
+            slow_hold_sec=get('slow_hold_sec'),
+            bump_pitch_thresh=get('bump_pitch_thresh'),
+            bump_level_thresh=get('bump_level_thresh'),
+            bump_level_duration_sec=get('bump_level_duration'),
+            bump_arm_timeout_sec=get('bump_arm_timeout'),
+            bump_cooldown_sec=get('bump_cooldown'),
+            pedestrian_wait_sec=get('pedestrian_wait_sec'),
+            stop_on_yellow=get('stop_on_yellow'),
+            arm_timeout_sec=get('arm_timeout_sec'),
+            cooldown_sec=get('cooldown_sec'),
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction')))
 
@@ -89,7 +85,7 @@ class MissionNode(Node):
         self.create_subscription(Imu, get('imu_topic'), self.on_imu, 10)
 
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
-        self.get_logger().info('mission started with SpeedBumpDetector enabled')
+        self.get_logger().info('mission started (speed bump integrated)')
 
     def now_sec(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
