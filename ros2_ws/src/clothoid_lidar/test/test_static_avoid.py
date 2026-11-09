@@ -560,3 +560,44 @@ def test_estimated_island_gets_a_margin():
     assert a.control((s, 0.1, math.radians(30.0)), Inhibit()) is not None
     assert a.state == ACTIVE
     assert a.control((a.island[0] + a.p.island_past_estimate, 0.1, math.radians(30.0)), Inhibit()) is None
+
+
+ENTRY = (0.0, 0.0, 0.0)
+NOTHING = np.zeros((0, 2))
+
+
+def _watch(a, back, yaw=0.0):
+    return a.on_limos(0.0, NOTHING, Inhibit(), 0.3, (back, 0.0, yaw), entry_back=back, entry_pose=ENTRY)
+
+
+def test_section_is_done_without_any_obstacle():
+    a = StaticAvoid(AvoidParams())
+    _watch(a, 4.3)
+    assert not a.done and not a.locked
+    _watch(a, 4.5)
+    assert a.done and a.locked and a.state == IDLE
+
+
+def test_a_line_followed_by_a_corner_is_not_the_entry():
+    a = StaticAvoid(AvoidParams())
+    _watch(a, 4.5, yaw=math.radians(80.0))
+    assert not a.done and not a.locked
+
+
+def test_a_hand_over_at_the_island_is_done():
+    a = _active_at_origin()
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    a.plan = None
+    a.control((a.island[0] + 0.01, 0.0, 0.0), Inhibit())
+    assert a.done
+
+
+def test_a_retry_from_a_new_line_clears_done():
+    a = StaticAvoid(AvoidParams())
+    _watch(a, 4.5)
+    new = (20.0, 0.0, 0.0)
+    limo = np.array([[1.0, 0.0]])
+    started = [a.on_limos(0.1 * k, limo, Inhibit(), 0.3, (21.0, 0.0, 0.0), entry_back=1.0,
+                          entry_pose=new) for k in range(5)]
+    assert any(started) and not a.done and a.state == ACTIVE
+

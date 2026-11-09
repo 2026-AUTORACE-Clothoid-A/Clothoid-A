@@ -12,7 +12,7 @@ In:  limos_topic (PoseArray, base_link, from the `limo_extractor` instance), sca
      Camera geometry: camera_height / camera_pitch / camera_x / camera_y from the lane package's
      per-car camera file (avoid.launch.py camera:=limo1|limo2).
 Out: cmd_topic (/cmd_vel_avoid, 20 Hz while active, one Twist(0) when it ends),
-     /avoid/active (Bool, every scan), /avoid/lane (Int32, 1..3 while active, 0 idle),
+     /avoid/active (Bool, every scan), /avoid/done (Bool, every scan: the section is behind us), /avoid/lane (Int32, 1..3 while active, 0 idle),
      debug: /avoid/path (Path), /avoid/candidates (MarkerArray), /avoid/costmap (OccupancyGrid),
      /avoid/cues (MarkerArray: entry line, island and its source), all in base_link.
 """
@@ -112,6 +112,7 @@ class StaticAvoidNode(Node):
         self.cmd_pub = self.create_publisher(Twist, g('cmd_topic'), 1)
         self.active_pub = self.create_publisher(Bool, '/avoid/active', 1)
         self.lane_pub = self.create_publisher(Int32, '/avoid/lane', 1)
+        self.done_pub = self.create_publisher(Bool, '/avoid/done', 1)
         self.path_pub = self.create_publisher(Path, '/avoid/path', 1)
         self.cand_pub = self.create_publisher(MarkerArray, '/avoid/candidates', 1)
         self.map_pub = self.create_publisher(OccupancyGrid, '/avoid/costmap', 1)
@@ -263,8 +264,12 @@ class StaticAvoidNode(Node):
         c = self.entry.recent(self.tracker.distance, self.p.island_from_entry_max + 1.0)
         entry_back = self.tracker.distance - c.odometer if c is not None else None
         entry_pose = self.tracker.at_distance(c.odometer) if c is not None else None
-        if self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
-                               entry_back, entry_pose):
+        was_done = self.avoid.done
+        started = self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
+                                      entry_back, entry_pose)
+        if self.avoid.done and not was_done:
+            self.get_logger().info(f'static obstacle DONE: {self.avoid.event}')
+        if started:
             self.get_logger().info(f'static obstacle START (blocked ahead) at odometer '
                                    f'{self.tracker.distance:.2f} m, island '
                                    f'{self.avoid.island[0]:.2f} m ({self.avoid.island_source})')
@@ -285,6 +290,7 @@ class StaticAvoidNode(Node):
     def on_scan(self, scan: LaserScan):
         active = self.avoid.state == ACTIVE
         self.active_pub.publish(Bool(data=active))
+        self.done_pub.publish(Bool(data=self.avoid.done))
         if not active or not self.tracker.ready:
             return
         lx, ly, lyaw = self._lidar(scan)

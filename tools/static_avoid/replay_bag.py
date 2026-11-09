@@ -116,7 +116,11 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
         c = entry.recent(tracker.distance, p.island_from_entry_max + 1.0)
         entry_back = tracker.distance - c.odometer if c is not None else None
         entry_pose = tracker.at_distance(c.odometer) if c is not None else None
-        if avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose):
+        was_done = avoid.done
+        started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose)
+        if avoid.done and not was_done:
+            rec['events'].append((s, 'DONE: ' + avoid.event))
+        if started:
             rec['events'].append((s, avoid.event.upper() + f' (odometer {tracker.distance:.2f} m)'))
             on_since = s
         if avoid.state != ACTIVE:

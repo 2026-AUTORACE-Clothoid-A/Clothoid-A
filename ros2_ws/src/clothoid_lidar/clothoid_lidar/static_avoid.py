@@ -65,6 +65,9 @@ class AvoidParams:
     # past the island front the road is lane_main's whatever the state: hand over and lock. Only an
     # estimated island (no entry line seen) gets a margin
     island_past_estimate: float = 0.5
+    # no obstacle ever blocked our lane: the section still counts as done at the island front, unless
+    # the road turned this much after the white line (then that line was not the section's entry)
+    watch_max_turn_deg: float = 45.0
     # past the entry line, something in lane 2 from here on is the island's sign stand, not a LIMO:
     # lane_main takes the car into A / B there (1108 run 4 started on it)
     island_object_margin: float = 0.25
@@ -546,6 +549,7 @@ class StaticAvoid:
         self.island_source = 'estimate'
         self.entry_s: Optional[float] = None
         self.event = ''                      # last state change, for the log
+        self.done = False                    # the section is behind us, avoided or not
 
     # ---- trigger --------------------------------------------------------------------------
     def blocked(self, limos: np.ndarray, since_entry: Optional[float] = None) -> bool:
@@ -574,6 +578,7 @@ class StaticAvoid:
         self.seen_entry = entry_pose
         if self.state == ACTIVE:
             return False
+        self._watch(pose_world, entry_back, entry_pose)
         retry = (self.locked and blocked and entry_pose is not None and entry_pose != self.lock_entry
                  and entry_back is not None and 0.0 <= entry_back <= p.entry_max_back)
         if self.locked and not retry:
@@ -596,9 +601,24 @@ class StaticAvoid:
         if self.blocked_scans < p.activate_scans:
             return False
         if retry:      # a retry from the mission start: nothing of the old section is valid
-            self.locked, self.frame = False, None
+            self.locked, self.frame, self.done = False, None, False
         self.activate(pose_world, entry_back, entry_pose)
         return True
+
+    def _watch(self, pose_world, entry_back, entry_pose) -> None:
+        """Idle, driven by lane_main: past the island front of the last entry line the section is done
+        even though nothing blocked our lane (obstacles only in the side lanes). Locked like a hand-over,
+        a retry from a new white line still releases it."""
+        p = self.p
+        if pose_world is None or entry_pose is None or entry_back is None or self.locked:
+            return
+        if not p.island_from_entry_min <= entry_back <= p.island_from_entry_max:
+            return
+        psi = wrap(pose_world[2] - entry_pose[2])
+        if abs(psi) > math.radians(p.watch_max_turn_deg):
+            return
+        self.done, self.locked, self.lock_entry = True, True, entry_pose
+        self.event = 'section done without avoiding, %.2f m past the entry line' % entry_back
 
     def activate(self, pose_world: Tuple[float, float, float],
                  entry_back: Optional[float] = None,
@@ -655,7 +675,7 @@ class StaticAvoid:
         fork: the mission is done, locked until a retry (see on_limos)."""
         self.state = IDLE
         if final:
-            self.locked, self.lock_entry = True, self.seen_entry
+            self.locked, self.lock_entry, self.done = True, self.seen_entry, True
         self.armed = why.startswith('hand over')
         self.clear_since = None
         self.event = why
