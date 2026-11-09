@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'decision_viz = clothoid_debug.decision_viz:main',
+            'lane_viewer = clothoid_debug.lane_viewer:main',
         ],
     },
 )

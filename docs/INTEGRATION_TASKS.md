@@ -18,7 +18,7 @@
 - [x] `clothoid_bringup/launch/full.launch.py`: bringup + lane, yolo, lidar(콘), parking, mission. `use_lane`, `use_yolo`, `use_lidar_missions`, `use_parking`, `use_mission`으로 각각 끌 수 있고 `debug`, `backend`, `model_path`는 launch 인자로 내려보낸다. Docker에서 인자 해석까지 확인(전체 실행은 하드웨어 패키지가 없어 Jetson에서만 가능).
 - [ ] Jetson에서 `ros2 launch clothoid_bringup full.launch.py` 한 번 실행해 노드 전부 뜨는지 확인.
 - [x] `limo_base`에 `steering_scale`, `max_inner_angle`, `cmd_timeout` 인자를 넘기도록 bringup·full 연결(기본값은 공식값, 확정은 바닥 시험 뒤). 2026-11-04 PC(Humble)에서 빌드와 `--show-args`만 확인, Jetson 실행 전.
-- [x] 안전 장치(2026-11-04, 브랜치 `feature/mux-mission`): `require_arm`(기본 `true`, 아래 "첫 자율 실행 절차"), `mux_output`(`/cmd_vel_dry`면 섀도 주행).
+- [x] 안전 장치(2026-11-04, 브랜치 `feature/mux-mission`): `require_arm`(기본 `false`로 변경 2026-11-09, 아래 "첫 자율 실행 절차"), `mux_output`(`/cmd_vel_dry`면 섀도 주행).
 - [x] `latency_monitor`(2026-11-05, `clothoid_bringup`): 토픽별 Hz·최대 끊김·header 기준 나이, `cmd_vel_*`는 원본 센서 stamp부터의 지연, mux 승자 집계. `full.launch.py use_latency_monitor:=true latency_csv:=~/bags/lat.csv`. bag 재생(PC)에서 `/scan` 도착 시 나이 약 97 ms(스탬프가 회전 시작), 카메라→`/cmd_vel_lane` 17~35 ms. Jetson에서 다시 잰다.
 - [x] 오프라인 분석 도구 `tools/offline_pipeline/`(bag을 현재 yaml로 모든 검출기에 돌려 타임라인·지도·디버그 그림), `tools/mux_arm_test.py`.
 - [x] `scripts/setup_jetson.sh`(`--check`, `--no-build` 지원), `requirements-jetson.txt`(dl_env용, ultralytics만). Docker에서 `--check` 동작만 확인했고 Jetson 실행은 아직.
@@ -75,7 +75,7 @@
 | 주차 중 mission | state(100)가 parking(90)보다 높음 | 주차 중 신호등 오탐이 주차를 덮는지. `/parking_flag` 동안 mission 정지를 끌지 |
 | 정지 명령 | `Twist(0,0)` | 바닥에서 조향이 중앙에 오는지 |
 
-### 7-2. 우선순위 재설계 (제안, 미적용)
+### 7-2. 우선순위 재설계 (2026-11-09: parking 110만 적용, cone 분리는 보류, finish는 `namgyu/parking` 병합 때 105로 맞춘다)
 지금 값은 2025 미션 기준이다. 원칙: **각 노드는 자기 미션 구간에서만 발행하고, 우선순위는 구간이 겹치거나 오탐일 때 누가 이기는지만 정한다.**
 
 | 입력 | 지금 | 제안 | 이유 |
@@ -132,11 +132,24 @@ mux는 출력 타이머가 없다. 입력 메시지가 올 때만 내보내고, 
 | 2 | Fast DDS 공유메모리 잔여물. 비정상 종료 뒤 `/dev/shm/fastrtps_*`가 남으면 같은 기기 안 노드끼리 통신이 끊길 수 있고 재부팅하면 풀린다 | `ls /dev/shm` | 모든 노드를 끈 뒤 `fastdds shm clean` |
 | 3 | 대회장에서만: `ROS_DOMAIN_ID` 충돌. `CLOTHOID_REMOTE=1`로 노트북을 붙이면 같은 도메인의 다른 팀 `/cmd_vel`·`/estop`이 섞인다 | `ros2 topic info -v /cmd_vel`(낯선 노드) | 차마다 다른 도메인(8번) |
 | 4 | 대회장에서만: NTP 시계 점프. twist_mux 타임아웃은 노드 시계(`now()`)로 잰다 | `timedatectl`, 대회장 Wi-Fi 연결 전후 비교 | 주행 중 NTP 끄기 검토 |
-| 5 | arm lock: `require_arm:=true`(기본)에서 `/estop false` 발행 없이 다시 실행하면 정상적으로 침묵한다 | `ros2 topic hz /estop` | 대회는 `require_arm:=false` |
+| 5 | arm lock: `require_arm:=true`에서 `/estop false` 발행 없이 다시 실행하면 정상적으로 침묵한다 | `ros2 topic hz /estop` | 대회는 `require_arm:=false` |
 
 - 제안(설계 승인 뒤): `scripts/preflight.sh`. 1~4를 확인하고 `--clean`이면 남은 프로세스와 공유메모리를 정리한다. 런치를 다시 켜기 전에 매번 돌린다.
 - launch의 노드에 `sigterm_timeout`을 짧게 준다.
 - FIELD_TEST에 "런치 10회 껐다 켜기 + 매번 `/cmd_vel` 확인" 시험을 넣는다. 연습장에서도 대회장처럼 Wi-Fi에 붙여서 해 본다.
+
+### 10-2. merge하면서 할 일 (주영, 2026-11-09)
+- [ ] `namgyu/parking`을 합칠 때 `twist_mux.yaml`의 `finish` 우선순위를 90이 아니라 **105**로 한다(parking 110 > finish 105 > state 100). 90이면 state보다 낮다. `decision_viz.py`의 `MUX_INPUTS`에도 finish를 넣는다.
+- [ ] `clothoid_mission`의 R2~R4, R9(9번 표)를 처리한다.
+
+### 11. 정적 장애물 회피 개발이 끝나면 할 일 (2026-11-09 기록, 지금은 보류)
+1. `feature/static-avoid`를 정리해 main에 넣는다.
+2. `full.launch.py`에 `avoid.launch.py`, `use_avoid` 스위치, `camera` 인자 전달을 넣고 새 토픽을 `INTERFACES.md`에 적는다.
+3. 콘 시작 조건과 회피를 함께 돌려 본다. 1108 bag 11개에서는 콘 모드가 한 번도 켜지지 않았다(시작 상자 안 군집 최대 5개, 기준 6개). 실제 콘이 섞이면 다시 본다.
+4. `base_speed` 0.8에서 회피 진입을 확인한다. 약 1.5 m 앞에서 켜지고, 켜지기 전 약 36 cm를 간다. 1108 bag은 수동 주행이다.
+5. 횡단보도 정지 → 회피 → 섬 인계 → A/B → 콘 이음새를 `latency_monitor`로 본다(모니터 목록에 finish 추가).
+6. 섀도 주행 → 바퀴 띄우기 → 미션별 저속 → 한 바퀴 → 재시도·재시작 시험 순서로 실차 확인.
+7. 대회장 점검: `ROS_DOMAIN_ID`, WB 고정, 차선 폭(규정 0.55 m, 현재 0.50 m), 차량별 `camera:=`.
 
 ## 지금은 못 하는 것 (플랫폼 실험 필요)
 바닥 원 주행으로 `steering_scale` 확정, RC 우선순위와 `control_mode`, 라이다 0° 방향과 TF 실측, 트랙 조명 fps와 노출 고정, 세 `warp_*` 재튜닝, `motion_mode` 순간 변화 확인. 순서는 `FIELD_TEST.md`.

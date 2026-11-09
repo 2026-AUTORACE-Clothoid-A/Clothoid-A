@@ -48,6 +48,20 @@ def _to_numpy(val) -> np.ndarray:
     return np.asarray(val)
 
 
+def _resolve_class_name(names, c: int) -> str:
+    """Resolve class name, falling back to KNOWN_CLASSES if names are generic 'class0', 'class1'..."""
+    if names is not None:
+        try:
+            val = str(names[c])
+            if not val.lower().startswith('class'):
+                return val
+        except (KeyError, IndexError, TypeError):
+            pass
+    if 0 <= c < len(KNOWN_CLASSES):
+        return KNOWN_CLASSES[c]
+    return f'class{c}'
+
+
 def boxes_from_results(result) -> List[Box]:
     """Convert one Ultralytics `Results` object (duck-typed) into `Box`es."""
     if result.boxes is None:
@@ -58,7 +72,7 @@ def boxes_from_results(result) -> List[Box]:
     names = result.names
     conf = _to_numpy(result.boxes.conf).reshape(-1)
     cls = _to_numpy(result.boxes.cls).reshape(-1)
-    return [Box(str(names[int(c)]), float(p), int(round(x0)), int(round(y0)),
+    return [Box(_resolve_class_name(names, int(c)), float(p), int(round(x0)), int(round(y0)),
                 int(round(x1)), int(round(y1)))
             for (x0, y0, x1, y1), p, c in zip(xyxy, conf, cls)]
 
@@ -94,10 +108,20 @@ class UltralyticsBackend:
             from ultralytics import YOLO
         except ImportError as exc:
             raise RuntimeError(
-                'ultralytics is not installed. On the Jetson use the conda env with the '
-                'JetPack torch build (scripts/env_jetson.sh dl_env), then '
-                '`pip install ultralytics`.') from exc
-        self.model = YOLO(model_path)
+                'ultralytics가 설치되어 있지 않습니다. 터미널에서 `pip install ultralytics` (또는 `pip3 install ultralytics`)를 실행해 주세요.'
+            ) from exc
+        self.model = YOLO(model_path, task='detect')
+        # Restore class names if engine defaulted to generic class0, class1...
+        try:
+            if hasattr(self.model, 'names') and isinstance(self.model.names, (dict, list)):
+                names = self.model.names
+                keys = names.keys() if isinstance(names, dict) else range(len(names))
+                if any(str(names[k]).lower().startswith('class') for k in keys):
+                    self.model.names = {i: name for i, name in enumerate(KNOWN_CLASSES)}
+        except (AttributeError, TypeError):
+            # Engine models in Ultralytics have a read-only property for .names;
+            # _resolve_class_name will automatically fall back to KNOWN_CLASSES.
+            pass
         self.imgsz, self.device, self.conf = imgsz, device or None, conf
 
     def infer(self, bgr: np.ndarray) -> List[Box]:

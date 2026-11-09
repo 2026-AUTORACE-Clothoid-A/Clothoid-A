@@ -50,7 +50,7 @@ Every node publishes `geometry_msgs/Twist` to **its own** `twist_mux` input, nev
 |---|---|---|
 | `/cmd_vel_teleop` | 200 | keyboard / joystick |
 | `/cmd_vel_state` | 100 | `clothoid_mission` (stop, wait, go) |
-| `/cmd_vel_parking` | 90 | `clothoid_parking` |
+| `/cmd_vel_parking` | 110 | `clothoid_parking` |
 | `/cmd_vel_avoid` | 80 | `clothoid_lidar` `cone_follower`; static obstacle avoidance goes here too |
 | `/cmd_vel_lane` | 10 | `lane_main` |
 

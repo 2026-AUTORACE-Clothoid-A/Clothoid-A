@@ -1,4 +1,4 @@
-# Arm lock for twist_mux, loaded on top of twist_mux.yaml when `require_arm:=true` (the default).
+# Arm lock for twist_mux, loaded on top of twist_mux.yaml when `require_arm:=true` (off by default).
 #
 # twist_mux (humble) counts a lock as locked when its data is true OR it has not been refreshed
 # within `timeout`, and it starts out locked because nothing has arrived yet. While locked, every input

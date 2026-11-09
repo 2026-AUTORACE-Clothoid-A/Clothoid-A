@@ -3,6 +3,7 @@
     ros2 launch clothoid_bringup full.launch.py
     ros2 launch clothoid_bringup full.launch.py use_yolo:=false use_parking:=false
     ros2 launch clothoid_bringup full.launch.py debug:=true backend:=ultralytics model_path:=/path/best.pt
+    ros2 launch clothoid_bringup full.launch.py camera:=limo2      # per car warp, see clothoid_lane/config
 
 `debug:=true` also starts clothoid_debug/decision_viz; open clothoid_debug/rviz/decision.rviz to watch it.
 
@@ -12,7 +13,7 @@ see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_li
 `require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
 `bringup.launch.py`.
 
-Safety: by default autonomy is locked until /estop receives `false` (config/twist_mux_arm.yaml).
+Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
 """
 from launch import LaunchDescription
@@ -36,30 +37,40 @@ def generate_launch_description():
         return IfCondition(LaunchConfiguration(name))
 
     switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_mission']
-    platform_args = {
-        'camera_pitch': '0.0', 'use_camera': 'true', 'use_lidar': 'true', 'use_ekf': 'false',
-        'require_arm': 'true', 'mux_output': '/cmd_vel',
-        'steering_scale': '1.06', 'max_inner_angle': '0.48869', 'cmd_timeout': '0.5',
-    }
+    platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'steering_scale',
+                     'max_inner_angle']
     debug = LaunchConfiguration('debug')
+    # defaults must match bringup.launch.py
+    mux_args = {'require_arm': 'false', 'mux_output': '/cmd_vel', 'cmd_timeout': '0.5'}
 
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
         DeclareLaunchArgument('debug', default_value='false'),
-        DeclareLaunchArgument('backend', default_value='none',
-                              description='yolo backend, "none" publishes empty detections'),
+        DeclareLaunchArgument('camera', default_value='limo2',
+                              description='camera profile: limo1 or limo2 (clothoid_lane/config)'),
+        DeclareLaunchArgument('backend', default_value='ultralytics',
+                              description='yolo backend: ultralytics (default) | none'),
         DeclareLaunchArgument('model_path', default_value=''),
-        # defaults must match bringup.launch.py
-        *[DeclareLaunchArgument(name, default_value=value) for name, value in platform_args.items()],
+        DeclareLaunchArgument('show', default_value='false',
+                              description='show yolo detection window'),
+        DeclareLaunchArgument('camera_pitch', default_value='0.0'),
+        DeclareLaunchArgument('use_camera', default_value='true'),
+        DeclareLaunchArgument('use_lidar', default_value='true'),
+        DeclareLaunchArgument('use_ekf', default_value='false'),
+        DeclareLaunchArgument('steering_scale', default_value='1.06'),
+        DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
+        *[DeclareLaunchArgument(name, default_value=value) for name, value in mux_args.items()],
 
         # sensors, TF, limo_base, twist_mux
         include('clothoid_bringup', 'bringup.launch.py',
-                args={name: LaunchConfiguration(name) for name in platform_args}),
+                args={name: LaunchConfiguration(name) for name in [*platform_args, *mux_args]}),
 
-        include('clothoid_lane', 'lane.launch.py', {'debug': debug}, enabled('use_lane')),
+        include('clothoid_lane', 'lane.launch.py',
+                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_lane')),
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
-                 'model_path': LaunchConfiguration('model_path')}, enabled('use_yolo')),
+                 'model_path': LaunchConfiguration('model_path'),
+                 'show': LaunchConfiguration('show')}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
@@ -73,5 +84,6 @@ def generate_launch_description():
              condition=enabled('use_latency_monitor')),
 
         # with debug on, also publish what rviz/decision.rviz shows
-        include('clothoid_debug', 'viz.launch.py', condition=enabled('debug')),
+        include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},
+                enabled('debug')),
     ])

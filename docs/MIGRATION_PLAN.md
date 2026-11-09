@@ -56,7 +56,7 @@
   - 카메라 드라이버가 발행하는 `camera_link→color` TF는 translation `29.89, 0.07, 0.215`로 **단위 변환 오류(mm로 추정)**가 있어 믿을 수 없음. TF 기반 투영은 쓰지 않고 우리 정적 TF를 쓴다
   - `/camera/color/camera_info`: 640x480, `rational_polynomial`, fx=fy=489.5, cx=319.9, **cy=214.6**(480 높이 중심 240과 차이가 커 신뢰도 의심), 왜곡 `d=[0.0628, -0.0841, 0.00027, -0.00033, 0...]`로 작년 카메라(-0.29)보다 훨씬 약함. 수평 화각 약 66°(규정집은 약 71°). `image_undistort`는 불필요할 가능성이 높고, 필요하면 `camera_calibration`으로 직접 재보정
   - 기동 로그: EKF가 `odom0_differential`과 `odom0_relative`를 동시에 true로 설정해 differential로 동작한다는 오류 메시지(무해), URDF material 경고(무해), `limo_base`의 "odom topic name: 0" 출력(표기 오류)
-- 차체: 휠베이스 0.2m, 트랙 0.172m, 최대 조향 28°, 최소 회전반경 약 0.46m(애커만). 공식 코드 값이다. 2026-11-03 조종기로 후축 중심 최소 회전 지름을 재니 82.5~83cm(반경 약 0.41m)로 공식과 비슷했다(C2). `/cmd_vel` 경로의 스케일은 아직 안 쟀다
+- 차체: 휠베이스 0.2m, 트랙 0.175m(LIMO 사양표 tread 175 mm, 2026-11-07 반영. 공장 드라이버 코드는 0.172m), 최대 조향 28°, 최소 회전반경 약 0.46m(애커만). 공식 코드 값이다. 2026-11-03 조종기로 후축 중심 최소 회전 지름을 재니 82.5~83cm(반경 약 0.41m)로 공식과 비슷했다(C2). `/cmd_vel` 경로의 스케일은 아직 안 쟀다
 - YOLO 예제(WeGo): `yolo_object_detect`(ultralytics) → `/yolo_bounding_boxes` → `dl_control`. 라벨링·학습·TensorRT 변환 도구 포함. 기존 모델은 3클래스뿐이라 대회용 재학습 필요
 
 ### 백업 README에서 확인한 추가 사항
