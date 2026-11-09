@@ -28,6 +28,7 @@ mission:
     line_min_thickness: 0.008
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
+    line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
     slow_speed: 0.2             # rules: 0.2 m/s or less
     slow_hold_sec: 4.0          # bump length not fixed in the rules yet
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s

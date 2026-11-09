@@ -61,6 +61,7 @@ class MissionNode(Node):
         self.declare_parameter('debug', False)
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=
         self.declare_parameter('white_v_min', 150)
+        self.declare_parameter('line_require_crosswalk', True)
         for name, value in [('line_band', 0.22), ('line_min_run', 0.7),
                             ('line_min_thickness', 0.008), ('line_max_thickness', 0.12),
                             ('line_max_frame_gap', 0.25)]:
@@ -201,6 +202,7 @@ class MissionNode(Node):
         core.min_thickness = get('line_min_thickness')
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')
+        core.require_crosswalk = get('line_require_crosswalk')
         core.debug = self.debug_pub is not None
         return core
 

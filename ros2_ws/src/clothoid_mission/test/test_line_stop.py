@@ -128,3 +128,17 @@ def test_stale_line_sightings_do_not_form_a_confirmation():
     for t in (0., .5, 1.):
         core._sighting(t, 1.)
     assert core.phase == Phase.FOLLOW
+
+
+def test_mission_line_requires_crosswalk_context():
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam),
+                        FinishParams(band=.22))
+    core.require_crosswalk = True
+    core.start(0.)
+    for k in range(5):
+        core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=False, letters=False))
+    assert core.phase == Phase.FOLLOW
+    for k in range(5, 10):
+        core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=True, letters=False))
+    assert core.phase == Phase.COMMIT

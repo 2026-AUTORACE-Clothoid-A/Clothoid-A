@@ -50,6 +50,7 @@ class LineStopCore(FinishCore):
         self.min_thickness, self.max_thickness = 0.008, 0.12
         self.max_frame_gap = 0.25
         self._last_sighting = None
+        self.require_crosswalk = False
         # the band (|y| <= p.band ahead of base_link) never moves in the warped image: only its
         # columns are converted and scanned
         band = (np.abs(bev.gy) <= p.band) & bev.valid
@@ -58,6 +59,21 @@ class LineStopCore(FinishCore):
         self._band = band[:, self._c0:self._c1]
         self._per_row = self._band.sum(1)
         self._gx = bev.gx[:, self._c0:self._c1]
+        self._row_x = np.array([np.median(x[b]) if b.any() else np.nan
+                               for x, b in zip(self._gx, self._band)])
+
+    def crosswalk_behind(self, white, far_row):
+        """Longitudinal white bars with gaps, immediately beyond the transverse line."""
+        starts = white & ~np.pad(white[:, :-1], ((0, 0), (1, 0)))
+        count = starts.sum(1)
+        fill = white.sum(1) / np.maximum(self._per_row, 1)
+        dx = self._row_x - self._row_x[far_row]
+        rows = np.flatnonzero((count >= 3) & (fill >= .3) & (fill <= .85) &
+                              (dx >= .02) & (dx <= .45))
+        for group in np.split(rows, np.flatnonzero(np.diff(rows) > 1) + 1):
+            if len(group) >= 2 and np.ptp(self._row_x[group]) >= .06:
+                return True
+        return False
 
     def _sighting(self, now: float, line_at: float):
         if self.phase == Phase.COMMIT and self.target is not None and abs(
@@ -95,7 +111,9 @@ class LineStopCore(FinishCore):
             thickness = float(np.median(self._gx[far][self._band[far]]) -
                               np.median(self._gx[near][self._band[near]]))
             if self.min_thickness <= thickness <= self.max_thickness:
-                candidates.append(near)
+                if (not self.require_crosswalk or self.phase == Phase.COMMIT or
+                        self.crosswalk_behind(white, far)):
+                    candidates.append(near)
         if candidates:
             near = max(candidates)
             self.cross_x = float(np.min(self._gx[near][self._band[near]]))   # near edge of the line
