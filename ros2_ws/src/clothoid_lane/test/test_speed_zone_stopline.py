@@ -114,3 +114,36 @@ def test_stopline_rejects_degenerate_warp_and_keeps_previous_config():
     with pytest.raises(ValueError):
         det.configure(StopLineParams(warp=LaneParams(x_h=0, x_l=0, y_h=-240, y_l=480)))
     assert det.p is before
+
+
+# --- single stop line at the bottom of the warped image (parking trigger) ---------------------
+from clothoid_lane.stopline import NearLineDetector, NearLineParams  # noqa: E402
+
+
+def _warped(line_rows=None, blocks=False, dashes=False, tilt=0):
+    img = np.full((240, 320, 3), 40, np.uint8)
+    if line_rows:
+        a, b = line_rows
+        for x in range(320):
+            dy = int(round(tilt * (x - 160)))
+            img[max(0, a + dy):max(0, b + dy), x] = 235
+    if blocks:   # crosswalk blocks beyond the line
+        for k in range(4):
+            img[90:170, 105 + 30 * k:125 + 30 * k] = 235
+    if dashes:   # lane divider dash in the band
+        img[150:239, 155:163] = 235
+    return img
+
+
+def test_near_line_seen_at_the_bottom():
+    d = NearLineDetector(NearLineParams())
+    assert d.detect_warped(_warped((215, 230)))
+    assert d.detect_warped(_warped((215, 230), tilt=0.08))   # car a few degrees off
+
+
+def test_near_line_not_a_crosswalk_or_a_dash_or_too_far():
+    d = NearLineDetector(NearLineParams())
+    assert not d.detect_warped(_warped((215, 230), blocks=True))
+    assert not d.detect_warped(_warped(dashes=True))
+    assert not d.detect_warped(_warped((120, 135)))           # still 0.8 m ahead
+    assert not d.detect_warped(_warped())
