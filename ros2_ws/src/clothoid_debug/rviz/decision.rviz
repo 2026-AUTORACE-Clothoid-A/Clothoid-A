@@ -143,6 +143,14 @@ Visualization Manager:
       Enabled: false
       Topic:
         Value: /speed_zone/debug_image
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
   Views:
     Current:
       Class: rviz_default_plugins/TopDownOrtho
