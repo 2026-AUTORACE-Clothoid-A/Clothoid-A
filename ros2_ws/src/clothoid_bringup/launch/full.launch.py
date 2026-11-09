@@ -11,7 +11,7 @@ stopline node (off by default, see clothoid_lane/launch/lane.launch.py).
 
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
-see docs/PACKAGES.md). Platform-only arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `steering_scale`,
+see docs/PACKAGES.md). Platform-only arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `use_joint_states`, `steering_scale`,
 `max_inner_angle`) are forwarded to `bringup.launch.py`.
 """
 from launch import LaunchDescription
@@ -34,8 +34,8 @@ def generate_launch_description():
         return IfCondition(LaunchConfiguration(name))
 
     switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_finish', 'use_mission']
-    platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'steering_scale',
-                     'max_inner_angle']
+    platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
+                     'steering_scale', 'max_inner_angle']
     debug = LaunchConfiguration('debug')
 
     return LaunchDescription([
@@ -55,6 +55,7 @@ def generate_launch_description():
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
+        DeclareLaunchArgument('use_joint_states', default_value='false'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
 

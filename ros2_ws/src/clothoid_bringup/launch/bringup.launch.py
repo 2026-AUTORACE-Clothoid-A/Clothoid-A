@@ -47,6 +47,8 @@ def generate_launch_description():
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
+        DeclareLaunchArgument('use_joint_states', default_value='false',
+                              description='joint_state_publisher (wheel joints for the RViz model)'),
         DeclareLaunchArgument('use_ekf', default_value='false',
                               description='fuse /odom and /imu into /odometry/filtered'),
         DeclareLaunchArgument('steering_scale', default_value='1.06',
@@ -54,9 +56,10 @@ def generate_launch_description():
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
                               description='limo_base: inner wheel limit in rad (official 28 deg)'),
 
-        # URDF: base_link -> laser_link, imu_link (fixed joints). Same as limo_description's
-        # load_urdf.launch.py without joint_state_publisher: nothing uses the wheel joint TF, and it
-        # cost ~3.5 % of a core on limo2 (2026-11-09).
+        # URDF: base_link -> laser_link, imu_link (fixed joints), as limo_description's
+        # load_urdf.launch.py. joint_state_publisher only feeds the wheel joints (always 0 deg) for
+        # the RViz model; nothing else reads them, so it is off by default (~3.5 % of a core on limo2,
+        # 2026-11-09). use_joint_states:=true brings it back.
         Node(
             package='robot_state_publisher',
             executable='robot_state_publisher',
@@ -64,6 +67,11 @@ def generate_launch_description():
                 Command(['xacro ', PathJoinSubstitution(
                     [FindPackageShare('limo_description'), 'urdf', 'limo_four_diff.xacro'])]),
                 value_type=str)}],
+        ),
+        Node(
+            package='joint_state_publisher',
+            executable='joint_state_publisher',
+            condition=IfCondition(LaunchConfiguration('use_joint_states')),
         ),
 
         # colour camera lens of the DaBai, measured on limo2 2026-11-07 (wego had 0.23, 0.05, 0.06):
