@@ -35,8 +35,12 @@ def generate_launch_description():
         # /stopline_detected or /stopline_near: mission then never raises /parking_flag at a stop line
         # and never stops for the pedestrian / traffic light, so start parking with /parking_flag.
         DeclareLaunchArgument('use_stopline', default_value='false'),
+        # speed_zone: floor colour -> /speed_limit (2025 red zone). The 2026 slow zone is a YOLO sign,
+        # so it is off by default.
+        DeclareLaunchArgument('use_speed_zone', default_value='false'),
         node('lane_main', 'lane_main', 'lane.yaml'),
-        # speed_zone (floor colour -> /speed_limit) is not started any more: not needed on the 2026 track
+        node('speed_zone', 'speed_zone', 'speed_zone.yaml',
+             condition=IfCondition(LaunchConfiguration('use_speed_zone'))),
         node('stopline', 'stopline', 'stopline.yaml',
              condition=IfCondition(LaunchConfiguration('use_stopline'))),
     ])

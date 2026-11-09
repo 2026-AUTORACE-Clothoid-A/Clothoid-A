@@ -6,8 +6,8 @@
     ros2 launch clothoid_bringup full.launch.py camera:=limo2      # per car warp, see clothoid_lane/config
 
 `viz:=true` starts clothoid_debug/decision_viz (off by default, even with debug:=true: ~50 % of a core
-on limo2); open clothoid_debug/rviz/decision.rviz to watch it. `use_stopline:=true` starts the
-stopline node (off by default, see clothoid_lane/launch/lane.launch.py).
+on limo2); open clothoid_debug/rviz/decision.rviz to watch it. `use_stopline:=true` / `use_speed_zone:=true`
+start the stopline / speed_zone nodes (off by default, see clothoid_lane/launch/lane.launch.py).
 
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
@@ -44,6 +44,7 @@ def generate_launch_description():
         DeclareLaunchArgument('viz', default_value='false',
                               description='start decision_viz (clothoid_debug)'),
         DeclareLaunchArgument('use_stopline', default_value='false'),
+        DeclareLaunchArgument('use_speed_zone', default_value='false'),
         DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2 (clothoid_lane/config)'),
         DeclareLaunchArgument('backend', default_value='ultralytics',
@@ -65,7 +66,8 @@ def generate_launch_description():
 
         include('clothoid_lane', 'lane.launch.py',
                 {'debug': debug, 'camera': LaunchConfiguration('camera'),
-                 'use_stopline': LaunchConfiguration('use_stopline')}, enabled('use_lane')),
+                 'use_stopline': LaunchConfiguration('use_stopline'),
+                 'use_speed_zone': LaunchConfiguration('use_speed_zone')}, enabled('use_lane')),
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
