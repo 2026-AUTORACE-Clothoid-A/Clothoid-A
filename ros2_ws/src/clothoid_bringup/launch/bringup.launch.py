@@ -11,8 +11,9 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -53,8 +54,17 @@ def generate_launch_description():
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
                               description='limo_base: inner wheel limit in rad (official 28 deg)'),
 
-        # URDF: base_link -> laser_link, imu_link, wheels
-        include('limo_description', 'launch', 'load_urdf.launch.py'),
+        # URDF: base_link -> laser_link, imu_link (fixed joints). Same as limo_description's
+        # load_urdf.launch.py without joint_state_publisher: nothing uses the wheel joint TF, and it
+        # cost ~3.5 % of a core on limo2 (2026-11-09).
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            parameters=[{'robot_description': ParameterValue(
+                Command(['xacro ', PathJoinSubstitution(
+                    [FindPackageShare('limo_description'), 'urdf', 'limo_four_diff.xacro'])]),
+                value_type=str)}],
+        ),
 
         # colour camera lens of the DaBai, measured on limo2 2026-11-07 (wego had 0.23, 0.05, 0.06):
         # x 5 cm ahead of the front axle (base_link is midway between the axles, wheelbase 0.2),
