@@ -147,3 +147,20 @@ def test_near_line_not_a_crosswalk_or_a_dash_or_too_far():
     assert not d.detect_warped(_warped(dashes=True))
     assert not d.detect_warped(_warped((120, 135)))           # still 0.8 m ahead
     assert not d.detect_warped(_warped())
+
+
+def test_near_line_window_warp_matches_the_full_warp():
+    """detect() warps only its window; it must judge the same as the full bird's-eye view."""
+    import cv2
+    from clothoid_lane.lane_detector import make_warp_matrix
+    w = LaneParams(x_h=60, x_l=327, y_h=91, y_l=2)    # limo2
+    d = NearLineDetector(NearLineParams(warp=w))
+    full = make_warp_matrix(w)
+    rng = np.random.default_rng(0)
+    for row in (300, 380, 420, 450, 470):
+        img = (rng.random((480, 640, 3)) * 50).astype(np.uint8)
+        img[row:row + 12] = 235
+        warped = cv2.warpPerspective(img, full, (320, 240), flags=cv2.INTER_LINEAR)
+        assert d.detect(img) == d.detect_warped(warped)
+    img = np.zeros((480, 640, 3), np.uint8); img[455:470] = 235
+    assert d.detect(img)

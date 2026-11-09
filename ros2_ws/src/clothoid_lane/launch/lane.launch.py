@@ -31,9 +31,9 @@ def generate_launch_description():
         DeclareLaunchArgument('debug', default_value='false'),
         DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2 (config/camera_*.yaml)'),
-        # off by default to save CPU (limo2 2026-11-09: stopline ~84 % of a core). Off means no
-        # /stopline_detected or /stopline_near: mission then never raises /parking_flag at a stop line
-        # and never stops for the pedestrian / traffic light, so start parking with /parking_flag.
+        # stopline publishes only /stopline_near (single stop line in front, the parking trigger).
+        # Off by default to save CPU; off means mission never raises /parking_flag at a stop line,
+        # so start parking with /parking_flag (fullpark on limo2 turns it on).
         DeclareLaunchArgument('use_stopline', default_value='false'),
         node('lane_main', 'lane_main', 'lane.yaml'),
         # speed_zone (floor colour -> /speed_limit) is not started any more: not needed on the 2026 track

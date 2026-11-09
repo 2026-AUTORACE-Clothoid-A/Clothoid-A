@@ -101,36 +101,60 @@ class NearLineParams:
 
 
 class NearLineDetector:
+    """Only the part of the warped image it needs is warped (rows `beyond_top`.., the central
+    2 x `half_width` columns, about a fifth of the bird's-eye view), so it is cheap enough to run
+    on every frame."""
+
     def __init__(self, params: NearLineParams):
         self.configure(params)
 
     def configure(self, params: NearLineParams) -> None:
-        self._matrix = make_warp_matrix(params.warp)
+        full = make_warp_matrix(params.warp)
+        w, h = params.warp.warp_w, params.warp.warp_h
+        if not (0 < params.half_width <= w // 2 and 0 <= params.beyond_top < h - params.band_rows
+                and params.beyond_bottom <= h):
+            raise ValueError('near line window outside the warped image')
+        self._c0 = w // 2 - params.half_width
+        self._top = params.beyond_top
+        # shift the output so (c0, beyond_top) of the warped image lands at (0, 0)
+        shift = np.array([[1, 0, -self._c0], [0, 1, -self._top], [0, 0, 1]], dtype=np.float64)
+        self._roi_matrix = shift @ full
+        self._roi_size = (2 * params.half_width, h - self._top)
         self.p = params
+        self.last_mask = None     # window judged last (debug image)
 
     def detect(self, bgr: np.ndarray) -> bool:
-        p = self.p
-        warped = cv2.warpPerspective(bgr, self._matrix, (p.warp.warp_w, p.warp.warp_h),
-                                     flags=cv2.INTER_LINEAR)
-        return self.detect_warped(warped)
+        roi = cv2.warpPerspective(bgr, self._roi_matrix, self._roi_size, flags=cv2.INTER_LINEAR)
+        return self._judge(self._mask(roi))
 
     def detect_warped(self, warped: np.ndarray) -> bool:
+        """Same test on an already warped full bird's-eye image (tests, replay tools)."""
         p = self.p
-        hsv = cv2.cvtColor(cv2.GaussianBlur(warped, (5, 5), 0), cv2.COLOR_BGR2HSV)
+        roi = warped[self._top:, self._c0:self._c0 + 2 * p.half_width]
+        return self._judge(self._mask(roi))
+
+    def _mask(self, bgr: np.ndarray) -> np.ndarray:
+        p = self.p
+        hsv = cv2.cvtColor(cv2.GaussianBlur(bgr, (5, 5), 0), cv2.COLOR_BGR2HSV)
         white = cv2.inRange(hsv, np.array(p.hsv_lower), np.array(p.hsv_upper)) > 0
-        gray = cv2.GaussianBlur(cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY), (5, 5), 0) > p.gray_low
-        mask = white & gray
-        h, w = mask.shape
-        c0, c1 = w // 2 - p.half_width, w // 2 + p.half_width
-        if mask[p.beyond_top:p.beyond_bottom, c0:c1].mean() >= p.max_beyond:
+        gray = cv2.GaussianBlur(cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY), (5, 5), 0) > p.gray_low
+        return white & gray
+
+    def _judge(self, mask: np.ndarray) -> bool:
+        """mask: warped rows beyond_top.. (bottom of the bird's-eye view), central columns."""
+        p = self.p
+        self.last_mask = mask
+        if mask[:p.beyond_bottom - self._top].mean() >= p.max_beyond:
             return False      # crosswalk (or other markings) right past the line
-        band = mask[h - p.band_rows:, c0:c1]
+        band = mask[-p.band_rows:]
         need = p.min_run * band.shape[1]
+        # longest unbroken white run per row, all rows at once
+        edges = np.diff(np.pad(band.astype(np.int8), ((0, 0), (1, 1))), axis=1)
         rows = 0
-        for row in band:
-            # longest unbroken white run in this row
-            edges = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
-            starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
-            if len(starts) and (ends - starts).max() >= need:
+        for r in range(band.shape[0]):
+            starts = np.flatnonzero(edges[r] == 1)
+            if len(starts) and (np.flatnonzero(edges[r] == -1) - starts).max() >= need:
                 rows += 1
-        return rows >= p.min_rows
+                if rows >= p.min_rows:
+                    return True
+        return False
