@@ -13,3 +13,4 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
+    parking_at_stopline: true   # sign_parking arms, the next stop line raises /parking_flag
