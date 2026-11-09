@@ -1,4 +1,4 @@
-"""decision_viz alone. full.launch.py starts it with `debug:=true`, bag.launch.py always."""
+"""decision_viz alone. full.launch.py starts it with `viz:=true`, bag.launch.py always."""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution

@@ -5,7 +5,9 @@
     ros2 launch clothoid_bringup full.launch.py debug:=true backend:=ultralytics model_path:=/path/best.pt
     ros2 launch clothoid_bringup full.launch.py camera:=limo2      # per car warp, see clothoid_lane/config
 
-`debug:=true` also starts clothoid_debug/decision_viz; open clothoid_debug/rviz/decision.rviz to watch it.
+`viz:=true` starts clothoid_debug/decision_viz (off by default, even with debug:=true: ~50 % of a core
+on limo2); open clothoid_debug/rviz/decision.rviz to watch it. `use_stopline:=true` starts the
+stopline node (off by default, see clothoid_lane/launch/lane.launch.py).
 
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
@@ -39,6 +41,9 @@ def generate_launch_description():
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('viz', default_value='false',
+                              description='start decision_viz (clothoid_debug)'),
+        DeclareLaunchArgument('use_stopline', default_value='false'),
         DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2 (clothoid_lane/config)'),
         DeclareLaunchArgument('backend', default_value='ultralytics',
@@ -58,7 +63,8 @@ def generate_launch_description():
                 args={name: LaunchConfiguration(name) for name in platform_args}),
 
         include('clothoid_lane', 'lane.launch.py',
-                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_lane')),
+                {'debug': debug, 'camera': LaunchConfiguration('camera'),
+                 'use_stopline': LaunchConfiguration('use_stopline')}, enabled('use_lane')),
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
@@ -69,7 +75,7 @@ def generate_launch_description():
         include('clothoid_finish', 'finish.launch.py',
                 {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_finish')),
         include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
-        # with debug on, also publish what rviz/decision.rviz shows
+        # what rviz/decision.rviz shows, only with viz:=true
         include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},
-                enabled('debug')),
+                enabled('viz')),
     ])
