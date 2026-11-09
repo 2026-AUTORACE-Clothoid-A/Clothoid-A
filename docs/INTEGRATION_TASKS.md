@@ -20,7 +20,7 @@
 - [x] `limo_base`에 `steering_scale`, `max_inner_angle`, `cmd_timeout` 인자를 넘기도록 bringup·full 연결(기본값은 공식값, 확정은 바닥 시험 뒤). 2026-11-04 PC(Humble)에서 빌드와 `--show-args`만 확인, Jetson 실행 전.
 - [x] 안전 장치(2026-11-04, 브랜치 `feature/mux-mission`): `require_arm`(기본 `false`로 변경 2026-11-09, 아래 "첫 자율 실행 절차"), `mux_output`(`/cmd_vel_dry`면 섀도 주행).
 - [x] `latency_monitor`(2026-11-05, `clothoid_bringup`): 토픽별 Hz·최대 끊김·header 기준 나이, `cmd_vel_*`는 원본 센서 stamp부터의 지연, mux 승자 집계. `full.launch.py use_latency_monitor:=true latency_csv:=~/bags/lat.csv`. bag 재생(PC)에서 `/scan` 도착 시 나이 약 97 ms(스탬프가 회전 시작), 카메라→`/cmd_vel_lane` 17~35 ms. Jetson에서 다시 잰다.
-- [x] 오프라인 분석 도구 `tools/offline_pipeline/`(bag을 현재 yaml로 모든 검출기에 돌려 타임라인·지도·디버그 그림), `tools/mux_arm_test.py`.
+- [ ] 오프라인 분석 도구 `tools/offline_pipeline/`: 차량별 warp와 `lane_width_m`으로 바뀐 lane 설정에 맞춘 뒤 별도 PR로 올린다(2026-11-09 PR에서 제외, 코드는 커밋 9c1608c에 있음). `tools/mux_arm_test.py`는 포함.
 - [x] `scripts/setup_jetson.sh`(`--check`, `--no-build` 지원), `requirements-jetson.txt`(dl_env용, ultralytics만). Docker에서 `--check` 동작만 확인했고 Jetson 실행은 아직.
 - [ ] limo1에서 `bash scripts/setup_jetson.sh --check` 후 설치, limo2에서도 같은 결과인지 확인.
 
