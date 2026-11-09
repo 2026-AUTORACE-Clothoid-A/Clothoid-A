@@ -41,7 +41,8 @@ class MissionParams:
     arm_timeout_sec: float = 8.0       # a sign/light seen this long ago without a stop line expires
     cooldown_sec: float = 15.0         # ignore the same trigger after a stop
     use_stop_line: bool = True         # stop with FinishCore (see the docstring)
-    approach_speed: float = 0.2        # m/s under lane_main while armed, before FinishCore drives
+    approach_speed: float = 0.0        # m/s while armed before the stop line is confirmed; 0 = no
+                                       # limit (the car slows only from the confirmed line, ramp)
     # fork (A/B): lane side to follow when the sign points left / right
     fork_left_direction: int = 0       # lane_main: 0 left lane, 1 right lane, 2 both
     fork_right_direction: int = 1
@@ -104,7 +105,10 @@ class MissionLogic:
             limits.append(p.slow_speed)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
         if arm:
-            limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
+            if inputs.line_speed is not None:
+                limits.append(inputs.line_speed)
+            elif p.approach_speed > 0.0:
+                limits.append(p.approach_speed)
         return Outputs(
             state=self.state,
             stop=self.state != DRIVE,

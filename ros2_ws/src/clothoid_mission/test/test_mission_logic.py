@@ -124,8 +124,9 @@ def test_parking_at_the_sign_when_asked():
 def test_sign_arms_stop_line_and_its_arrival_holds_the_car():
     logic = MissionLogic(MissionParams(pedestrian_wait_sec=3.5))
     out = run(logic, 0.0, 'sign_pedestrian')
-    assert out.stop_arm and not out.stop and out.speed_limit == 0.2   # until stop_line answers
-    assert run(logic, 1.0, phase='search', speed=0.2).stop_arm
+    assert out.stop_arm and not out.stop and out.speed_limit is None  # no slowing on the sign
+    out = run(logic, 1.0, phase='search')
+    assert out.stop_arm and out.speed_limit is None                    # nor while looking
     out = run(logic, 2.0, phase='commit', speed=0.09)
     assert out.speed_limit == 0.09 and not out.stop                    # finish's ramp
     out = run(logic, 3.0, phase='arrived', speed=0.0)
@@ -153,3 +154,10 @@ def test_search_without_a_line_expires():
     logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
     run(logic, 0.0, 'sign_pedestrian')
     assert not run(logic, 9.0, phase='search').stop_arm
+
+
+
+def test_approach_speed_limits_before_the_line_when_set():
+    logic = MissionLogic(MissionParams(approach_speed=0.4))
+    assert run(logic, 0.0, 'sign_pedestrian').speed_limit == 0.4
+    assert run(logic, 1.0, phase='commit', speed=0.15).speed_limit == 0.15
