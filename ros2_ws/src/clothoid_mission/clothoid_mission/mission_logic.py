@@ -167,31 +167,5 @@ class MissionLogic:
             self.light_armed_at = None
 
 
-def classes_seen(detections: Iterable, min_sign_height: int = 0,
-                 min_light_height: int = 0) -> Set[str]:
-    """Classes in one detection message, without boxes too small to be ours.
-
-    A sign whose box is lower than `min_sign_height` px is far away or by another road (the 9 cm
-    sign face is ~29 px high 1.5 m ahead, ~15 px 3 m ahead with the limo2 camera, fy 489);
-    `min_light_height` does the same for traffic lights. 0 = no limit.
-    """
-    seen = set()
-    for d in detections:
-        h = d.y_max - d.y_min
-        limit = min_light_height if d.class_name.startswith('traffic_light') else \
-            min_sign_height if d.class_name.startswith('sign_') else 0
-        if h >= limit:
-            seen.add(d.class_name)
-    return seen
-
-
-class Consecutive:
-    """A class counts only after `frames` detection messages in a row have it (YOLO flicker)."""
-
-    def __init__(self, frames: int = 3):
-        self.frames = frames
-        self.count = {}
-
-    def update(self, seen: Set[str]) -> Set[str]:
-        self.count = {c: self.count.get(c, 0) + 1 for c in seen}
-        return {c for c, n in self.count.items() if n >= self.frames}
+def classes_seen(detections: Iterable) -> Set[str]:
+    return {d.class_name for d in detections}

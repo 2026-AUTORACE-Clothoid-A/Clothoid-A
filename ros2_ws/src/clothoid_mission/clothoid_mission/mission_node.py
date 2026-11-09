@@ -35,7 +35,7 @@ from std_msgs.msg import Bool, Float32, Int32, String
 
 from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
-    Consecutive, Inputs, MissionLogic, MissionParams, classes_seen)
+    Inputs, MissionLogic, MissionParams, classes_seen)
 
 # FinishCore phase -> what mission_logic expects
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
@@ -77,11 +77,6 @@ class MissionNode(Node):
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line older than this are dropped
         self.declare_parameter('refresh_sec', 1.0)
-        # YOLO detections that count: boxes at least this high (px, 0 = any) and in this many
-        # detection messages in a row (signs beside / across the track slowed the car, limo2 2026-11-10)
-        self.declare_parameter('min_sign_box_height', 25)
-        self.declare_parameter('min_light_box_height', 0)
-        self.declare_parameter('detection_frames', 3)
 
         d = MissionParams()
         self.declare_parameter('slow_speed', d.slow_speed)
@@ -107,7 +102,6 @@ class MissionNode(Node):
             parking_at_stopline=get('parking_at_stopline')))
 
         self.seen, self.seen_time = set(), None
-        self.consecutive = Consecutive(get('detection_frames'))
         self.stopline, self.stopline_time = False, None
         self.parking_done = False
         self.sign_time = None            # last /parking_sign true
@@ -156,9 +150,7 @@ class MissionNode(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_detections(self, msg: DetectionArray):
-        get = lambda n: self.get_parameter(n).value  # noqa: E731
-        near = classes_seen(msg.detections, get('min_sign_box_height'), get('min_light_box_height'))
-        self.seen, self.seen_time = self.consecutive.update(near), self.now_sec()
+        self.seen, self.seen_time = classes_seen(msg.detections), self.now_sec()
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()
