@@ -77,6 +77,9 @@ class MissionNode(Node):
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line older than this are dropped
         self.declare_parameter('refresh_sec', 1.0)
+        self.declare_parameter('light_max_offset_height_ratio', 3.5)
+        self.declare_parameter('sign_max_offset_height_ratio', 5.0)
+        self.declare_parameter('fork_max_offset_height_ratio', 10.0)
 
         d = MissionParams()
         self.declare_parameter('slow_speed', d.slow_speed)
@@ -150,7 +153,13 @@ class MissionNode(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_detections(self, msg: DetectionArray):
-        self.seen, self.seen_time = classes_seen(msg.detections), self.now_sec()
+        self.seen = classes_seen(
+            msg.detections, camera_center_x=self.cam.cx,
+            light_max_offset_height_ratio=self.get_parameter(
+                'light_max_offset_height_ratio').value,
+            sign_max_offset_height_ratio=self.get_parameter('sign_max_offset_height_ratio').value,
+            fork_max_offset_height_ratio=self.get_parameter('fork_max_offset_height_ratio').value)
+        self.seen_time = self.now_sec()
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()

@@ -167,5 +167,35 @@ class MissionLogic:
             self.light_armed_at = None
 
 
-def classes_seen(detections: Iterable) -> Set[str]:
-    return {d.class_name for d in detections}
+def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
+                 light_max_offset_height_ratio: float = 3.5,
+                 sign_max_offset_height_ratio: float = 5.0,
+                 fork_max_offset_height_ratio: float = 10.0) -> Set[str]:
+    """Classes used by the mission, excluding boxes far to the side for their size.
+
+    abs(box centre x - camera principal x) / box height is a distance-normalised
+    horizontal offset. On the start straight, the adjacent track's red light was
+    5.3; on our signal approach it was 2.9. Signs need a separate limit: the valid
+    bump/pedestrian signs reached 3.9, the adjacent parking sign was over 9, and
+    the fork sign reached 9.4 while approaching from the outer lane.
+    A configured limit <= 0 disables that group's filter for recorded comparisons.
+    """
+    seen = set()
+    for d in detections:
+        if d.class_name.startswith('traffic_light_'):
+            limit = light_max_offset_height_ratio
+        elif d.class_name in ('sign_left', 'sign_right'):
+            limit = fork_max_offset_height_ratio
+        elif d.class_name.startswith('sign_'):
+            limit = sign_max_offset_height_ratio
+        else:
+            limit = 0.0
+        if limit > 0:
+            height = d.y_max - d.y_min
+            if height <= 0 or d.x_max <= d.x_min:
+                continue
+            offset = abs((d.x_min + d.x_max) / 2.0 - camera_center_x)
+            if offset > limit * height:
+                continue
+        seen.add(d.class_name)
+    return seen

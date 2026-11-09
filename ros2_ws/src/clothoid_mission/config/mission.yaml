@@ -5,6 +5,15 @@ mission:
     rate_hz: 20.0
     input_timeout: 0.5          # detections / stop line older than this count as "not seen"
     refresh_sec: 1.0            # direction / parking flag re-sent this often
+    # abs(light box centre x - camera principal x) / box height. Start-straight
+    # adjacent light: 5.3; own signal approach: 2.9. Initial threshold, validate on
+    # the track. Applies to every light colour; 0.0 disables that group's filter.
+    light_max_offset_height_ratio: 3.5
+    # Smaller sign faces need a wider ratio than lights. Recorded bump/pedestrian:
+    # <= 3.9; adjacent parking sign at the start: 9.1~12.5, own parking sign: ~4.3.
+    sign_max_offset_height_ratio: 5.0  # pedestrian, slow, bump, parking; initial track setting
+    # Fork signs can enter at the image edge from an outer lane (recorded up to 9.4).
+    fork_max_offset_height_ratio: 10.0  # sign_left / sign_right; initial track setting
     slow_speed: 0.2             # rules: 0.2 m/s or less
     slow_hold_sec: 4.0          # bump length not fixed in the rules yet
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s
