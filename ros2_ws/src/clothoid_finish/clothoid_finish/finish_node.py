@@ -69,8 +69,11 @@ class FinishNode(Node):
         self.done_pub = self.create_publisher(Bool, get('done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
         self.debug_pub = self.create_publisher(Image, get('debug_topic'), 1) if self.debug else None
-        image_type = CompressedImage if self.compressed else Image
-        self.create_subscription(image_type, get('image_topic'), self.on_image, qos_profile_sensor_data)
+        # the camera is only subscribed while following (after /parking_done until STOP/ABORT):
+        # receiving every frame while idle cost CPU for nothing, and a compressed subscriber makes
+        # the camera driver JPEG-encode every frame
+        self.image_type = CompressedImage if self.compressed else Image
+        self.image_sub = None
         self.create_subscription(CameraInfo, get('camera_info_topic'), self.on_info, qos_profile_sensor_data)
         self.create_subscription(Imu, get('imu_topic'), self.on_imu, qos_profile_sensor_data)
         self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data)
@@ -109,6 +112,18 @@ class FinishNode(Node):
     def on_start(self, msg: Bool):
         if msg.data and self.core and self.core.phase == Phase.IDLE:
             self.core.start(self.now())
+            self._image_on(True)
+
+    def _image_on(self, on: bool):
+        if on and self.image_sub is None:
+            self.image_sub = self.create_subscription(
+                self.image_type, self.get_parameter('image_topic').value, self.on_image,
+                qos_profile_sensor_data)
+            self.get_logger().info('camera subscribed')
+        elif not on and self.image_sub is not None:
+            self.destroy_subscription(self.image_sub)
+            self.image_sub = None
+            self.get_logger().info('camera released')
 
     def on_image(self, msg):
         if self.core is None or self.core.phase not in (Phase.FOLLOW, Phase.COMMIT):
@@ -161,6 +176,8 @@ class FinishNode(Node):
             text = f'{self.phase.value}: {self.core.reason}'
             self.state_pub.publish(String(data=text))
             self.get_logger().info(text)
+            if self.phase in (Phase.STOP, Phase.ABORT):
+                self._image_on(False)
         if out is None:
             return
         if self.phase in (Phase.FOLLOW, Phase.COMMIT) and self.stale():
