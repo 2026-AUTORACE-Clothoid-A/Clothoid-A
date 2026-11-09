@@ -153,3 +153,29 @@ def test_search_without_a_line_expires():
     logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
     run(logic, 0.0, 'sign_pedestrian')
     assert not run(logic, 9.0, phase='search').stop_arm
+
+
+# ---- which detections count ----
+
+class Box:
+    def __init__(self, name, h):
+        self.class_name, self.y_min, self.y_max = name, 100, 100 + h
+
+
+def test_small_sign_boxes_do_not_count():
+    from clothoid_mission.mission_logic import classes_seen
+    dets = [Box('sign_pedestrian', 20), Box('sign_slow', 30), Box('traffic_light_red', 10)]
+    assert classes_seen(dets, 25, 0) == {'sign_slow', 'traffic_light_red'}
+    assert classes_seen(dets, 25, 12) == {'sign_slow'}
+    assert classes_seen(dets) == {'sign_pedestrian', 'sign_slow', 'traffic_light_red'}
+
+
+def test_a_class_counts_after_consecutive_frames():
+    from clothoid_mission.mission_logic import Consecutive
+    c = Consecutive(3)
+    assert c.update({'sign_pedestrian'}) == set()
+    assert c.update({'sign_pedestrian'}) == set()
+    assert c.update({'sign_pedestrian', 'sign_slow'}) == {'sign_pedestrian'}
+    assert c.update({'sign_slow'}) == set()            # pedestrian gap resets it, slow only 2
+    assert c.update({'sign_slow'}) == {'sign_slow'}
+    assert Consecutive(1).update({'x'}) == {'x'}
