@@ -31,7 +31,7 @@ def generate_launch_description():
     def enabled(name):
         return IfCondition(LaunchConfiguration(name))
 
-    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_mission']
+    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_finish', 'use_mission']
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'steering_scale',
                      'max_inner_angle']
     debug = LaunchConfiguration('debug')
@@ -65,6 +65,9 @@ def generate_launch_description():
                  'show': LaunchConfiguration('show')}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
+        # after /parking_done: left yellow line to the end line (needs the camera)
+        include('clothoid_finish', 'finish.launch.py',
+                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_finish')),
         include('clothoid_mission', 'mission.launch.py', condition=enabled('use_mission')),
         # with debug on, also publish what rviz/decision.rviz shows
         include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},

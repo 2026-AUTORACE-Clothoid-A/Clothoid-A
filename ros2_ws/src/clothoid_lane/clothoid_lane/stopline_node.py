@@ -14,7 +14,7 @@ from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import LaneParams
-from clothoid_lane.stopline import StopLineDetector, StopLineParams
+from clothoid_lane.stopline import NearLineDetector, NearLineParams, StopLineDetector, StopLineParams
 
 
 class StopLineNode(Node):
@@ -42,8 +42,16 @@ class StopLineNode(Node):
         self.declare_parameter('min_count', d.min_count)
         self.declare_parameter('min_white_ratio', d.min_white_ratio)
         self.declare_parameter('debug', False)
+        # one stop line right in front (bottom of the warped image): the parking trigger
+        self.declare_parameter('near_topic', '/stopline_near')
+        self.declare_parameter('near_frames', 2)      # consecutive frames before it counts
 
         self.detector = StopLineDetector(self._build(lambda n: self.get_parameter(n).value))
+        p = self.detector.p
+        self.near = NearLineDetector(NearLineParams(warp=p.warp, hsv_lower=p.hsv_lower,
+                                                    hsv_upper=p.hsv_upper, gray_low=p.gray_low))
+        self.near_count = 0
+        self.near_pub = self.create_publisher(Bool, self.get_parameter('near_topic').value, 1)
 
         self.pub = self.create_publisher(Bool, self.get_parameter('stopline_topic').value, 1)
         self.debug_pub = self.create_publisher(
@@ -70,6 +78,9 @@ class StopLineNode(Node):
         try:
             self.detector.configure(
                 self._build(lambda n: proposed.get(n, self.get_parameter(n).value)))
+            p = self.detector.p
+            self.near.configure(NearLineParams(warp=p.warp, hsv_lower=p.hsv_lower,
+                                               hsv_upper=p.hsv_upper, gray_low=p.gray_low))
         except Exception as exc:
             return SetParametersResult(successful=False, reason=str(exc))
         return SetParametersResult(successful=True)
@@ -86,6 +97,8 @@ class StopLineNode(Node):
         if debug and result.debug_image is not None:
             self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
         self.pub.publish(Bool(data=bool(result.found)))
+        self.near_count = self.near_count + 1 if self.near.detect(bgr) else 0
+        self.near_pub.publish(Bool(data=self.near_count >= self.get_parameter('near_frames').value))
 
 
 def main(args=None):

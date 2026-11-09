@@ -75,3 +75,62 @@ class StopLineDetector:
         found = count >= p.min_count and white_ratio > p.min_white_ratio
         return StopLineResult(found=found, count=count, white_ratio=white_ratio,
                               debug_image=canvas)
+
+
+
+@dataclass
+class NearLineParams:
+    """One stop line across the lane at the bottom of the warped image (parking trigger).
+
+    Defaults are for the limo2 warp (320 x 240, rows 200..239 = 0.52..0.61 m ahead of base_link,
+    120 px = 0.35 m across). A row counts when one unbroken white run covers `min_run` of the
+    band width (crosswalk blocks have gaps); the line needs `min_rows` such rows; a stop line with
+    crosswalk blocks beyond it (rows `beyond_rows`, white share over `max_beyond`) is not one.
+    """
+    warp: LaneParams = field(default_factory=LaneParams)
+    band_rows: int = 40
+    half_width: int = 60
+    min_run: float = 0.7
+    min_rows: int = 3
+    beyond_top: int = 60
+    beyond_bottom: int = 190
+    max_beyond: float = 0.10
+    hsv_lower: tuple = (0, 0, 150)
+    hsv_upper: tuple = (180, 60, 255)
+    gray_low: int = 130
+
+
+class NearLineDetector:
+    def __init__(self, params: NearLineParams):
+        self.configure(params)
+
+    def configure(self, params: NearLineParams) -> None:
+        self._matrix = make_warp_matrix(params.warp)
+        self.p = params
+
+    def detect(self, bgr: np.ndarray) -> bool:
+        p = self.p
+        warped = cv2.warpPerspective(bgr, self._matrix, (p.warp.warp_w, p.warp.warp_h),
+                                     flags=cv2.INTER_LINEAR)
+        return self.detect_warped(warped)
+
+    def detect_warped(self, warped: np.ndarray) -> bool:
+        p = self.p
+        hsv = cv2.cvtColor(cv2.GaussianBlur(warped, (5, 5), 0), cv2.COLOR_BGR2HSV)
+        white = cv2.inRange(hsv, np.array(p.hsv_lower), np.array(p.hsv_upper)) > 0
+        gray = cv2.GaussianBlur(cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY), (5, 5), 0) > p.gray_low
+        mask = white & gray
+        h, w = mask.shape
+        c0, c1 = w // 2 - p.half_width, w // 2 + p.half_width
+        if mask[p.beyond_top:p.beyond_bottom, c0:c1].mean() >= p.max_beyond:
+            return False      # crosswalk (or other markings) right past the line
+        band = mask[h - p.band_rows:, c0:c1]
+        need = p.min_run * band.shape[1]
+        rows = 0
+        for row in band:
+            # longest unbroken white run in this row
+            edges = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
+            starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
+            if len(starts) and (ends - starts).max() >= need:
+                rows += 1
+        return rows >= p.min_rows

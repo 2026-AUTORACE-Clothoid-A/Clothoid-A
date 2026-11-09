@@ -11,7 +11,10 @@ Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking
   * traffic light    -> arm on red (and yellow if `stop_on_yellow`); stop at the stop line,
                         go when green is seen
   * left / right sign (fork) -> direction value for lane_main
-  * parking sign     -> parking flag (latched)
+  * parking sign     -> arm; parking flag (latched) at the next single stop line right in front
+                        (`parking_line`: /stopline_near, not the stripe detector, which needs a
+                        crosswalk; the lidar search starts there, about 2 m before the bay;
+                        `parking_at_stopline` false: at the sign)
 Driving nodes keep working underneath: `stop` only means "publish zero on the state input".
 """
 from dataclasses import dataclass, field
@@ -35,6 +38,8 @@ class MissionParams:
     # fork (A/B): lane side to follow when the sign points left / right
     fork_left_direction: int = 0       # lane_main: 0 left lane, 1 right lane, 2 both
     fork_right_direction: int = 1
+    # parking: the sign is seen from afar, the stop line before the bays is where the search starts
+    parking_at_stopline: bool = True
 
 
 @dataclass
@@ -42,6 +47,7 @@ class Inputs:
     now: float
     seen: Set[str] = field(default_factory=set)   # class names visible right now
     stopline: bool = False
+    parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
 
 
@@ -61,6 +67,7 @@ class MissionLogic:
         self.slow_until = -1.0
         self.direction: Optional[int] = None
         self.parking_flag = False
+        self.parking_armed = False
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
@@ -76,6 +83,8 @@ class MissionLogic:
         elif 'sign_right' in seen:
             self.direction = p.fork_right_direction
         if 'sign_parking' in seen:
+            self.parking_armed = True
+        if self.parking_armed and (inputs.parking_line or not p.parking_at_stopline):
             self.parking_flag = True
 
         self._update_stop(inputs)

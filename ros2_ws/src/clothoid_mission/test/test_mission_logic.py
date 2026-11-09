@@ -8,8 +8,8 @@ from clothoid_mission.mission_logic import (  # noqa: E402
     DRIVE, STOPPED_LIGHT, STOPPED_PEDESTRIAN, Inputs, MissionLogic, MissionParams)
 
 
-def run(logic, now, *seen, stopline=False):
-    return logic.step(Inputs(now=now, seen=set(seen), stopline=stopline))
+def run(logic, now, *seen, stopline=False, line=False):
+    return logic.step(Inputs(now=now, seen=set(seen), stopline=stopline, parking_line=line))
 
 
 def test_idle_drive_has_no_outputs():
@@ -94,7 +94,20 @@ def test_fork_signs_set_the_direction_for_lane_main():
     assert run(logic, 2.0, 'sign_right').direction == 1
 
 
-def test_parking_sign_latches_the_parking_flag():
+def test_parking_sign_arms_and_the_stop_line_raises_the_flag():
     logic = MissionLogic(MissionParams())
+    assert not run(logic, 0.0, 'sign_parking').parking_flag    # sign seen from afar: armed only
+    assert not run(logic, 2.0).parking_flag                      # sign out of view, still armed
+    assert not run(logic, 2.5, stopline=True).parking_flag       # crosswalk stripes: not this one
+    assert run(logic, 3.0, line=True).parking_flag               # the single stop line in front
+    assert run(logic, 10.0).parking_flag                         # latched
+
+
+def test_stop_line_without_the_sign_does_not_park():
+    logic = MissionLogic(MissionParams())
+    assert not run(logic, 0.0, line=True).parking_flag
+
+
+def test_parking_at_the_sign_when_asked():
+    logic = MissionLogic(MissionParams(parking_at_stopline=False))
     assert run(logic, 0.0, 'sign_parking').parking_flag
-    assert run(logic, 10.0).parking_flag

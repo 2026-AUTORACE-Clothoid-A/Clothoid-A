@@ -1,50 +1,34 @@
-# T-parking, ported from 2025 parking_rect.py. The step table is the 2025 open loop sequence
-# for the 2025 course; the 2026 T-parking (3 stages, parked LIMOs on both sides) needs new
-# rows: edit step_duration / step_speed / step_steer together (same length, one row per step).
-# Floats need a decimal point everywhere (0.5, not 0): ROS2 rejects integers in double arrays.
-#
-#   step  what (2025 comments)                         duration  speed   steer(rad, + left)
-#    0    forward, steer right                           0.5      0.195  -0.34
-#    1    LIDAR STEP: turn right until the closest        -       0.2    -0.34   (sensor_step: 1)
-#         point passes angle_limit / range_limit
-#    2    reverse, steer left (gap before direction)     0.5     -0.195   0.17
-#    3    reverse straight-ish                           2.2     -0.2     0.17
-#    4    reverse, steer right                           0.5     -0.195  -0.34
-#    5    reverse, steer right                           0.8     -0.2    -0.34
-#    6    forward, steer left                            0.5      0.195   0.34
-#    7    reverse, steer left (2025 label "STOP")        3.0     -0.195   0.34
-#    8    forward, steer right                           0.5      0.195  -0.34
-#    9    forward, steer right                           1.0      0.2    -0.34
-#   10    forward, steer left                            0.5      0.195   0.34
-#   11    forward, slight left                           2.2      0.2     0.17
+# T-parking 2026: lidar finds the empty bay between two parked LIMOs, one forward full-lock
+# arc in (rear-axle radius 0.46 m, limo2 floor sweep 2026-11-08), stop at the bay centre.
+# Every plan.* / bay.* field of planner.PlanParams / bay_finder.BayParams can be set here.
 parking:
   ros__parameters:
+    imu_topic: /imu
+    odom_topic: /odom
+    state_topic: /parking/state
+    rate_hz: 20.0
     wheelbase: 0.2
-    rate_hz: 10.0
-    step_duration: [0.5, 0.0, 0.5, 2.2, 0.5, 0.8, 0.5, 3.0, 0.5, 1.0, 0.5, 2.2]
-    step_speed: [0.195, 0.2, -0.195, -0.2, -0.195, -0.2, 0.195, -0.195, 0.195, 0.2, 0.195, 0.2]
-    step_steer: [-0.34, -0.34, 0.17, 0.17, -0.34, -0.34, 0.34, 0.34, -0.34, -0.34, 0.34, 0.17]
-    sensor_step: 1                 # -1 disables the lidar step
-    # the Tmini Plus only sees +-110 deg (+-1.92 rad), so 2025's -2.0 rad can never trigger and
-    # only range_limit ends the lidar step. Check the lidar frame orientation, then retune.
-    angle_limit: -2.0
-    range_limit: 0.34
-    sensor_step_max_sec: 3.0       # new: stop waiting for the lidar after this long
+    laser_x: 0.103             # laser_link ahead of base_link (URDF)
 
-    # start line (warp equal to lane.yaml, the rest are 2025 values to retune)
-    x_h: -28
-    x_l: 370
-    y_h: 70
-    y_l: 40
-    crop_x: 40
-    crop_y: 80
-    hsv_lower: [20, 165, 50]
-    hsv_upper: [60, 255, 255]
-    gray_low: 80
-    gray_high: 255
-    margin: 60
-    shift: 45
-    min_line_len: 20
-    trigger_row: 5
+    plan.side: -1.0            # bays on the right
+    # limo2, fitted to 5 parking bags against the lidar (2026-11-09): rear slides at full lock.
+    # Simulator: -p plan.rear_offset:=0.0 -p plan.odom_scale:=0.985 -p plan.turn_radius:=0.46
+    plan.rear_offset: 0.02
+    plan.odom_scale: 0.98
+    plan.turn_radius: 0.45
+    plan.search_speed: 0.2
+    plan.turn_speed: 0.2
+    plan.enter_speed: 0.1
+    plan.turn_lead: 0.03       # m earlier: wheels take ~0.2 s to reach lock (retune on the floor)
+    plan.turn_early_deg: 6.0   # 3.0 ended 3-4 deg over-rotated on limo2 (2026-11-09)
+    plan.max_search: 3.0       # m without a bay -> stop (ABORT)
+    plan.park_hold_sec: 3.0    # s standing in the bay, then back out the way it came in
+    plan.exit_enabled: true    # false: stay parked, /parking_done right after park_hold_sec
+    plan.exit_speed: 0.15
+    plan.exit_early_deg: 2.0
 
-    # debug (default false) is set by the launch argument `debug:=true`: true publishes /parking/debug_image and the closest-point marker
+    bay.near: 0.15             # lateral band where the parked cars' near ends are
+    bay.far: 0.80
+    bay.face_to_centre: 0.161  # half a LIMO (322 mm)
+
+    # debug (default false) is set by the launch argument `debug:=true`

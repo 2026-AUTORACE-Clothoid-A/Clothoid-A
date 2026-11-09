@@ -1,0 +1,14 @@
+# clothoid_finish: after /parking_done, follow the left yellow line and stop at the yellow end line.
+# Warp and camera pose come from clothoid_lane config/camera_<car>.yaml (launch argument camera:=).
+finish:
+  ros__parameters:
+    compressed: true
+    rate_hz: 20.0
+    speed: 0.2
+    lane_offset: 0.25          # m, left line centre from base_link: half the 0.5 m lane
+    hsv_lower: [18, 60, 90]    # = clothoid_lane lane.yaml
+    hsv_upper: [35, 255, 255]
+    stop_gap: 0.03             # m, front bumper short of the end line's near edge (negative: past it)
+    max_distance: 3.0          # m without an end line -> stop
+    rear_offset: 0.02          # dead reckoning as clothoid_parking (limo2 2026-11-09)
+    odom_scale: 0.98
