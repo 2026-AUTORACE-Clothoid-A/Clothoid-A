@@ -9,9 +9,8 @@ Publishes
 
 Light / pedestrian stop line (`use_stop_line`): while armed (YOLO saw the pedestrian sign / red light)
 this node runs clothoid_finish's FinishCore on the camera with the cross line in white
-(line_stop.py). lane_main keeps steering the whole time. The speed stays as it is until the stop line is confirmed
-(`approach_speed` 0); from then FinishCore's ramp min(0.2, 1.5 x remaining) goes to lane_main as
-/speed_limit, and its STOP holds the car.
+(line_stop.py). lane_main keeps steering the whole time: only FinishCore's speed (approach 0.2, then
+its ramp min(0.2, 1.5 x remaining)) goes to lane_main as /speed_limit, and its STOP holds the car.
 Its steering is not used (it follows the left yellow line, which the zigzag before the pedestrian
 crosswalk turned 9 deg off in the sim), so its left-line-lost abort is off (`lost_hold_sec` 1e9).
 The camera is subscribed only while armed, as in finish.
@@ -249,9 +248,9 @@ class MissionNode(Node):
             self.get_logger().info(f'line stop {self.core.phase.value}: {self.core.reason}')
             if self.core.phase in (Phase.STOP, Phase.ABORT):
                 self._image_on(False)
-        if cmd is None or self.core.phase != Phase.COMMIT:
-            return None                          # no limit until the line is confirmed
-        return float(cmd[0])                     # speed only (ramp): lane_main steers
+        if cmd is None or self.core.phase not in (Phase.FOLLOW, Phase.COMMIT):
+            return None
+        return float(cmd[0])                     # speed only: lane_main steers
 
     def on_parking_done(self, msg: Bool):
         self.parking_done = msg.data
