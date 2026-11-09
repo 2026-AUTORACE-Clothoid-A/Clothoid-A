@@ -14,7 +14,6 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
-from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
@@ -48,9 +47,7 @@ def generate_launch_description():
             Node(package='twist_mux', executable='twist_mux', name='twist_mux', output='screen',
                  parameters=[share('clothoid_bringup', 'config', 'twist_mux.yaml')],
                  remappings=[('cmd_vel_out', '/cmd_vel')]),
-            Node(package='clothoid_debug', executable='stop_viz', name='stop_viz', output='screen'),
-            Node(package='rviz2', executable='rviz2', name='rviz2', output='log',
-                 arguments=['-d', share('clothoid_debug', 'rviz', 'stop.rviz')],
-                 condition=IfCondition(LaunchConfiguration('rviz'))),
+            include('clothoid_debug', 'stop_viz.launch.py',
+                    {'rviz': LaunchConfiguration('rviz'), 'use_sim_time': 'true'}),
         ]),
     ])

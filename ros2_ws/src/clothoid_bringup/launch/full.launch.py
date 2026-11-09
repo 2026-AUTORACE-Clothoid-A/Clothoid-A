@@ -43,6 +43,8 @@ def generate_launch_description():
         DeclareLaunchArgument('debug', default_value='false'),
         DeclareLaunchArgument('viz', default_value='false',
                               description='start decision_viz (clothoid_debug)'),
+        DeclareLaunchArgument('stop_viz', default_value='false',
+                              description='start the stop line view: stop_viz + RViz rviz/stop.rviz'),
         DeclareLaunchArgument('use_stopline', default_value='false'),
         DeclareLaunchArgument('use_speed_zone', default_value='false'),
         DeclareLaunchArgument('camera', default_value='limo2',
@@ -80,6 +82,8 @@ def generate_launch_description():
         # mission also runs the light / pedestrian line stop (FinishCore, camera only while armed)
         include('clothoid_mission', 'mission.launch.py',
                 {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_mission')),
+        # YOLO boxes, mission state, stop line / stop point in RViz (rviz/stop.rviz), stop_viz:=true
+        include('clothoid_debug', 'stop_viz.launch.py', condition=enabled('stop_viz')),
         # what rviz/decision.rviz shows, only with viz:=true
         include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},
                 enabled('viz')),

@@ -4,7 +4,7 @@ Panels:
 Visualization Manager:
   Class: ""
   Global Options:
-    Fixed Frame: odom
+    Fixed Frame: base_link
     Frame Rate: 30
     Background Color: 30; 30; 30
   Displays:
