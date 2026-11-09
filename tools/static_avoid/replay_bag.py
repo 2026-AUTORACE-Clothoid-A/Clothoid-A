@@ -86,9 +86,9 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
             c = entry.update(s, tracker.distance, find_entry_line(bgr, cam, white))
             if c is not None:
                 rec['crossings'].append((s, c))
-            had = avoid.lane_frame
+            had = avoid.event
             fitter.on_frame(bgr, avoid, tracker, entry)
-            if avoid.lane_frame is not None and had is None:
+            if avoid.event != had and 'fit' in avoid.event:
                 rec['events'].append((s, avoid.event))
             continue
         if topic == '/odom':

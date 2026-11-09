@@ -212,10 +212,12 @@ def _floor_points(mask: np.ndarray, cam: CameraModel, p: ColourParams, sx: float
 
 
 def find_lane_lines(bgr: np.ndarray, cam: CameraModel, p: ColourParams, centre: float = 0.0,
-                    half_range: float = math.radians(10.0)) -> Optional[LaneObservation]:
+                    half_range: float = math.radians(10.0),
+                    white_only: bool = False) -> Optional[LaneObservation]:
     """White and yellow paint projected on the floor; one common direction for all the parallel lane
     lines (searched around `centre`, relative to the car), then a peak per line. Cross lines and
-    letters do not pile up along that direction."""
+    letters do not pile up along that direction. white_only: leave yellow out, the yellow cones standing
+    on the road at the section start would count as paint."""
     h, w = bgr.shape[:2]
     sx, sy = cam.width / float(w), cam.height_px / float(h)
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
@@ -225,6 +227,8 @@ def find_lane_lines(bgr: np.ndarray, cam: CameraModel, p: ColourParams, centre: 
     top = int(h * p.roi_top)
     white[:top] = 0
     yellow[:top] = 0
+    if white_only:
+        yellow[:] = 0
     groups = (('white', _floor_points(white, cam, p, sx, sy)),
               ('yellow', _floor_points(yellow, cam, p, sx, sy)))
     pts = np.vstack([g[1] for g in groups])

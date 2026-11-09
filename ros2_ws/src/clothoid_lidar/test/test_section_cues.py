@@ -108,3 +108,18 @@ def test_cross_line_does_not_turn_the_lane_direction():
     img = floor_image([lane_strip(0.25), lane_strip(-0.25), band(0.8, width=0.08)])
     obs = find_lane_lines(img, CAM, ColourParams(), 0.0, math.radians(15))
     assert obs is not None and abs(obs.angle) < math.radians(2)
+
+
+def test_white_only_ignores_yellow_paint_and_cones():
+    from clothoid_lidar.section_cues import find_lane_lines
+    cam = CameraModel()
+    img = np.zeros((480, 640, 3), np.uint8)
+    for y in (0.25, -0.25):
+        a = cam.floor_to_image(0.6, y)
+        b = cam.floor_to_image(1.4, y)
+        cv2.line(img, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (255, 255, 255), 5)
+    a, b = cam.floor_to_image(0.6, -0.1), cam.floor_to_image(1.4, 0.3)      # a yellow slant
+    cv2.line(img, (int(a[0]), int(a[1])), (int(b[0]), int(b[1])), (0, 220, 220), 40)
+    obs = find_lane_lines(img, cam, ColourParams(), 0.0, math.radians(20.0), white_only=True)
+    assert obs is not None and abs(obs.angle) < math.radians(2.0)
+    assert obs.lines and all(line.colour == 'white' for line in obs.lines)

@@ -505,3 +505,58 @@ def test_island_forbidden_when_measured_unless_nothing_else():
     # on the island already: still a plan, it must not freeze
     plan = plan_paths((5.0, 0.0, 0.0), 5.0, cm, 0, None, p, island=(4.4, 6.15), forbid_island=True)
     assert plan.feasible
+
+
+def _active_at_origin(p=None):
+    a = StaticAvoid(p or AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    return a
+
+
+def test_start_fit_turns_the_lanes_and_keeps_the_island():
+    a = _active_at_origin()
+    island = a.island
+    yaw = math.radians(-9.0)
+    assert a.on_start_fit(SectionFrame(0.0, 0.0, yaw))
+    assert a.island == island and a.island_source == 'estimate'
+    assert a.lane_pose((2.0, 0.0, 0.0))[1] != 0.0
+    assert not a.on_start_fit(SectionFrame(0.0, 0.0, 0.0))        # once
+
+
+def test_start_fit_refuses_a_big_turn():
+    a = _active_at_origin()
+    assert not a.on_start_fit(SectionFrame(0.0, 0.0, math.radians(25.0)))
+    assert a.lane_frame is None
+
+
+def test_entry_line_fit_replaces_the_start_fit():
+    a = _active_at_origin()
+    a.on_start_fit(SectionFrame(0.0, 0.0, math.radians(-9.0)))
+    assert a.on_lane_fit(SectionFrame(0.3, 0.0, math.radians(-8.0)))
+    assert a.entry_s == 0.0 and a.island_source == 'entry line'
+
+
+def test_tracking_runs_without_a_start_fit():
+    a = _active_at_origin()
+    a.track_from_start_heading()
+    assert a.lane_frame is a.frame
+
+
+@pytest.mark.parametrize('direction', [None, 0, 1])
+def test_past_the_island_front_always_hands_over_and_locks(direction):
+    a = _active_at_origin()
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    a.direction = direction
+    a.plan = None
+    assert a.control((a.island[0] + 0.01, 0.2, math.radians(30.0)), Inhibit()) is None
+    assert a.state != ACTIVE and a.locked
+
+
+def test_estimated_island_gets_a_margin():
+    a = _active_at_origin()
+    a.direction = 1
+    a.plan = None
+    s = a.island[0] + 0.2
+    assert a.control((s, 0.1, math.radians(30.0)), Inhibit()) is not None
+    assert a.state == ACTIVE
+    assert a.control((a.island[0] + a.p.island_past_estimate, 0.1, math.radians(30.0)), Inhibit()) is None

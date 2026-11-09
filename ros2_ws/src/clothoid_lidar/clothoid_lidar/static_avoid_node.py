@@ -65,6 +65,7 @@ class StaticAvoidNode(Node):
         # camera cues
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('image_every', 3)
+        self.declare_parameter('ignore_cone', False)      # test track only: its cone wall is beside the section
         self.declare_parameter('island_topic', '')        # '' = no island signal from the lane side
         self.declare_parameter('lane_node', '/lane_main')  # whose white_* tuning to follow
         cam = CameraModel()
@@ -231,9 +232,9 @@ class StaticAvoidNode(Node):
         crossing = self.entry.update(self.now(), self.tracker.distance, line)
         if crossing is not None:
             self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m')
-        had_lane = self.avoid.lane_frame
+        had_event = self.avoid.event
         self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry)
-        if self.avoid.lane_frame is not None and had_lane is None:
+        if self.avoid.event != had_event and 'fit' in self.avoid.event:
             self.get_logger().info(f'{self.avoid.event}: island {self.avoid.island[0]:.2f} m')
 
     def on_island(self, msg: PointStamped):
@@ -251,7 +252,8 @@ class StaticAvoidNode(Node):
             else None
         recent_state = (self.state_seen is not None
                         and t - self.state_seen <= self.get_parameter('state_window').value)
-        return Inhibit(cone_active=self.cone_active, red_ratio=red, parking=self.parking,
+        cone = self.cone_active and not self.get_parameter('ignore_cone').value
+        return Inhibit(cone_active=cone, red_ratio=red, parking=self.parking,
                        state_command=recent_state)
 
     def on_limos(self, msg: PoseArray):

@@ -22,10 +22,11 @@ static_avoid:
     release_tol: 0.10
     release_heading_deg: 10.0
     release_clear: 2.0          # m ahead, all lanes clear
-    # painted island. Fallback from the activation point (~1.5 m before the first LIMO; the 11-05
-    # bags put the true island at 3.6~5.5 m from it). Soft cost only.
-    island_s_min: 3.3            # fallback when the entry line was not seen
-    island_s_max: 5.0
+    # painted island. Fallback when the entry line was not seen, from the point the mission started:
+    # a start just before the entry line (1108 run 1 2 3 10 11) has the front at 4.61~4.74 m. A start
+    # far past the line (run 6~9, first obstacle at 3 m) has it at 2.7 m and gets this wrong.
+    island_s_min: 4.65
+    island_s_max: 6.40
     fork_commit: 2.0
     # the island from the white entry line (rule book p.4 drawing at scale); the camera sees the
     # line, the base crosses it, a start within entry_max_back of that anchors the section

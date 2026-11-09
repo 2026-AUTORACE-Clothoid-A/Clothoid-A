@@ -57,11 +57,14 @@ class AvoidParams:
     island_from_entry_min: float = 4.40
     island_from_entry_max: float = 6.15
     entry_max_back: float = 3.0       # m, an entry-line crossing this recent anchors the section
-    island_s_min: float = 3.3         # fallback, from the activation point
-    island_s_max: float = 5.0
+    island_s_min: float = 4.65       # m from the start, entry line not seen; 1108 run 1 2 3 10 11: 4.61~4.74
+    island_s_max: float = 6.40       # front + the island length of the rule drawing (1.75)
     island_tip: float = 0.25          # m, the painted island narrows to a point at both ends
     island_align_until: float = 0.3   # m before the island front: closer, hand over even if not aligned
     island_handover: float = 1.0      # m, hand over to lane_main when the island front is this close
+    # past the island front the road is lane_main's whatever the state: hand over and lock. Only an
+    # estimated island (no entry line seen) gets a margin
+    island_past_estimate: float = 0.5
     # past the entry line, something in lane 2 from here on is the island's sign stand, not a LIMO:
     # lane_main takes the car into A / B there (1108 run 4 started on it)
     island_object_margin: float = 0.25
@@ -122,6 +125,9 @@ class AvoidParams:
     lane_fit_lines: int = 2           # lines per frame
     lane_fit_spread_deg: float = 3.0  # median absolute deviation of the direction
     lane_fit_search_deg: float = 20.0
+    # direction from the white dashes ahead, as soon as the mission starts (entry line not needed)
+    lane_start_frames: int = 3
+    lane_start_give_up: float = 1.0   # m from the start: go on with the start heading, tracked
     lane_track_search_deg: float = 10.0
     lane_match_deg: float = 8.0       # slow update: a measurement this far off is not a lane line
     lane_match_dist: float = 0.12     # m
@@ -705,6 +711,26 @@ class StaticAvoid:
         self.event = 'lane fit %+.1f deg' % math.degrees(yaw)
         return True
 
+    def on_start_fit(self, fit: SectionFrame) -> bool:
+        """The lane direction from the first frames after the start. Only the direction and sideways
+        position: s and the island stay as they are until the entry line is crossed."""
+        if self.state != ACTIVE or self.lane_frame is not None:
+            return False
+        yaw = self.frame.to_section(fit.x0, fit.y0, fit.yaw0)[2]
+        if abs(yaw) > math.radians(self.p.lane_yaw_max_deg):
+            self.event = 'start fit rejected: %.1f deg' % math.degrees(yaw)
+            return False
+        self.lane_frame, self.lane_shift = fit, 0.0
+        self.last_end = None
+        self.event = 'start fit %+.1f deg' % math.degrees(yaw)
+        return True
+
+    def track_from_start_heading(self) -> None:
+        """No start fit: track the lane lines from the start heading all the same."""
+        if self.state == ACTIVE and self.lane_frame is None:
+            self.lane_frame, self.lane_shift = self.frame, 0.0
+            self.event = 'no start fit: tracking from the start heading'
+
     def update_lane(self, pose_world, obs: Optional[LaneObservation]) -> bool:
         """Slow correction of a fitted lane frame from one frame's lines."""
         if self.state != ACTIVE or self.lane_frame is None or obs is None:
@@ -776,6 +802,11 @@ class StaticAvoid:
             return None
         if self.release_ready(pose):
             self.stop('hand over in lane %d' % lane_of(pose[1], p))
+            return None
+        margin = p.island_past_estimate if self.island_source == 'estimate' else 0.0
+        if pose[0] >= self.island[0] + margin:
+            self.stop('hand over past the island front (%s), lane %d'
+                      % (self.island_source, lane_of(pose[1], p)), True)
             return None
         if pose[0] > p.max_travel:
             self.stop('hand over: max travel', True)
@@ -884,6 +915,10 @@ class LaneFitter:
         self.closed: Optional[float] = None      # odometer of the last line finished
         self.samples: List[Tuple[Tuple[float, float, float], LaneObservation]] = []
         self.fit: Optional[SectionFrame] = None
+        self.start_frame: Optional[SectionFrame] = None      # the start being measured
+        self.start_samples: List[Tuple[Tuple[float, float, float], LaneObservation]] = []
+        self.start_odometer = 0.0
+        self.start_open = False
 
     def on_frame(self, bgr: np.ndarray, avoid: StaticAvoid, tracker: PoseTracker, entry) -> None:
         p = self.p
@@ -900,12 +935,38 @@ class LaneFitter:
                     self.samples.append((pose, obs))
                 self._try_fit(entry_pose, tracker.distance - c.odometer)
         if avoid.state == ACTIVE:
+            self._start_fit(bgr, avoid, tracker, pose)
             if self.fit is not None:
                 avoid.on_lane_fit(self.fit)
             if avoid.lane_frame is not None:
                 obs = find_lane_lines(bgr, self.cam, self.colours, wrap(avoid.lane_frame.yaw0 - pose[2]),
                                       math.radians(p.lane_track_search_deg))
                 avoid.update_lane(pose, obs)
+
+    def _start_fit(self, bgr, avoid: StaticAvoid, tracker: PoseTracker, pose) -> None:
+        """The white dashes ahead give the lane direction right after the start, the car may still be
+        coming out of the corner. If they do not, the tracking still runs (from the start heading)."""
+        p = self.p
+        frame = avoid.frame
+        if frame is not self.start_frame:
+            self.start_frame, self.start_samples = frame, []
+            self.start_odometer, self.start_open = tracker.distance, True
+        if not self.start_open:
+            return
+        if avoid.lane_frame is not None:
+            self.start_open = False
+            return
+        obs = find_lane_lines(bgr, self.cam, self.colours, wrap(frame.yaw0 - pose[2]),
+                              math.radians(p.lane_fit_search_deg), white_only=True)
+        if obs is not None and len(obs.lines) >= p.lane_fit_lines:
+            self.start_samples.append((pose, obs))
+        origin = (frame.x0, frame.y0, frame.yaw0)
+        fit = self._fit(origin, self.start_samples, p.lane_start_frames)
+        if fit is not None and avoid.on_start_fit(fit):
+            self.start_open = False
+        elif tracker.distance - self.start_odometer >= p.lane_start_give_up:
+            self.start_open = False
+            avoid.track_from_start_heading()
 
     def _try_fit(self, entry_pose, past: float) -> None:
         p = self.p
@@ -917,19 +978,20 @@ class LaneFitter:
         if fit is not None:
             self.fit = fit
 
-    def _fit(self, entry_pose) -> Optional[SectionFrame]:
+    def _fit(self, entry_pose, samples=None, frames: Optional[int] = None) -> Optional[SectionFrame]:
         p = self.p
-        if len(self.samples) < p.lane_fit_frames:
+        samples = self.samples if samples is None else samples
+        if len(samples) < (p.lane_fit_frames if frames is None else frames):
             return None
         base = entry_pose[2]
-        turns = np.array([wrap(q[2] + o.angle - base) for q, o in self.samples])
+        turns = np.array([wrap(q[2] + o.angle - base) for q, o in samples])
         turn = float(np.median(turns))
         if float(np.median(np.abs(turns - turn))) > math.radians(p.lane_fit_spread_deg):
             return None
         yaw = base + turn
         frame = SectionFrame(entry_pose[0], entry_pose[1], yaw)
         residual = []
-        for q, o in self.samples:
+        for q, o in samples:
             residual += line_residuals(frame.to_section(*q)[1], o, p)
         r = float(np.median(residual)) if residual else 0.0
         r = max(-p.lane_offset_max, min(p.lane_offset_max, r))
