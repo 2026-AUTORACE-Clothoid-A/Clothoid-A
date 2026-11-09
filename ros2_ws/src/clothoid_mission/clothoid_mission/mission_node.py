@@ -165,7 +165,9 @@ class MissionNode(Node):
     # ---- line stop (FinishCore) ------------------------------------------------------------------
     def new_core(self) -> LineStopCore:
         get = lambda n: self.get_parameter(n).value  # noqa: E731
-        return LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'))
+        core = LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'))
+        core.debug = self.debug_pub is not None
+        return core
 
     def on_info(self, msg: CameraInfo):
         if self.bev is not None or msg.k[0] <= 0:

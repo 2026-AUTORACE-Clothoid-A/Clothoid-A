@@ -100,6 +100,14 @@ class NearLineParams:
     gray_low: int = 130
 
 
+def longest_runs(mask: np.ndarray) -> np.ndarray:
+    """Longest unbroken run of True in every row (numpy: count since the last False)."""
+    m = mask.astype(np.int32)
+    count = np.cumsum(m, axis=1)
+    run = count - np.maximum.accumulate(np.where(m == 0, count, 0), axis=1)
+    return run.max(axis=1) if run.shape[1] else np.zeros(mask.shape[0], dtype=np.int32)
+
+
 class NearLineDetector:
     def __init__(self, params: NearLineParams):
         self.configure(params)
@@ -126,11 +134,5 @@ class NearLineDetector:
             return False      # crosswalk (or other markings) right past the line
         band = mask[h - p.band_rows:, c0:c1]
         need = p.min_run * band.shape[1]
-        rows = 0
-        for row in band:
-            # longest unbroken white run in this row
-            edges = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
-            starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)
-            if len(starts) and (ends - starts).max() >= need:
-                rows += 1
+        rows = int((longest_runs(band) >= need).sum())   # rows with one long enough white run
         return rows >= p.min_rows

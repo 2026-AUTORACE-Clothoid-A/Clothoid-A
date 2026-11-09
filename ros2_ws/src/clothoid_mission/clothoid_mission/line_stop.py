@@ -15,9 +15,10 @@ ramp, STOP / ABORT, the parking Tracker (odom x 0.98). Three changes:
     one is ignored. Past the stop line come the crosswalk bars (white, along the lane, ~55 % of the
     band) and the crosswalk's far line; when the stop line left the view FinishCore took them and
     stopped 56 cm late in the synthetic test. Nearer or equal readings update the target as before.
+  * `image` skips the left yellow line: lane_main steers, FinishCore's steering is not used (and its
+    left-line-lost abort is off in mission_node). Only the band's columns are converted and scanned
+    (numpy, no per-row Python loop): 11.0 -> 3.7 ms per frame on the laptop, same lines found.
 """
-import math
-
 import cv2
 import numpy as np
 
@@ -26,15 +27,12 @@ from clothoid_finish.finish_core import FinishCore, FinishParams, Phase  # noqa:
 
 
 def longest_runs(mask: np.ndarray) -> np.ndarray:
-    """Longest unbroken run of True in every row."""
-    padded = np.zeros((mask.shape[0], mask.shape[1] + 2), dtype=np.int8)
-    padded[:, 1:-1] = mask
-    edges = np.diff(padded, axis=1)
-    out = np.zeros(mask.shape[0], dtype=int)
-    for i in np.nonzero(mask.any(1))[0]:
-        starts, ends = np.flatnonzero(edges[i] == 1), np.flatnonzero(edges[i] == -1)
-        out[i] = int((ends - starts).max())
-    return out
+    """Longest unbroken run of True in every row (numpy: count since the last False)."""
+    m = mask.astype(np.int32)
+    count = np.cumsum(m, axis=1)
+    at_false = np.maximum.accumulate(np.where(m == 0, count, 0), axis=1)
+    run = count - at_false
+    return run.max(axis=1) if run.shape[1] else np.zeros(mask.shape[0], dtype=np.int32)
 
 
 class LineStopCore(FinishCore):
@@ -43,7 +41,16 @@ class LineStopCore(FinishCore):
         super().__init__(bev, p)
         self.white_s_max, self.white_v_min = white_s_max, white_v_min
         self.min_run = min_run
+        self.debug = False            # True: keep full-size masks for mission's debug image
         self.white = None
+        # the band (|y| <= p.band ahead of base_link) never moves in the warped image: only its
+        # columns are converted and scanned
+        band = (np.abs(bev.gy) <= p.band) & bev.valid
+        cols = np.nonzero(band.any(0))[0]
+        self._c0, self._c1 = (int(cols.min()), int(cols.max()) + 1) if len(cols) else (0, 0)
+        self._band = band[:, self._c0:self._c1]
+        self._per_row = self._band.sum(1)
+        self._gx = bev.gx[:, self._c0:self._c1]
 
     def _sighting(self, now: float, line_at: float):
         if self.phase == Phase.COMMIT and self.target is not None and \
@@ -55,48 +62,23 @@ class LineStopCore(FinishCore):
         return None if self.target is None else self.target - self.dist
 
     def image(self, now: float, bgr: np.ndarray):
-        """FinishCore.image with the cross line in white (the left line stays yellow)."""
-        p = self.p
-        warped = self.bev.warp_image(bgr)
+        """FinishCore.image's cross line scan, in white and with an unbroken run; no left line."""
+        warped = self.bev.warp_image(bgr)[:, self._c0:self._c1]
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, np.array(p.hsv_lower), np.array(p.hsv_upper)) > 0
-        mask &= self.bev.valid
-        white = (hsv[..., 1] <= self.white_s_max) & (hsv[..., 2] >= self.white_v_min) & self.bev.valid
-        self.mask, self.white = mask, white
-        gx, gy = self.bev.gx, self.bev.gy
+        white = (hsv[..., 1] <= self.white_s_max) & (hsv[..., 2] >= self.white_v_min) & self._band
+        if self.debug:
+            full = np.zeros(self.bev.valid.shape, bool)
+            full[:, self._c0:self._c1] = white
+            self.white, self.mask = full, np.zeros_like(full)
 
         # cross line: rows whose central band holds one unbroken white run over min_run of it
-        band = (np.abs(gy) <= p.band) & self.bev.valid
-        per_row = band.sum(1)
-        runs = longest_runs(white & band)
+        per_row = self._per_row
+        runs = longest_runs(white)
         rows = np.nonzero((per_row > 10) & (runs >= self.min_run * np.maximum(per_row, 1)))[0]
-        cross_rows = set()
         self.cross_x = None
         if len(rows):
             near = rows.max()                       # bottom of the warped image = closest to the car
-            run = [r for r in rows if r >= near - 40]
-            cross_rows = set(range(min(run) - 3, near + 4))
-            self.cross_x = float(np.min(gx[near][band[near]]))    # near edge of the line
+            self.cross_x = float(np.min(self._gx[near][self._band[near]]))   # near edge of the line
             if self.phase in (Phase.FOLLOW, Phase.COMMIT):
                 self._sighting(now, self.dist + self.cross_x)
-
-        # left line: as FinishCore
-        keep = mask & (gy >= p.left_min) & (gy <= p.left_max)
-        if cross_rows:
-            keep[sorted(r for r in cross_rows if 0 <= r < keep.shape[0])] = False
-        if self._sightings:
-            keep &= gx < self._sightings[-1][1] - self.dist - 0.03
-        ys, xs = np.nonzero(keep)
-        self.left = None
-        if len(ys) >= 30 and np.ptp(gx[ys, xs]) >= p.left_min_span:
-            X, Y = gx[ys, xs], gy[ys, xs]
-            fit = np.polyfit(X, Y, 1)
-            for _ in range(2):
-                res = np.abs(Y - np.polyval(fit, X))
-                good = res < max(0.02, 2.5 * np.median(res))
-                if good.sum() < 30:
-                    break
-                fit = np.polyfit(X[good], Y[good], 1)
-            slope, offset = fit
-            self.left = (float(offset), float(math.atan(slope)))
-            self._t_left = now
+        self.left = None                            # lane_main steers (see the module docstring)

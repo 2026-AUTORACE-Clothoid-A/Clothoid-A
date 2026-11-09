@@ -23,7 +23,7 @@ from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
-                                    limit_step, steer_angle)
+                                    limit_step, speed_scaled_gain, steer_angle)
 
 DETECTORS = ('track2026', 'sliding2025')
 TRACKER_FIELDS = tuple(TrackerParams.__dataclass_fields__)
@@ -89,6 +89,11 @@ class LaneMainNode(Node):
         # multiplies the 2025 steering law before the limit. 1.0 = 2025; limo2 turned too little in
         # the first right corner with 1.0 (2026-11-07 drives: 8.5 deg where about 13 is needed)
         self.declare_parameter('steer_gain', 1.0)
+        # below base_speed (/speed_limit, zigzag) raise steer_gain so speed x gain stays the same: tuned
+        # at 0.8 m/s with 0.33, the stop line approach at 0.2 turned a quarter of what a corner needs
+        # and left the lane (limo2 2026-11-09). At most steer_gain_max (0.3 m/s drove with 1.0).
+        self.declare_parameter('steer_gain_speed_scaling', True)
+        self.declare_parameter('steer_gain_max', 1.0)
         self.declare_parameter('speed_limit_timeout', 0.5)
         # mission 6 (slow guide lines): speed while track2026 sees the zigzag lines, 0 = no change
         self.declare_parameter('zigzag_speed', 0.2)
@@ -251,17 +256,20 @@ class LaneMainNode(Node):
         if result.zigzag:
             self.last_zigzag_stamp = now
         if result.found:
-            steer = steer_angle(target[0], target[1],
-                                self.detector.p.warp_w, self.detector.p.warp_h,
-                                self.get_parameter('steer_gain').value,
-                                self.get_parameter('max_steer_rad').value)
-
             speed = self.current_speed()
             zigzag_speed = self.get_parameter('zigzag_speed').value
             if zigzag_speed > 0.0 and self.last_zigzag_stamp is not None and (
                     now - self.last_zigzag_stamp).nanoseconds * 1e-9 <= \
                     self.get_parameter('zigzag_hold_sec').value:
                 speed = min(speed, zigzag_speed)
+            gain = self.get_parameter('steer_gain').value
+            if self.get_parameter('steer_gain_speed_scaling').value:
+                gain = speed_scaled_gain(gain, self.get_parameter('base_speed').value, speed,
+                                         self.get_parameter('steer_gain_max').value)
+            steer = steer_angle(target[0], target[1],
+                                self.detector.p.warp_w, self.detector.p.warp_h,
+                                gain, self.get_parameter('max_steer_rad').value)
+
             cmd = Twist()
             cmd.linear.x = speed
             cmd.angular.z = angular_z(speed, steer, self.get_parameter('wheelbase').value)
