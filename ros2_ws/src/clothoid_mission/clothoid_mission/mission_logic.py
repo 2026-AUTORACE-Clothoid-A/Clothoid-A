@@ -1,12 +1,10 @@
 """Mission state logic: turns perception into the signals the driving nodes listen to.
 
-ROS-free; a FIRST DRAFT from the 2026 rule summary (docs/MIGRATION_PLAN.md 1-3), not a port: 2025
-had no state node (missions fought over twist_mux priorities). Rules still open are parameters.
-
-Inputs each tick: YOLO detections, "stop line ahead", "parking finished".
-Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking_flag`.
+Inputs each tick: YOLO detections, "stop line ahead", "parking finished", IMU pitch.
+Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking_flag`, `steering_lock`.
 
   * slow sign        -> speed limit for `slow_hold_sec` after the last sighting
+  * bump sign + IMU  -> armed slow speed, dynamic exit on leveling, steering lock on climb
   * pedestrian sign  -> arm; stop at the stop line, wait `pedestrian_wait_sec`, then go
   * traffic light    -> arm on red (and yellow if `stop_on_yellow`); stop at the stop line,
                         go when green is seen
@@ -16,6 +14,9 @@ Driving nodes keep working underneath: `stop` only means "publish zero on the st
 """
 from dataclasses import dataclass, field
 from typing import Iterable, Optional, Set
+
+from clothoid_mission.speed_bump_detector import (
+    SpeedBumpDetector, SpeedBumpParams)
 
 DRIVE = 'drive'
 STOPPED_PEDESTRIAN = 'stopped_pedestrian'
@@ -27,6 +28,8 @@ class MissionParams:
     # slow sign
     slow_speed: float = 0.2          # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0       # bump length is not fixed yet (retune on the track)
+    # speed bump
+    bump_params: SpeedBumpParams = field(default_factory=SpeedBumpParams)
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
@@ -43,6 +46,7 @@ class Inputs:
     seen: Set[str] = field(default_factory=set)   # class names visible right now
     stopline: bool = False
     parking_done: bool = False
+    imu_pitch: Optional[float] = None             # vehicle pitch in degrees
 
 
 @dataclass
@@ -52,6 +56,7 @@ class Outputs:
     speed_limit: Optional[float] = None
     direction: Optional[int] = None    # None until a fork sign was seen
     parking_flag: bool = False
+    steering_lock: bool = False        # lock steering during bump traversal
 
 
 class MissionLogic:
@@ -65,12 +70,19 @@ class MissionLogic:
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
         self.cooldown_until = {'pedestrian': -1.0, 'light': -1.0}
+        self.bump_detector = SpeedBumpDetector(params.bump_params)
 
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
 
-        if 'sign_slow' in seen or 'sign_bump' in seen:
+        if 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
+        if 'sign_bump' in seen:
+            self.bump_detector.on_sign_bump(now)
+
+        if inputs.imu_pitch is not None:
+            self.bump_detector.update_pitch(inputs.imu_pitch, now)
+
         if 'sign_left' in seen:
             self.direction = p.fork_left_direction
         elif 'sign_right' in seen:
@@ -80,12 +92,20 @@ class MissionLogic:
 
         self._update_stop(inputs)
 
+        # Speed limit priority
+        speed_limit = None
+        if now < self.slow_until:
+            speed_limit = p.slow_speed
+        if self.bump_detector.is_active:
+            speed_limit = self.bump_detector.speed_limit
+
         return Outputs(
             state=self.state,
             stop=self.state != DRIVE,
-            speed_limit=p.slow_speed if now < self.slow_until else None,
+            speed_limit=speed_limit,
             direction=self.direction,
-            parking_flag=self.parking_flag)
+            parking_flag=self.parking_flag,
+            steering_lock=self.bump_detector.should_lock_steering)
 
     def _update_stop(self, inputs: Inputs) -> None:
         now, seen, p = inputs.now, inputs.seen, self.p

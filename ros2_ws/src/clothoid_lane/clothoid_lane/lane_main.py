@@ -105,6 +105,7 @@ class LaneMainNode(Node):
         # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
         # (config/camera_*.yaml), so the width in pixels is lane_width_m x warp_px_per_m.
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
+        self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('lane_width_m', 0.5)
         self.declare_parameter('parking_lane_width_m', 0.68)
         self.declare_parameter('warp_px_per_m', 340.0)
@@ -123,6 +124,8 @@ class LaneMainNode(Node):
 
         self.speed_limit = None
         self.speed_limit_stamp = None
+        self.steering_locked = False
+        self.last_steer = 0.0
         self.last_cmd = None
         self.last_found_stamp = None
         self.used_target = None       # target point the last command steered to (after limit_step)
@@ -143,6 +146,8 @@ class LaneMainNode(Node):
             Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
         self.create_subscription(
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
+        self.create_subscription(
+            Bool, self.get_parameter('steering_lock_topic').value, self.on_steering_lock, 1)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
@@ -199,6 +204,9 @@ class LaneMainNode(Node):
             self.speed_limit = msg.data
             self.speed_limit_stamp = self.get_clock().now()
 
+    def on_steering_lock(self, msg: Bool):
+        self.steering_locked = bool(msg.data)
+
     def current_speed(self) -> float:
         speed = self.get_parameter('base_speed').value
         if self.speed_limit is not None:
@@ -251,10 +259,14 @@ class LaneMainNode(Node):
         if result.zigzag:
             self.last_zigzag_stamp = now
         if result.found:
-            steer = steer_angle(target[0], target[1],
-                                self.detector.p.warp_w, self.detector.p.warp_h,
-                                self.get_parameter('steer_gain').value,
-                                self.get_parameter('max_steer_rad').value)
+            if self.steering_locked and self.last_cmd is not None:
+                steer = self.last_steer
+            else:
+                steer = steer_angle(target[0], target[1],
+                                    self.detector.p.warp_w, self.detector.p.warp_h,
+                                    self.get_parameter('steer_gain').value,
+                                    self.get_parameter('max_steer_rad').value)
+                self.last_steer = steer
 
             speed = self.current_speed()
             zigzag_speed = self.get_parameter('zigzag_speed').value
