@@ -265,8 +265,7 @@ PC 수치는 bag 01을 노드별 프로세스로 돌려 얻었다. `LAZY=false O
 5. mission은 `/odom`을 항상 구독하지만, 실제로는 정지선 정지(`core`) 중에만 쓴다. 카메라처럼 `_image_on`에서 함께 구독하는 방안을 검토해 달라. `/imu`는 과속방지턱 pitch 때문에 항상 받아야 한다.
    이 브랜치에서 mission에 바꾼 것은 영상 QoS(`IMAGE_QOS`) 한 줄과 `clothoid_common` 의존성뿐이다.
 6. twist_mux에서 parking과 finish가 둘 다 priority 110이다(PR #10).
-7. `use_stopline:=false`가 기본이라 `/stopline_near`가 나오지 않는다. 그러면 mission이 정지선에서 `/parking_flag`를 올리지 못한다(lane.launch.py 주석에 적혀 있다).
-   대회 구성에서 stopline을 켤지(`lane_shared`라서 추가 비용이 작다) 정해 달라.
+7. 주차 시작 방식: `mission.yaml`의 `parking_at_stopline`을 `false`로 바꿨다(주영 결정, 이 브랜치). YOLO `sign_parking`이 확인되면 바로 `/parking_flag`를 올린다. `use_stopline:=false`가 기본이라 `/stopline_near`가 나오지 않기 때문이다. 신호·보행자 정지는 mission 자체의 정지선 추적(`use_stop_line`)을 쓰므로 stopline 노드와 관계없다.
 
 **세션 B (static_avoid, section_cues: 진행 중인 작업과 겹치지 않게 참고만)**
 - 진행 중: odom 이동량 누적, 콜백 시간 로그, debug_heavy 끄기.

@@ -53,7 +53,9 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
-    parking_at_stopline: true   # sign_parking arms, the next stop line raises /parking_flag
+    # false (2026-11-10): the confirmed YOLO sign_parking raises /parking_flag at once. true needs
+    # /stopline_near from the stopline node, which full.launch does not start (use_stopline:=false)
+    parking_at_stopline: false
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true

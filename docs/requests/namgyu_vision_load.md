@@ -20,9 +20,14 @@ PR #10의 경량화(lane_shared, 기본으로 끈 노드들, finish·mission 카
 테스트: `clothoid_parking/test/test_lazy_sensors.py`, `clothoid_finish/test/test_lazy_sensors.py`를 추가했다. 기존 테스트를 포함해 parking 35개, finish 9개, lane 37개가 통과한다.
 PC 측정(bag 01, 대기 중): parking 17% → 12%, finish 18.5% → 15%. 대기 중 IMU 수신은 2,800건에서 0건이 됐다.
 
+## 함께 바꾼 것 (mission)
+
+- `mission.yaml`의 `parking_at_stopline`을 `false`로 바꿨다. full.launch 기본값은 `use_stopline:=false`라서 `/stopline_near`가 나오지 않는다. 그 상태로 `true`이면 `/parking_flag`가 켜지지 않는다.
+- 이제 YOLO `sign_parking`이 확인되면 바로 주차를 시작한다. 차에서 alias로 돌렸을 때도 이렇게 동작했던 것으로 보인다. 정지선에서 시작해야 하면 알려 줘.
+
 ## 차에서 확인 부탁
 
-1. **parking 시작 지연.** flag를 받은 뒤 구독을 만들고 첫 데이터가 들어오기까지 0.1~0.3 s가 걸린다(DDS discovery). 정지선에서 멈춘 상태로 flag가 오면 영향이 없다. 달리는 중에 flag가 오면 0.6 m/s 기준으로 6~18 cm 더 간 뒤 SEARCH가 시작된다.
+1. **parking 시작 지연.** flag를 받은 뒤 구독을 만들고 첫 데이터가 들어오기까지 0.1~0.3 s가 걸린다(DDS discovery). `parking_at_stopline: false`라서 flag는 달리는 중에 온다. 그만큼 SEARCH가 늦게 시작한다(0.2 m/s 기준 2~6 cm).
    - 로그에서 `imu/odom/scan subscribed`와 `sensors in: parking starts` 사이 시간을 봐 줘.
    - 문제가 되면 `lazy_sensors: false`로 끄면 된다.
 2. finish: `imu/odom subscribed`가 `/parking_done`보다 먼저 찍히는지 확인해 줘.
@@ -33,7 +38,6 @@ PC 측정(bag 01, 대기 중): parking 17% → 12%, finish 18.5% → 15%. 대기
 |---|---|---|---|
 | 1 | speed_zone | 다시 켤 일이 생기면 lane_shared의 `image_observers`에 붙여서 영상을 한 번만 받게 해 줘. 지금은 기본으로 꺼져 있어서 급하지 않다 | raw 수신 −1 ≈ 30~40% |
 | 2 | 콘 obstacle_extractor | static_avoid의 limo_extractor(세션 B 브랜치)와 `/scan`을 같이 받아 군집화를 두 번 한다. 한 노드가 한 번 받아 파라미터 2세트로 `/lidar/obstacles`와 `/lidar/limos`를 함께 발행하는 안에 동의하는지 알려 줘. 콘 출력이 그대로인지 bag 회귀로 확인한다 | ~20% |
-| 3 | stopline 기본값 | `use_stopline:=false`가 기본이면 `/stopline_near`가 나오지 않는다. 그러면 mission이 정지선에서 `/parking_flag`를 올리지 못하고, 신호·보행자 정지도 하지 않는다(lane.launch.py 주석). 대회 구성에서 켤 건지 알려 줘. lane_shared라서 켜도 추가 비용이 작다 | |
 
 ## 확인 방법
 
