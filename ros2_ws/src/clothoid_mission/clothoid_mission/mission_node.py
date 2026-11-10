@@ -22,6 +22,7 @@ import inspect
 import cv2
 import numpy as np
 import rclpy
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_finish.bev import Bev, CameraModel
 from clothoid_finish.finish_core import FinishParams, Phase
 from clothoid_interfaces.msg import DetectionArray
@@ -291,7 +292,7 @@ class MissionNode(Node):
         if on and self.image_sub is None:
             kind = CompressedImage if self.get_parameter('compressed').value else Image
             self.image_sub = self.create_subscription(
-                kind, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
+                kind, self.get_parameter('image_topic').value, self.on_image, IMAGE_QOS)
         elif not on and self.image_sub is not None:
             self.destroy_subscription(self.image_sub)
             self.image_sub = None

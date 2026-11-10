@@ -9,14 +9,15 @@ no 2026 mission needs crosswalks recognised (lights / pedestrians stop on the st
 clothoid_mission with finish's FinishCore). StopLineDetector stays because the parking trigger takes
 its warp and white thresholds.
 """
+import cv2
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr  # noqa: F401  (bgr_to_image: stripe debug, commented out)
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_lane.lane_detector import LaneParams
 from clothoid_lane.stopline import NearLineDetector, NearLineParams, StopLineDetector, StopLineParams
 
@@ -63,7 +64,7 @@ class StopLineNode(Node):
             Image, self.get_parameter('debug_image_topic').value, 1)
         if subscribe_images:
             self.create_subscription(
-                Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
+                Image, self.get_parameter('image_topic').value, self.on_image, IMAGE_QOS)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info('stopline started')
@@ -115,6 +116,11 @@ class StopLineNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = StopLineNode()
+    # one OpenCV thread per process: several camera nodes each spawning a pool fight over the
+    # cores (lane_shared does the same with shared_opencv_threads); 0 keeps OpenCV's default
+    threads = node.declare_parameter('opencv_threads', 1).value
+    if threads:
+        cv2.setNumThreads(threads)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

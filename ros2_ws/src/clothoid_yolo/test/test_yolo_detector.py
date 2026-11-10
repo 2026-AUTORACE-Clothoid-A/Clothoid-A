@@ -61,5 +61,5 @@ def test_known_classes_match_the_message_definition():
 
 def test_missing_ultralytics_gives_a_clear_error(monkeypatch):
     monkeypatch.setitem(sys.modules, 'ultralytics', None)  # import raises ImportError
-    with pytest.raises(RuntimeError, match='ultralytics is not installed'):
+    with pytest.raises(RuntimeError, match='ultralytics가 설치되어 있지 않습니다'):
         UltralyticsBackend('model.pt')

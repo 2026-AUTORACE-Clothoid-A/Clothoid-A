@@ -6,6 +6,8 @@ lane) through SEARCH -> TURN -> ENTER -> DONE (see planner.py). In DONE it keeps
 speed so lane cannot take the car back, and repeats `/parking_done` true once a second.
 Phase changes go to the log and to `state_topic`. With `debug:=true` it also publishes RViz
 markers on `marker_topic` (see viz.py, `ros2 launch clothoid_parking rviz.launch.py`).
+With `lazy_sensors` (default) /imu, /odom and /scan are subscribed only from the flag until DONE: the
+flag subscribes them and the run starts once all three arrive (at most `arm_wait_sec`).
 """
 import math
 from dataclasses import fields
@@ -40,6 +42,10 @@ class ParkingNode(Node):
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('laser_x', 0.103)
         self.declare_parameter('debug', False)
+        # /imu 100 Hz + /odom 50 Hz + /scan cost ~20-25 % of an Orin core just to receive while the
+        # car is nowhere near the parking; ParkingCore uses nothing from before the flag
+        self.declare_parameter('lazy_sensors', True)
+        self.declare_parameter('arm_wait_sec', 1.0)
         plan = self._declare_dataclass(PlanParams(), 'plan.')
         bay = self._declare_dataclass(BayParams(), 'bay.')
         get = lambda n: self.get_parameter(n).value  # noqa: E731
@@ -50,13 +56,16 @@ class ParkingNode(Node):
         self.phase = self.core.phase
         self.t_done_sent = 0.0
         self.sent_final_stop = False
+        self.lazy = get('lazy_sensors')
+        self.arm_wait = get('arm_wait_sec')
+        self.t_armed = None           # flag seen, waiting for the sensors (lazy_sensors)
+        self.sensor_subs = []
 
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
-        self.create_subscription(Imu, get('imu_topic'), self.on_imu, qos_profile_sensor_data)
-        self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data)
-        self.create_subscription(LaserScan, get('scan_topic'), self.on_scan, qos_profile_sensor_data)
+        if not self.lazy:
+            self._sensors_on(True)
         self.create_subscription(Bool, get('parking_topic'), self.on_flag, 1)
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
         if get('debug'):
@@ -95,13 +104,49 @@ class ParkingNode(Node):
         self.core.scan(self.last['scan'], msg.ranges, msg.angle_min, msg.angle_increment,
                        msg.range_min, msg.range_max)
 
+    def _sensors_on(self, on: bool):
+        get = lambda n: self.get_parameter(n).value  # noqa: E731
+        if on and not self.sensor_subs:
+            self.sensor_subs = [
+                self.create_subscription(Imu, get('imu_topic'), self.on_imu, qos_profile_sensor_data),
+                self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data),
+                self.create_subscription(LaserScan, get('scan_topic'), self.on_scan, qos_profile_sensor_data)]
+            if self.lazy:
+                self.get_logger().info('imu/odom/scan subscribed')
+        elif not on and self.sensor_subs and self.lazy:
+            for sub in self.sensor_subs:
+                self.destroy_subscription(sub)
+            self.sensor_subs = []
+            self.last = {k: None for k in self.last}
+            self.get_logger().info('imu/odom/scan released')
+
     def on_flag(self, msg: Bool):
         if msg.data and not self.core.flag:
+            if self.t_armed is not None:
+                return                  # already waiting for the sensors (on_timer starts the run)
             stale = self.stale()
+            if stale and self.lazy and self.core.phase == Phase.IDLE:
+                self._sensors_on(True)
+                self.t_armed = self.now()
+                return
             if stale:
                 self.get_logger().error(f'parking flag but no {stale}: not starting')
                 return
+        if not msg.data:
+            self.t_armed = None
         self.core.set_flag(self.now(), msg.data)
+
+    def check_armed(self, now: float):
+        """lazy_sensors: start the run once every sensor arrived after the flag subscribed them."""
+        stale = self.stale()
+        if not stale:
+            self.t_armed = None
+            self.get_logger().info('sensors in: parking starts')
+            self.core.set_flag(now, True)
+        elif now - self.t_armed > self.arm_wait:
+            self.t_armed = None
+            self.get_logger().error(
+                f'parking flag but no {stale} after {self.arm_wait:.1f} s: not starting')
 
     def stale(self):
         now = self.now()
@@ -115,6 +160,8 @@ class ParkingNode(Node):
 
     def on_timer(self):
         now = self.now()
+        if self.t_armed is not None:
+            self.check_armed(now)
         out = self.core.command(now)
         if self.core.phase != self.phase:
             self.phase = self.core.phase
@@ -130,6 +177,7 @@ class ParkingNode(Node):
             if not self.sent_final_stop:
                 self.send(0.0, 0.0)
                 self.sent_final_stop = True
+                self._sensors_on(False)
             if now - self.t_done_sent >= 1.0:
                 self.done_pub.publish(Bool(data=True))
                 self.t_done_sent = now

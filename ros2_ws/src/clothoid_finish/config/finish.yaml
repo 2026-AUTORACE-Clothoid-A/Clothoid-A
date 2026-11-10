@@ -3,6 +3,7 @@
 finish:
   ros__parameters:
     compressed: true
+    lazy_sensors: true         # imu/odom only from /parking_flag until STOP/ABORT (false: always)
     rate_hz: 20.0
     speed: 0.2
     lane_offset: 0.25          # m, left line centre from base_link: half the 0.5 m lane

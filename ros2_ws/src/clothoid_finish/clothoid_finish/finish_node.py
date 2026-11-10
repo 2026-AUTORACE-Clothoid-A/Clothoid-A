@@ -1,6 +1,8 @@
 """ROS wiring for FinishCore: after /parking_done, yellow-line follow to the end line and stop.
 
 Inputs: colour image (compressed by default), camera_info (intrinsics), /imu, /odom, /parking_done.
+The camera is subscribed only while following; with lazy_sensors (default) /imu and /odom only from
+/parking_flag (parking starts, seconds before /parking_done) until STOP/ABORT.
 Output: /cmd_vel_finish (twist_mux, same priority as parking), /finish_done, /finish/state,
 /finish/debug_image with debug:=true. Warp and camera pose come from clothoid_lane's
 camera_limo*.yaml ("/**" parameters), the yellow HSV from finish.yaml.
@@ -19,6 +21,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 from std_msgs.msg import Bool, String
 
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_finish.bev import Bev, CameraModel
 from clothoid_finish.finish_core import FinishCore, FinishParams, Phase
 from clothoid_lane.lane_detector import LaneParams
@@ -32,11 +35,15 @@ class FinishNode(Node):
         for name, default in (('image_topic', '/camera/color/image_raw/compressed'),
                               ('camera_info_topic', '/camera/color/camera_info'),
                               ('imu_topic', '/imu'), ('odom_topic', '/odom'),
-                              ('start_topic', '/parking_done'), ('cmd_topic', '/cmd_vel_finish'),
+                              ('start_topic', '/parking_done'), ('arm_topic', '/parking_flag'),
+                              ('cmd_topic', '/cmd_vel_finish'),
                               ('done_topic', '/finish_done'), ('state_topic', '/finish/state'),
                               ('debug_topic', '/finish/debug_image')):
             self.declare_parameter(name, default)
         self.declare_parameter('compressed', True)
+        # /imu (100 Hz) + /odom (50 Hz) cost ~20 % of an Orin core just to receive; finish only needs
+        # them from the parking run on, so they are subscribed on arm_topic true (false: always)
+        self.declare_parameter('lazy_sensors', True)
         self.declare_parameter('wheelbase', 0.2)
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('debug', False)
@@ -75,8 +82,11 @@ class FinishNode(Node):
         self.image_type = CompressedImage if self.compressed else Image
         self.image_sub = None
         self.create_subscription(CameraInfo, get('camera_info_topic'), self.on_info, qos_profile_sensor_data)
-        self.create_subscription(Imu, get('imu_topic'), self.on_imu, qos_profile_sensor_data)
-        self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data)
+        self.sensor_subs = []
+        if get('lazy_sensors'):
+            self.create_subscription(Bool, get('arm_topic'), self.on_arm, 1)
+        else:
+            self._sensors_on(True)
         self.create_subscription(Bool, get('start_topic'), self.on_start, 1)
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
         self.get_logger().info('finish ready: waiting for camera_info and the parking to end')
@@ -109,16 +119,33 @@ class FinishNode(Node):
         if self.core:
             self.core.odom(self.stamp(msg), msg.twist.twist.linear.x)
 
+    def on_arm(self, msg: Bool):
+        if msg.data and self.phase == Phase.IDLE:
+            self._sensors_on(True)
+
     def on_start(self, msg: Bool):
         if msg.data and self.core and self.core.phase == Phase.IDLE:
+            self._sensors_on(True)      # no-op when /parking_flag armed them; stale() holds until data
             self.core.start(self.now())
             self._image_on(True)
+
+    def _sensors_on(self, on: bool):
+        get = lambda n: self.get_parameter(n).value  # noqa: E731
+        if on and not self.sensor_subs:
+            self.sensor_subs = [
+                self.create_subscription(Imu, get('imu_topic'), self.on_imu, qos_profile_sensor_data),
+                self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data)]
+            self.get_logger().info('imu/odom subscribed')
+        elif not on and self.sensor_subs and get('lazy_sensors'):
+            for sub in self.sensor_subs:
+                self.destroy_subscription(sub)
+            self.sensor_subs = []
+            self.get_logger().info('imu/odom released')
 
     def _image_on(self, on: bool):
         if on and self.image_sub is None:
             self.image_sub = self.create_subscription(
-                self.image_type, self.get_parameter('image_topic').value, self.on_image,
-                qos_profile_sensor_data)
+                self.image_type, self.get_parameter('image_topic').value, self.on_image, IMAGE_QOS)
             self.get_logger().info('camera subscribed')
         elif not on and self.image_sub is not None:
             self.destroy_subscription(self.image_sub)
@@ -178,6 +205,7 @@ class FinishNode(Node):
             self.get_logger().info(text)
             if self.phase in (Phase.STOP, Phase.ABORT):
                 self._image_on(False)
+                self._sensors_on(False)
         if out is None:
             return
         if self.phase in (Phase.FOLLOW, Phase.COMMIT) and self.stale():
