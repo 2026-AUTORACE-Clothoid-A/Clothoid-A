@@ -42,6 +42,14 @@ class MissionNode(Node):
         self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
         self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
         self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
+        self.declare_parameter('bump_min_area', 2500.0)    # px^2, minimum bbox area to arm bump
+        self.declare_parameter('bump_min_height', 40.0)    # px, minimum bbox height to arm bump
+        self.declare_parameter('slow_min_area', 2500.0)    # px^2, minimum bbox area to trigger slow
+        self.declare_parameter('slow_min_height', 40.0)    # px, minimum bbox height to trigger slow
+        self.declare_parameter('parking_min_area', 2500.0) # px^2, minimum bbox area to latch parking
+        self.declare_parameter('parking_min_height', 40.0) # px, minimum bbox height to latch parking
+        self.declare_parameter('pedestrian_min_area', 2500.0) # px^2, minimum bbox area to arm pedestrian
+        self.declare_parameter('pedestrian_min_height', 40.0) # px, minimum bbox height to arm pedestrian
 
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
@@ -91,7 +99,35 @@ class MissionNode(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_detections(self, msg: DetectionArray):
-        self.seen, self.seen_time = classes_seen(msg.detections), self.now_sec()
+        min_sizes = {
+            'sign_bump': (self.get_parameter('bump_min_area').value,
+                          self.get_parameter('bump_min_height').value),
+            'sign_slow': (self.get_parameter('slow_min_area').value,
+                          self.get_parameter('slow_min_height').value),
+            'sign_parking': (self.get_parameter('parking_min_area').value,
+                             self.get_parameter('parking_min_height').value),
+            'sign_pedestrian': (self.get_parameter('pedestrian_min_area').value,
+                                self.get_parameter('pedestrian_min_height').value),
+        }
+        self.seen = classes_seen(msg.detections, min_sizes=min_sizes)
+        self.seen_time = self.now_sec()
+
+        # Log sign bbox size for easy on-track tuning
+        for d in msg.detections:
+            if d.class_name in min_sizes:
+                min_area, min_h = min_sizes[d.class_name]
+                w = max(0, d.x_max - d.x_min)
+                h = max(0, d.y_max - d.y_min)
+                area = float(w * h)
+                tag = d.class_name.upper().replace('SIGN_', '')
+                if d.class_name in self.seen:
+                    self.get_logger().info(
+                        f'[{tag}] {d.class_name} ARMED (area={area:.0f}px^2, h={h}px >= min_area={min_area:.0f}, min_h={min_h:.0f})',
+                        throttle_duration_sec=1.0)
+                else:
+                    self.get_logger().info(
+                        f'[{tag}] {d.class_name} IGNORED (area={area:.0f}px^2, h={h}px < min_area={min_area:.0f}, min_h={min_h:.0f})',
+                        throttle_duration_sec=1.0)
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()

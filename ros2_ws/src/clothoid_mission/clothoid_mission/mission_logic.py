@@ -14,7 +14,7 @@ Driving nodes keep working underneath: `stop` only means "publish zero on the st
 """
 import math
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Set
+from typing import Dict, Iterable, Optional, Set, Tuple
 
 DRIVE = 'drive'
 STOPPED_PEDESTRIAN = 'stopped_pedestrian'
@@ -214,5 +214,31 @@ class MissionLogic:
             self.light_armed_at = None
 
 
-def classes_seen(detections: Iterable) -> Set[str]:
-    return {d.class_name for d in detections}
+def classes_seen(detections: Iterable,
+                 min_sizes: Optional[Dict[str, Tuple[float, float]]] = None,
+                 bump_min_area: float = 0.0,
+                 bump_min_height: float = 0.0) -> Set[str]:
+    """Extract set of class names, filtering out detections smaller than thresholds.
+
+    min_sizes maps class_name -> (min_area, min_height).
+    bump_min_area / bump_min_height are preserved for backward compatibility.
+    """
+    filters = dict(min_sizes or {})
+    if bump_min_area > 0 or bump_min_height > 0:
+        filters.setdefault('sign_bump', (bump_min_area, bump_min_height))
+
+    seen = set()
+    for d in detections:
+        if hasattr(d, 'class_name'):
+            name = d.class_name
+            if name in filters:
+                min_area, min_h = filters[name]
+                w = max(0, getattr(d, 'x_max', 0) - getattr(d, 'x_min', 0))
+                h = max(0, getattr(d, 'y_max', 0) - getattr(d, 'y_min', 0))
+                area = float(w * h)
+                if area < min_area or h < min_h:
+                    continue
+            seen.add(name)
+        elif isinstance(d, str):
+            seen.add(d)
+    return seen

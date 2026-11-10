@@ -13,6 +13,15 @@ mission:
     bump_level_duration: 0.3    # sec, continuous leveling to confirm exit
     bump_arm_timeout: 6.0       # sec, auto-expire if bump not hit after sign
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
+    bump_min_area: 2500.0       # px^2, minimum bbox area (approx 50x50 px) to trigger bump logic
+    bump_min_height: 40.0       # px, minimum bbox height to trigger bump logic
+    # sign bbox size filters (prevent distant premature triggers)
+    slow_min_area: 2500.0       # px^2, minimum bbox area to trigger slow down
+    slow_min_height: 40.0       # px, minimum bbox height to trigger slow down
+    parking_min_area: 2500.0    # px^2, minimum bbox area to latch parking flag
+    parking_min_height: 40.0    # px, minimum bbox height to latch parking flag
+    pedestrian_min_area: 2500.0 # px^2, minimum bbox area to arm pedestrian stop
+    pedestrian_min_height: 40.0 # px, minimum bbox height to arm pedestrian stop
     # missions
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s
     stop_on_yellow: true        # rules say nothing about yellow

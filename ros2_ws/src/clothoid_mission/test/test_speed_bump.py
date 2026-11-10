@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from clothoid_mission.mission_logic import (
     BUMP_IDLE, BUMP_APPROACHING, BUMP_ON, BUMP_COOLDOWN,
-    DRIVE, Inputs, MissionLogic, MissionParams, quaternion_to_pitch_deg
+    DRIVE, Inputs, MissionLogic, MissionParams, classes_seen, quaternion_to_pitch_deg
 )
 
 
@@ -97,3 +97,54 @@ def test_bump_arm_timeout():
     out = logic.step(Inputs(now=6.1, seen=set(), imu_pitch=0.0))
     assert logic.bump_state == BUMP_IDLE
     assert out.speed_limit is None
+
+
+class DummyDetection:
+    def __init__(self, class_name, x_min, y_min, x_max, y_max):
+        self.class_name = class_name
+        self.x_min = x_min
+        self.y_min = y_min
+        self.x_max = x_max
+        self.y_max = y_max
+
+
+def test_classes_seen_all_signs_bbox_filtering():
+    min_sizes = {
+        'sign_bump': (2500.0, 40.0),
+        'sign_slow': (2500.0, 40.0),
+        'sign_parking': (2500.0, 40.0),
+        'sign_pedestrian': (2500.0, 40.0),
+    }
+
+    # Distant signs: 30x30 = 900 px^2, height = 30px
+    distant_bump = DummyDetection('sign_bump', 100, 100, 130, 130)
+    distant_slow = DummyDetection('sign_slow', 100, 100, 130, 130)
+    distant_park = DummyDetection('sign_parking', 100, 100, 130, 130)
+    distant_ped = DummyDetection('sign_pedestrian', 100, 100, 130, 130)
+    # Unfiltered sign (e.g. traffic light or fork sign)
+    light_red = DummyDetection('traffic_light_red', 100, 100, 120, 120)
+
+    distant_seen = classes_seen(
+        [distant_bump, distant_slow, distant_park, distant_ped, light_red],
+        min_sizes=min_sizes
+    )
+    assert 'sign_bump' not in distant_seen
+    assert 'sign_slow' not in distant_seen
+    assert 'sign_parking' not in distant_seen
+    assert 'sign_pedestrian' not in distant_seen
+    assert 'traffic_light_red' in distant_seen
+
+    # Close signs: 60x60 = 3600 px^2, height = 60px
+    close_bump = DummyDetection('sign_bump', 100, 100, 160, 160)
+    close_slow = DummyDetection('sign_slow', 100, 100, 160, 160)
+    close_park = DummyDetection('sign_parking', 100, 100, 160, 160)
+    close_ped = DummyDetection('sign_pedestrian', 100, 100, 160, 160)
+
+    close_seen = classes_seen(
+        [close_bump, close_slow, close_park, close_ped],
+        min_sizes=min_sizes
+    )
+    assert 'sign_bump' in close_seen
+    assert 'sign_slow' in close_seen
+    assert 'sign_parking' in close_seen
+    assert 'sign_pedestrian' in close_seen
