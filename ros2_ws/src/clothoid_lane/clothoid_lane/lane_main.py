@@ -132,6 +132,7 @@ class LaneMainNode(Node):
         self.last_found_stamp = None
         self.used_target = None       # target point the last command steered to (after limit_step)
         self.last_zigzag_stamp = None
+        self.image_observers = []  # optional in-process consumers of the same decoded frame
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
         self.debug_pub = self.create_publisher(
@@ -231,6 +232,11 @@ class LaneMainNode(Node):
             self.get_logger().error(str(exc), throttle_duration_sec=5.0)
             return
 
+        for observer in self.image_observers:
+            observer(bgr)
+        self.process_bgr(bgr, msg.header)
+
+    def process_bgr(self, bgr, header):
         debug = self.get_parameter('debug').value
         result = self.detector.detect(bgr, self.side, self.lane_width, debug)
 
@@ -249,9 +255,9 @@ class LaneMainNode(Node):
             if target is not None:     # yellow ring: the point steered to (green dot: detected)
                 cv2.circle(result.debug_image, (int(round(target[0])), int(round(target[1]))), 7,
                            (0, 255, 255), 2)
-            self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
+            self.debug_pub.publish(bgr_to_image(result.debug_image, header))
         if debug:
-            self._publish_debug_points(result, msg.header)
+            self._publish_debug_points(result, header)
 
         if result.zigzag:
             self.last_zigzag_stamp = now

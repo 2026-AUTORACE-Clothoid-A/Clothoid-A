@@ -22,7 +22,7 @@ from clothoid_lane.stopline import NearLineDetector, NearLineParams, StopLineDet
 
 
 class StopLineNode(Node):
-    def __init__(self):
+    def __init__(self, subscribe_images=True):
         super().__init__('stopline')
 
         self.declare_parameter('image_topic', '/camera/color/image_raw')
@@ -61,8 +61,9 @@ class StopLineNode(Node):
         # self.pub = self.create_publisher(Bool, self.get_parameter('stopline_topic').value, 1)
         self.debug_pub = self.create_publisher(
             Image, self.get_parameter('debug_image_topic').value, 1)
-        self.create_subscription(
-            Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
+        if subscribe_images:
+            self.create_subscription(
+                Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info('stopline started')
@@ -97,6 +98,10 @@ class StopLineNode(Node):
             self.get_logger().error(str(exc), throttle_duration_sec=5.0)
             return
 
+        self.on_bgr(bgr)
+
+    def on_bgr(self, bgr):
+        """The exact same detector, with either a standalone or shared image subscription."""
         # 2025 stripe flag, not used in 2026 (see the module docstring)
         # debug = self.get_parameter('debug').value
         # result = self.detector.detect(bgr, debug)
