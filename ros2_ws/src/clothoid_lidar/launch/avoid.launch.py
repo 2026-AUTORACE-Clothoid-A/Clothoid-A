@@ -46,9 +46,10 @@ def _nodes(context):
     avoid_yaml = os.path.join(lidar, 'config', 'static_avoid.yaml')
     sim = {'use_sim_time': LaunchConfiguration('use_sim_time').perform(context).lower() == 'true'}
     camera = LaunchConfiguration('camera').perform(context)
-    ignore_cone = {'ignore_cone': LaunchConfiguration('ignore_cone').perform(context).lower() == 'true'}
+    flags = {k: LaunchConfiguration(k).perform(context).lower() == 'true'
+             for k in ('ignore_cone', 'debug_heavy')}
     cam_file, white = _lane_files(camera)
-    avoid_params = [topics, avoid_yaml] + ([cam_file] if cam_file else []) + [white, sim, ignore_cone]
+    avoid_params = [topics, avoid_yaml] + ([cam_file] if cam_file else []) + [white, sim, flags]
     note = (f'static_avoid: camera file {cam_file}' if cam_file else
             f'static_avoid: no camera_{camera}.yaml in clothoid_lane, built-in limo2 values')
     return [
@@ -67,5 +68,7 @@ def generate_launch_description():
                               description='lane camera profile: limo1 | limo2 (limo2 = car 7)'),
         DeclareLaunchArgument('ignore_cone', default_value='false',
                               description='test track only: its cone wall beside the section ends the avoidance'),
+        DeclareLaunchArgument('debug_heavy', default_value='false',
+                              description='also publish /avoid/candidates and /avoid/costmap (slow on the car)'),
         OpaqueFunction(function=_nodes),
     ])

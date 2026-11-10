@@ -8,7 +8,9 @@ static_avoid:
     # alone, so only /cone/mission_active is used. To try it: use_red_ratio true and start red_ratio.
     use_red_ratio: false
     red_ratio_max: 0.10          # 1105 bags: obstacle zone <= 0.06, cone course >= 0.20
-    debug: true                  # /avoid/path, /avoid/candidates (costmap is always published)
+    debug: true                  # /avoid/path, /avoid/cues
+    debug_heavy: false           # + /avoid/candidates, /avoid/costmap: slow on the Jetson, rviz only
+    load_log_period: 5.0         # s, a log line with each callback's run time; 0 = off
 
     lane_width: 0.50             # line centre to centre on our track; rules 0.55, check at the venue
     # trigger

@@ -13,10 +13,11 @@ In:  limos_topic (PoseArray, base_link, from the `limo_extractor` instance), sca
      per-car camera file (avoid.launch.py camera:=limo1|limo2).
 Out: cmd_topic (/cmd_vel_avoid, 20 Hz while active, one Twist(0) when it ends),
      /avoid/active (Bool, every scan), /avoid/done (Bool, every scan: the section is behind us), /avoid/lane (Int32, 1..3 while active, 0 idle),
-     debug: /avoid/path (Path), /avoid/candidates (MarkerArray), /avoid/costmap (OccupancyGrid),
+     debug: /avoid/path (Path), /avoid/cues; debug_heavy: /avoid/candidates (MarkerArray), /avoid/costmap (OccupancyGrid),
      /avoid/cues (MarkerArray: entry line, island and its source), all in base_link.
 """
 import math
+import time
 from collections import deque
 from dataclasses import fields
 
@@ -61,7 +62,9 @@ class StaticAvoidNode(Node):
         self.declare_parameter('scan_time_offset', 0.05)  # s, stamp is the start of the sweep
         self.declare_parameter('lidar_x', 0.103)          # used when TF is not available
         self.declare_parameter('lidar_y', 0.0)
-        self.declare_parameter('debug', True)
+        self.declare_parameter('debug', True)              # /avoid/path, /avoid/cues
+        self.declare_parameter('debug_heavy', False)       # + /avoid/candidates, /avoid/costmap (rviz only)
+        self.declare_parameter('load_log_period', 5.0)     # s, callback time log; 0 = off
         # camera cues
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('image_every', 3)
@@ -118,10 +121,12 @@ class StaticAvoidNode(Node):
         self.map_pub = self.create_publisher(OccupancyGrid, '/avoid/costmap', 1)
         self.cues_pub = self.create_publisher(MarkerArray, '/avoid/cues', 1)
 
-        self.create_subscription(PoseArray, g('limos_topic'), self.on_limos, 1)
-        self.create_subscription(LaserScan, g('scan_topic'), self.on_scan, qos_profile_sensor_data)
-        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 20)
-        self.create_subscription(Imu, g('imu_topic'), self.on_imu, 50)
+        self.create_subscription(PoseArray, g('limos_topic'), self.timed('limos', self.on_limos), 1)
+        self.create_subscription(LaserScan, g('scan_topic'), self.timed('scan', self.on_scan),
+                                 qos_profile_sensor_data)
+        # depth 1: a late message is dropped, the odometer uses the driver's accumulated position
+        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 1)
+        self.create_subscription(Imu, g('imu_topic'), self.on_imu, 1)
         self.create_subscription(Bool, g('cone_active_topic'), self.on_cone, 1)
         self.create_subscription(Float32, g('red_ratio_topic'), self.on_red, 5)
         self.create_subscription(Bool, g('parking_topic'), self.on_parking, 1)
@@ -129,15 +134,21 @@ class StaticAvoidNode(Node):
         self.create_subscription(Int32, g('direction_topic'), self.on_direction, 1)
         image_topic = g('image_topic')
         if image_topic.endswith('/compressed'):
-            self.create_subscription(CompressedImage, image_topic, self.on_image,
+            self.create_subscription(CompressedImage, image_topic, self.timed('image', self.on_image),
                                      qos_profile_sensor_data)
         elif image_topic:
-            self.create_subscription(Image, image_topic, self.on_image, qos_profile_sensor_data)
+            self.create_subscription(Image, image_topic, self.timed('image', self.on_image),
+                                     qos_profile_sensor_data)
         if g('island_topic'):
             self.create_subscription(PointStamped, g('island_topic'), self.on_island, 1)
         self.create_subscription(ParameterEvent, '/parameter_events', self.on_param_event, 10)
-        self.create_timer(0.05, self.on_timer)
-        self.create_timer(0.5, self.publish_costmap)
+        self.load = {}                     # callback -> [count, total s, max s]
+        self.odom_gap, self.last_odom_stamp = 0.0, None
+        self.create_timer(0.05, self.timed('timer', self.on_timer))
+        self.create_timer(0.5, self.timed('slow_debug', self.publish_costmap))
+        period = float(self.get_parameter('load_log_period').value)
+        if period > 0.0:
+            self.create_timer(period, self.log_load)
         self.get_logger().info(f'static_avoid started: lane width {self.p.lane_width:.2f} m, '
                                f'trigger {self.p.activate_range:.1f} m ahead, camera h '
                                f'{self.cam.height:.3f} pitch {self.cam.pitch:+.3f}, white S<='
@@ -146,6 +157,30 @@ class StaticAvoidNode(Node):
     # ---- inputs -----------------------------------------------------------------------------
     def now(self) -> float:
         return self.get_clock().now().nanoseconds * 1e-9
+
+    def timed(self, name, callback):
+        """callback wrapped to add its run time to self.load (see log_load)."""
+        def run(*args):
+            t = time.perf_counter()
+            try:
+                return callback(*args)
+            finally:
+                dt = time.perf_counter() - t
+                c = self.load.setdefault(name, [0, 0.0, 0.0])
+                c[0] += 1
+                c[1] += dt
+                c[2] = max(c[2], dt)
+        return run
+
+    def log_load(self):
+        """One line per period: per callback count, mean and max run time, and the longest gap
+        between the /odom stamps received (the node was busy if it is far above 0.02 s)."""
+        period = float(self.get_parameter('load_log_period').value)
+        parts = [f'{k} n{c[0]} avg {1000 * c[1] / max(c[0], 1):.0f}ms max {1000 * c[2]:.0f}ms'
+                 for k, c in sorted(self.load.items())]
+        self.get_logger().info(f'load {period:.0f}s ({self.avoid.state}): ' + ' | '.join(parts)
+                               + f' | odom gap max {1000 * self.odom_gap:.0f}ms')
+        self.load, self.odom_gap = {}, 0.0
 
     def stamp(self, msg) -> float:
         """Message time (the driver's stamp): bag playback's /clock ticks at 40 Hz, slower than
@@ -158,7 +193,12 @@ class StaticAvoidNode(Node):
         self.tracker.imu(self.stamp(msg), yaw_from_quaternion(q.x, q.y, q.z, q.w))
 
     def on_odom(self, msg: Odometry):
-        self.tracker.odom(self.stamp(msg), msg.twist.twist.linear.x)
+        t = self.stamp(msg)
+        if self.last_odom_stamp is not None:
+            self.odom_gap = max(self.odom_gap, t - self.last_odom_stamp)
+        self.last_odom_stamp = t
+        p = msg.pose.pose.position
+        self.tracker.odom(t, msg.twist.twist.linear.x, (p.x, p.y))
         self.maybe_reanchor()
 
     def maybe_reanchor(self):
@@ -302,8 +342,9 @@ class StaticAvoidNode(Node):
         t_scan = (Time.from_msg(scan.header.stamp).nanoseconds * 1e-9
                   + self.get_parameter('scan_time_offset').value)
         debug = self.get_parameter('debug').value
+        heavy = self.get_parameter('debug_heavy').value
         self.avoid.on_scan(hits, np.array([lx, ly]), self.tracker.at(t_scan),
-                           self.tracker.latest(), self.direction, keep_candidates=debug,
+                           self.tracker.latest(), self.direction, keep_candidates=heavy,
                            free_dirs_base=free)
         if debug:
             self.publish_plan()
@@ -352,6 +393,8 @@ class StaticAvoidNode(Node):
             ps.pose.orientation.w = 1.0
             path.poses.append(ps)
         self.path_pub.publish(path)
+        if not self.get_parameter('debug_heavy').value:
+            return
 
         out = MarkerArray()
         out.markers.append(Marker(action=Marker.DELETEALL))
@@ -372,7 +415,13 @@ class StaticAvoidNode(Node):
         self.cand_pub.publish(out)
 
     def publish_costmap(self):
+        """2 Hz: the cues when debug, the costmap only when debug_heavy (45 000 cells as a Python
+        list is slow on the Jetson)."""
         if self.avoid.state != ACTIVE or self.avoid.costmap is None or not self.tracker.ready:
+            return
+        if not self.get_parameter('debug_heavy').value:
+            if self.get_parameter('debug').value:
+                self.publish_cues(self.avoid.lane_pose(self.tracker.latest()))
             return
         cm = self.avoid.costmap
         s, d, psi = self.avoid.section_pose(self.tracker.latest())
