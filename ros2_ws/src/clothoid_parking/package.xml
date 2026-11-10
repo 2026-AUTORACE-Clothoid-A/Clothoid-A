@@ -3,18 +3,19 @@
 <package format="3">
   <name>clothoid_parking</name>
   <version>0.1.0</version>
-  <description>T-parking: start line trigger and a yaml step table (ROS2 port of 2025 parking_rect)</description>
+  <description>T-parking 2026: lidar empty-bay search and one forward arc into the bay</description>
   <maintainer email="todo@example.com">Clothoid-A</maintainer>
   <license>TODO</license>
 
   <depend>rclpy</depend>
-  <depend>clothoid_common</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>visualization_msgs</depend>
+  <depend>builtin_interfaces</depend>
+  <exec_depend>rviz2</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-opencv</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

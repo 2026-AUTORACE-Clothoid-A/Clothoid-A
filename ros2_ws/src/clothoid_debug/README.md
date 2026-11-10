@@ -11,7 +11,7 @@
 | 센서, `limo_base`, `twist_mux`, 미션 노드 | 켜짐 | 켜짐 |
 | 조향 명령 `/cmd_vel_*` | 발행 | 발행 |
 | 디버그 이미지, `/lane/*_warp` | 발행 안 함 | 발행 |
-| `decision_viz` 노드 | 안 뜸 | 뜸 |
+| `decision_viz` 노드 | 안 뜸 | 안 뜸 (`viz:=true`일 때만 뜸) |
 
 주행 노드를 끄는 인자는 따로 있다: `use_lane`, `use_yolo`, `use_lidar_missions`, `use_parking`, `use_mission`.
 
@@ -102,5 +102,5 @@ ros2 run clothoid_debug lane_viewer ../bag/lane_1107_201620 --tune
 ## 기존 코드에서 바꾼 부분
 - `clothoid_lane/lane_detector.py`: `LaneResult`에 `left_points`, `right_points` 추가. 조향과 추종점 계산은 그대로다.
 - `clothoid_lane/lane_main.py`: `debug`가 켜졌을 때만 `/lane/target_warp`, `/lane/left_warp`, `/lane/right_warp` 발행.
-- `clothoid_bringup/launch/full.launch.py`: `debug:=true`일 때 `viz.launch.py` 포함.
+- `clothoid_bringup/launch/full.launch.py`: `viz:=true`일 때 `viz.launch.py` 포함 (`debug:=true`만으로는 안 뜸).
 - `clothoid_bringup/package.xml`: `clothoid_debug` 의존성 추가.

@@ -16,6 +16,10 @@ twist_mux:
         topic: cmd_vel_parking
         timeout: 0.3
         priority: 110
+      finish:                # after parking: yellow line to the end line (clothoid_finish)
+        topic: cmd_vel_finish
+        timeout: 0.3
+        priority: 110
       avoid:                 # static obstacle avoidance, rubber cones
         topic: cmd_vel_avoid
         timeout: 0.3

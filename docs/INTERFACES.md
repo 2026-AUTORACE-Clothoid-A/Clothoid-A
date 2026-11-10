@@ -27,7 +27,7 @@ Pixel boxes refer to the 640x480 color image.
 ## Other detection outputs
 | Topic | Type | Publisher | Meaning |
 |---|---|---|---|
-| `/stopline_detected` | `std_msgs/Bool` | `clothoid_lane` `stopline` | stop line / crosswalk stripes ahead (every frame) |
+| `/stopline_detected` | `std_msgs/Bool` | `clothoid_lane` `stopline` | 2025 crosswalk stripes, commented out since 2026-11-09 (not published) |
 | `/lidar/obstacles` | `geometry_msgs/PoseArray` | `clothoid_lidar` `obstacle_extractor` | obstacle centres in `base_link` (positions only), shared by the cone and static obstacle missions |
 | `/cone/left_boundary`, `/cone/right_boundary` | `nav_msgs/Path` | `clothoid_lidar` `cone_sorter` | sorted cones of each side while the cone course runs |
 | `/cone/mission_active` | `std_msgs/Bool` | `clothoid_lidar` `cone_sorter` | cone course start / end |
@@ -74,5 +74,8 @@ angles still need measuring, see Open points.
 - **Lidar angle convention:** `clothoid_parking` compares the closest point's angle in the scan frame
   (2025 used `-2.0 rad`, which the ±110° Tmini Plus can never reach). Check which way the lidar's
   zero angle points before retuning `angle_limit`.
-- **Stop line distance:** `/stopline_detected` is a yes/no flag. The ±5 cm stop at signals and the
-  pedestrian sign needs a distance (or odometry since the line appeared); not implemented yet.
+- **Stop line (light / pedestrian):** done inside `mission` (no extra topic): while armed it reads the
+  camera and runs clothoid_finish's FinishCore with the cross line in white (`line_stop.py`); its speed
+  goes out as `/speed_limit` (lane_main keeps steering), its STOP as zero on `/cmd_vel_state`.
+  `/mission/state` (`std_msgs/String`, JSON) and `/mission/line_debug_image` (debug) are for
+  clothoid_debug `stop_viz` / `rviz/stop.rviz`. `/stopline_detected` (2025 stripes) is commented out.

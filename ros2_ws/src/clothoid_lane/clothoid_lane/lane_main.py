@@ -23,7 +23,7 @@ from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
-                                    limit_step, steer_angle)
+                                    limit_step, speed_scaled_gain, steer_angle)
 
 DETECTORS = ('track2026', 'sliding2025')
 TRACKER_FIELDS = tuple(TrackerParams.__dataclass_fields__)
@@ -89,6 +89,11 @@ class LaneMainNode(Node):
         # multiplies the 2025 steering law before the limit. 1.0 = 2025; limo2 turned too little in
         # the first right corner with 1.0 (2026-11-07 drives: 8.5 deg where about 13 is needed)
         self.declare_parameter('steer_gain', 1.0)
+        # below base_speed (/speed_limit, zigzag) raise steer_gain so speed x gain stays the same: tuned
+        # at 0.8 m/s with 0.33, the stop line approach at 0.2 turned a quarter of what a corner needs
+        # and left the lane (limo2 2026-11-09). At most steer_gain_max (0.3 m/s drove with 1.0).
+        self.declare_parameter('steer_gain_speed_scaling', True)
+        self.declare_parameter('steer_gain_max', 1.0)
         self.declare_parameter('speed_limit_timeout', 0.5)
         # mission 6 (slow guide lines): speed while track2026 sees the zigzag lines, 0 = no change
         self.declare_parameter('zigzag_speed', 0.2)
@@ -105,6 +110,7 @@ class LaneMainNode(Node):
         # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
         # (config/camera_*.yaml), so the width in pixels is lane_width_m x warp_px_per_m.
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
+        self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('lane_width_m', 0.5)
         self.declare_parameter('parking_lane_width_m', 0.68)
         self.declare_parameter('warp_px_per_m', 340.0)
@@ -123,10 +129,13 @@ class LaneMainNode(Node):
 
         self.speed_limit = None
         self.speed_limit_stamp = None
+        self.steering_locked = False
+        self.last_steer = 0.0
         self.last_cmd = None
         self.last_found_stamp = None
         self.used_target = None       # target point the last command steered to (after limit_step)
         self.last_zigzag_stamp = None
+        self.image_observers = []  # optional in-process consumers of the same decoded frame
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
         self.debug_pub = self.create_publisher(
@@ -143,6 +152,8 @@ class LaneMainNode(Node):
             Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
         self.create_subscription(
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
+        self.create_subscription(
+            Bool, self.get_parameter('steering_lock_topic').value, self.on_steering_lock, 1)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
@@ -199,6 +210,9 @@ class LaneMainNode(Node):
             self.speed_limit = msg.data
             self.speed_limit_stamp = self.get_clock().now()
 
+    def on_steering_lock(self, msg: Bool):
+        self.steering_locked = bool(msg.data)
+
     def current_speed(self) -> float:
         speed = self.get_parameter('base_speed').value
         if self.speed_limit is not None:
@@ -226,6 +240,11 @@ class LaneMainNode(Node):
             self.get_logger().error(str(exc), throttle_duration_sec=5.0)
             return
 
+        for observer in self.image_observers:
+            observer(bgr)
+        self.process_bgr(bgr, msg.header)
+
+    def process_bgr(self, bgr, header):
         debug = self.get_parameter('debug').value
         result = self.detector.detect(bgr, self.side, self.lane_width, debug)
 
@@ -244,24 +263,35 @@ class LaneMainNode(Node):
             if target is not None:     # yellow ring: the point steered to (green dot: detected)
                 cv2.circle(result.debug_image, (int(round(target[0])), int(round(target[1]))), 7,
                            (0, 255, 255), 2)
-            self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
+            self.debug_pub.publish(bgr_to_image(result.debug_image, header))
         if debug:
-            self._publish_debug_points(result, msg.header)
+            self._publish_debug_points(result, header)
 
         if result.zigzag:
             self.last_zigzag_stamp = now
         if result.found:
-            steer = steer_angle(target[0], target[1],
-                                self.detector.p.warp_w, self.detector.p.warp_h,
-                                self.get_parameter('steer_gain').value,
-                                self.get_parameter('max_steer_rad').value)
-
+            if self.steering_locked and self.last_cmd is not None:
+                steer = self.last_steer
+            else:
+                steer = steer_angle(target[0], target[1],
+                                    self.detector.p.warp_w, self.detector.p.warp_h,
+                                    self.get_parameter('steer_gain').value,
+                                    self.get_parameter('max_steer_rad').value)
+                self.last_steer = steer
             speed = self.current_speed()
             zigzag_speed = self.get_parameter('zigzag_speed').value
             if zigzag_speed > 0.0 and self.last_zigzag_stamp is not None and (
                     now - self.last_zigzag_stamp).nanoseconds * 1e-9 <= \
                     self.get_parameter('zigzag_hold_sec').value:
                 speed = min(speed, zigzag_speed)
+            gain = self.get_parameter('steer_gain').value
+            if self.get_parameter('steer_gain_speed_scaling').value:
+                gain = speed_scaled_gain(gain, self.get_parameter('base_speed').value, speed,
+                                         self.get_parameter('steer_gain_max').value)
+            steer = steer_angle(target[0], target[1],
+                                self.detector.p.warp_w, self.detector.p.warp_h,
+                                gain, self.get_parameter('max_steer_rad').value)
+
             cmd = Twist()
             cmd.linear.x = speed
             cmd.angular.z = angular_z(speed, steer, self.get_parameter('wheelbase').value)

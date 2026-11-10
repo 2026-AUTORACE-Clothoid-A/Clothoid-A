@@ -3,13 +3,62 @@
 mission:
   ros__parameters:
     rate_hz: 20.0
-    input_timeout: 0.5          # detections / stop line older than this count as "not seen"
-    refresh_sec: 1.0            # direction / parking flag re-sent this often
+    input_timeout: 0.5          # detections / stop line / imu older than this count as "not seen"
+    refresh_sec: 1.0            # direction / parking / steering_lock flag re-sent this often
+    # abs(light box centre x - camera principal x) / box height. Start-straight
+    # adjacent light: 5.3; own signal approach: 2.9. Initial threshold, validate on
+    # the track. Applies to every light colour; 0.0 disables that group's filter.
+    light_max_offset_height_ratio: 3.5
+    # Smaller sign faces need a wider ratio than lights. Recorded bump/pedestrian:
+    # <= 3.9; adjacent parking sign at the start: 9.1~12.5, own parking sign: ~4.3.
+    sign_max_offset_height_ratio: 5.0  # pedestrian, slow, bump, parking; initial track setting
+    # Fork signs can enter at the image edge from an outer lane (recorded up to 9.4).
+    fork_max_offset_height_ratio: 10.0  # sign_left / sign_right; initial track setting
+    # Confirm on distinct YOLO frames; timer ticks never count as new evidence.
+    detection_confirm_hits: 3
+    detection_window: 5
+    detection_max_age: 0.5
+    detection_confidence: 0.6
+    sign_min_height: 14
+    light_min_height: 8
+    detection_edge_margin: 2
+    # Stop-line corridor and physical thickness, in metres on the ground.
+    line_band: 0.22
+    line_min_run: 0.7
+    line_min_thickness: 0.008
+    line_max_thickness: 0.12
+    line_max_frame_gap: 0.25
+    line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
     slow_speed: 0.2             # rules: 0.2 m/s or less
-    slow_hold_sec: 4.0          # bump length not fixed in the rules yet
+    slow_hold_sec: 4.0          # general slow sign hold timer
+    # speed bump (IMU Pitch + YOLO fusion)
+    bump_pitch_thresh: 3.5      # deg, nose-up angle to detect climbing
+    bump_level_thresh: 1.2      # deg, abs angle to detect vehicle leveled
+    bump_level_duration: 0.3    # sec, continuous leveling to confirm exit
+    bump_arm_timeout: 6.0       # sec, auto-expire if bump not hit after sign
+    bump_cooldown: 4.0          # sec, cooldown before re-arming bump
+    bump_min_area: 2500.0       # px^2, minimum bbox area (approx 50x50 px) to trigger bump logic
+    bump_min_height: 40.0       # px, minimum bbox height to trigger bump logic
+    # sign bbox size filters (prevent distant premature triggers)
+    slow_min_area: 2500.0       # px^2, minimum bbox area to trigger slow down
+    slow_min_height: 40.0       # px, minimum bbox height to trigger slow down
+    parking_min_area: 2500.0    # px^2, minimum bbox area to latch parking flag
+    parking_min_height: 40.0    # px, minimum bbox height to latch parking flag
+    pedestrian_min_area: 2500.0 # px^2, minimum bbox area to arm pedestrian stop
+    pedestrian_min_height: 40.0 # px, minimum bbox height to arm pedestrian stop
+    # missions
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s
     stop_on_yellow: true        # rules say nothing about yellow
     arm_timeout_sec: 8.0
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
+    parking_at_stopline: true   # sign_parking arms, the next stop line raises /parking_flag
+    # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
+    # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
+    use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true
+    approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
+    image_topic: /camera/color/image_raw/compressed   # overrides topics.yaml (raw), as finish
+    compressed: true
+    white_s_max: 60             # stop line white: S <= 60, V >= 150
+    white_v_min: 150
