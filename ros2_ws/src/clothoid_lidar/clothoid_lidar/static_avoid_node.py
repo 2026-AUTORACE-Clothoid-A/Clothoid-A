@@ -356,7 +356,7 @@ class StaticAvoidNode(Node):
             self.lane_pub.publish(Int32(data=0))
             return
         pose = self.tracker.latest()
-        cmd = self.avoid.control(pose, self.inhibit())
+        cmd = self.avoid.control(pose, self.inhibit(), self.now())
         if cmd is None:   # ended this cycle: one stop, then silence (lane_main / others take over)
             self.cmd_pub.publish(Twist())
             self.active_pub.publish(Bool(data=False))

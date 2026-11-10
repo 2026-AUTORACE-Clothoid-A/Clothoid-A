@@ -15,7 +15,7 @@ Design: docs/STATIC_AVOID.md. In short
     clear ahead; Twist(0) once, then silence.
 """
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -91,6 +91,28 @@ class AvoidParams:
     transition_lengths: Tuple[float, ...] = (0.8, 1.2, 1.6)
     horizon: float = 2.0
     path_ds: float = 0.05
+    # two-stage candidates (direction known, island measured): swerve now, then into the A / B lane
+    # by route_margin before the island front; scored up to there + route_after. Off: in the simulation
+    # it passed 71 of 80 random layouts (one-stage 68) but lost 2 of the 12 runs of the 1108 run 6-9
+    # layout (tools/static_avoid, docs/STATIC_AVOID_LOCAL_PLAN.md)
+    route: bool = False
+    route_end_step: float = 0.10
+    route_lengths: Tuple[float, ...] = (0.8, 1.2, 1.6)
+    route_len_per_m: float = 1.6      # 2nd stage at least this long per m of offset: the car can follow it
+    route_start_step: float = 0.25
+    route_margin: float = 0.40
+    route_after: float = 0.40
+    # stuck (every path blocked for stuck_time): sharper transitions if recovery_sharp (off: in the
+    # simulation the car could not follow them and hit the LIMO), then back up if allowed
+    recovery_sharp: bool = False
+    recovery_lengths: Tuple[float, ...] = (0.5, 0.8, 1.2)
+    stuck_time: float = 0.5           # s with every path blocked
+    recovery_until: float = 0.5       # m driven on a plan again: back to the normal candidates
+    recovery_reverse: bool = False    # also back up when still stuck (launch argument `reverse`)
+    reverse_after: float = 1.5        # s stuck
+    reverse_distance: float = 0.20    # m per back-up, straight back along the way the car came
+    reverse_max: float = 0.40         # m in all, per mission
+    reverse_speed: float = 0.15
     # the first metres of every path start where the car is now: if the car is already inside the
     # safety margin (an obstacle seen late, or passed close), lethal cells there only cost, so the
     # car can still pick the way out instead of freezing
@@ -409,30 +431,57 @@ def escape_distance(p: AvoidParams) -> float:
     return math.sqrt(max(2.0 * r * y - y * y, 0.0)) + p.escape_margin
 
 
-def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Costmap,
-               direction: Optional[int], last_end: Optional[float], p: AvoidParams,
-               keep_candidates: bool = False,
-               island: Optional[Tuple[float, float]] = None,
-               lane_in_costmap: Optional[SectionFrame] = None,
-               forbid_island: bool = False) -> Plan:
-    """pose, island and the returned paths are in lane coordinates; lane_in_costmap is the lane frame
-    expressed in the costmap's section frame (None = the same frame)."""
-    s0, d0, psi = pose
-    island = island or (p.island_s_min, p.island_s_max)
-    w = p.lane_width
-    ends = np.arange(-p.end_span * w, p.end_span * w + 1e-9, p.end_step)
-    lengths = np.asarray(p.transition_lengths)
-    E, Lt = np.meshgrid(ends, lengths, indexing='ij')
-    E, Lt = E.ravel(), Lt.ravel()                                   # (P,)
-    ds = np.arange(p.path_ds, p.horizon + 1e-9, p.path_ds)          # (S,)
-    # Every candidate leaves along the car's present heading (slope tan psi, as when it is half way
-    # through a lane change) and ends straight at E after Lt: a cubic Hermite in d(s), then straight.
-    m0 = math.tan(max(-1.0, min(1.0, psi)))
+def _hermite(ds: np.ndarray, d0: float, m0: float, E: np.ndarray, Lt: np.ndarray):
+    """Offsets and slopes (P, S): leave d0 along slope m0, end straight at E after Lt (cubic Hermite in
+    d(s)), then straight."""
     x = np.clip(ds[None, :] / Lt[:, None], 0.0, 1.0)
     h00, h10, h01 = 2 * x ** 3 - 3 * x ** 2 + 1, x ** 3 - 2 * x ** 2 + x, -2 * x ** 3 + 3 * x ** 2
-    d = h00 * d0 + h10 * (Lt[:, None] * m0) + h01 * E[:, None]      # (P, S)
+    d = h00 * d0 + h10 * (Lt[:, None] * m0) + h01 * E[:, None]
     dh00, dh10, dh01 = 6 * x ** 2 - 6 * x, 3 * x ** 2 - 4 * x + 1, -6 * x ** 2 + 6 * x
     slope = np.where(x < 1.0, (dh00 * d0 + dh01 * E[:, None]) / Lt[:, None] + dh10 * m0, 0.0)
+    return d, slope
+
+
+def _route_candidates(ds: np.ndarray, d0: float, m0: float, s0: float, tc: float, front: float,
+                      p: 'AvoidParams'):
+    """Two-stage candidates: to E1 now (as the one-stage ones), then from s_b over L2 into the target
+    lane centre tc, done by `front` (the island front less route_margin). Returns E1, Lt, d, slope."""
+    w = p.lane_width
+    out = []
+    for E1 in np.arange(-p.end_span * w, p.end_span * w + 1e-9, p.route_end_step):
+        for Lt in p.transition_lengths:
+            for L2 in p.route_lengths:
+                if abs(E1 - tc) < 1e-6:
+                    if L2 == p.route_lengths[0]:
+                        out.append((E1, Lt, None, None))          # already there: one stage
+                    continue
+                if L2 < p.route_len_per_m * abs(tc - E1) - 1e-9:
+                    continue
+                last = front - L2                                 # latest start of the 2nd stage
+                first = s0 + Lt
+                if last < first - 1e-9:
+                    continue
+                for sb in np.arange(first, last + 1e-9, p.route_start_step):
+                    out.append((E1, Lt, sb, L2))
+    if not out:
+        return None
+    E1 = np.array([o[0] for o in out])
+    Lt = np.array([o[1] for o in out])
+    d, slope = _hermite(ds, d0, m0, E1, Lt)
+    for k, (_, _, sb, L2) in enumerate(out):
+        if sb is None:
+            continue
+        x = np.clip((s0 + ds - sb) / L2, 0.0, 1.0)
+        d[k] += (tc - E1[k]) * (3 * x ** 2 - 2 * x ** 3)
+        slope[k] += np.where((x > 0.0) & (x < 1.0), (tc - E1[k]) * (6 * x - 6 * x ** 2) / L2, 0.0)
+    return E1, Lt, d, slope
+
+
+def _score(s0, d0, psi, ds, E, Lt, d, slope, costmap, travelled, direction, last_end, p, island,
+           lane_in_costmap, forbid_island, route: bool):
+    """Cost per candidate (inf = not allowed) and the obstacle term. With route, every candidate ends
+    in the target lane before the island: no target-lane term."""
+    w = p.lane_width
     theta = np.arctan(slope)
     s = np.broadcast_to(s0 + ds[None, :], d.shape)
 
@@ -448,7 +497,8 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     near = ds[None, :] <= escape_distance(p)
     lethal = (hit & near).any(axis=1)              # cannot be swerved around: forbidden
     lethal_far = (hit & ~near).mean(axis=1)        # can still be swerved around later: cost
-    obstacle = np.where(c >= LETHAL, 100.0, c).mean(axis=(1, 2))
+    # closeness over the first `horizon` m as for one-stage paths: a long route must not dilute it
+    obstacle = np.where(c >= LETHAL, 100.0, c)[:, ds <= p.horizon + 1e-9].mean(axis=(1, 2))
 
     # yellow outer line, checked at the car's outer corners (a car at an angle reaches further out
     # than its centre): no path may go further out than the line - margin, or than the corners are
@@ -476,7 +526,9 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     if last_end is not None:
         cost += p.w_hysteresis * np.abs(E - last_end)
     tc = target_centre(direction, p)
-    if tc is not None:
+    if route:
+        pass
+    elif tc is not None:
         near_island = island[0] - s0 <= p.target_near
         cost += (p.w_target_near if near_island else p.w_target) * (E - tc) ** 2
     else:
@@ -485,19 +537,70 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
         cost += weight * lane2
 
     bad = lethal | out_of_road
-    # the island is forbidden only while another way exists: it must never freeze the car
-    if forbid_island and tc is not None and not (bad | island_hit).all():
+    # the island is forbidden only while another way exists: it must never freeze the car. A route
+    # over the island is never taken: the one-stage candidates are the other way then
+    if route or (forbid_island and tc is not None and not (bad | island_hit).all()):
         bad |= island_hit
-    cost = np.where(bad, np.inf, cost)
+    if route:       # only a way that is clear all the way to the island: else wait as one-stage
+        bad |= hit.any(axis=1)
+    return np.where(bad, np.inf, cost), obstacle, s
+
+
+def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Costmap,
+               direction: Optional[int], last_end: Optional[float], p: AvoidParams,
+               keep_candidates: bool = False,
+               island: Optional[Tuple[float, float]] = None,
+               lane_in_costmap: Optional[SectionFrame] = None,
+               forbid_island: bool = False, recovery: bool = False) -> Plan:
+    """pose, island and the returned paths are in lane coordinates; lane_in_costmap is the lane frame
+    expressed in the costmap's section frame (None = the same frame).
+
+    Direction known and the island measured: first the two-stage candidates (swerve now, then into the
+    A / B lane before the island), scored up to the island and taken only when one is clear all the way
+    (nothing lethal on it, the island not touched); else the one-stage ones over
+    `horizon` with the target-lane weight. recovery: the shorter transitions and the smaller safety of
+    a car that has been stuck (every path blocked)."""
+    s0, d0, psi = pose
+    island = island or (p.island_s_min, p.island_s_max)
+    if recovery and p.recovery_sharp:
+        p = replace(p, transition_lengths=p.recovery_lengths, route_lengths=p.recovery_lengths)
+    w = p.lane_width
+    # Every candidate leaves along the car's present heading (slope tan psi, as when it is half way
+    # through a lane change).
+    m0 = math.tan(max(-1.0, min(1.0, psi)))
+    tc = target_centre(direction, p)
+    args = (costmap, travelled, direction, last_end, p, island, lane_in_costmap, forbid_island)
+
+    front = island[0] - p.route_margin
+    if p.route and tc is not None and forbid_island and front - s0 > min(p.transition_lengths):
+        ds = np.arange(p.path_ds, max(p.horizon, front - s0 + p.route_after) + 1e-9, p.path_ds)
+        cands = _route_candidates(ds, d0, m0, s0, tc, front, p)
+        if cands is not None:
+            E, Lt, d, slope = cands
+            cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=True)
+            if np.isfinite(cost).any():
+                return _plan(s, d, E, cost, obstacle, keep_candidates)
+
+    ends = np.arange(-p.end_span * w, p.end_span * w + 1e-9, p.end_step)
+    E, Lt = np.meshgrid(ends, np.asarray(p.transition_lengths), indexing='ij')
+    E, Lt = E.ravel(), Lt.ravel()                                   # (P,)
+    ds = np.arange(p.path_ds, p.horizon + 1e-9, p.path_ds)          # (S,)
+    d, slope = _hermite(ds, d0, m0, E, Lt)
+    cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=False)
+    return _plan(s, d, E, cost, obstacle, keep_candidates)
+
+
+def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
     best = int(np.argmin(cost))
     feasible = bool(np.isfinite(cost[best]))
-    path = np.column_stack((s[best], d[best]))
     cands = []
     if keep_candidates:
-        for k in range(0, len(E), 2):
+        step = max(1, len(E) // 60)
+        for k in range(0, len(E), step):
             cands.append((np.column_stack((s[k], d[k])), float(cost[k])))
-    return Plan(path=path, end_offset=float(E[best]), cost=float(cost[best]),
-                obstacle_cost=float(obstacle[best]), candidates=cands, feasible=feasible)
+    return Plan(path=np.column_stack((s[best], d[best])), end_offset=float(E[best]),
+                cost=float(cost[best]), obstacle_cost=float(obstacle[best]), candidates=cands,
+                feasible=feasible)
 
 
 def pure_pursuit(path: np.ndarray, pose: Tuple[float, float, float], p: AvoidParams) -> float:
@@ -566,6 +669,7 @@ class StaticAvoid:
         self.island_source = 'estimate'
         self.entry_s: Optional[float] = None
         self.event = ''                      # last state change, for the log
+        self.reset_recovery()
         self.done = False                    # the section is behind us, avoided or not
 
     # ---- trigger --------------------------------------------------------------------------
@@ -675,6 +779,7 @@ class StaticAvoid:
         self.plan = None
         self.last_end = None
         self.blocked_scans = 0
+        self.reset_recovery()
         self.event = 'start'
 
     def past_island(self, pose_world) -> bool:
@@ -814,13 +919,46 @@ class StaticAvoid:
         now = self.lane_pose(pose_now_world)
         self.plan = plan_paths(now, now[0], self.costmap, self.direction, self.last_end,
                                self.p, keep_candidates, self.island, self.lane_in_costmap(),
-                               self.island_source == 'entry line')
+                               self.island_source == 'entry line', self.recovering)
         if self.plan.feasible:
             self.last_end = self.plan.end_offset
 
-    def control(self, pose_now_world, inhibit: Inhibit) -> Optional[Tuple[float, float]]:
+    def reset_recovery(self) -> None:
+        self.stuck_since: Optional[float] = None
+        self.recovering = False
+        self.recovered_from: Optional[float] = None   # s where a plan was found again
+        self.backing_from: Optional[float] = None     # s where the back-up started
+        self.reversed = 0.0
+
+    def _stuck(self, t: Optional[float], s: float) -> Tuple[float, float]:
+        """Every path blocked: stop; after stuck_time plan with the sharper recovery candidates; after
+        reverse_after back up (if allowed) straight along the way the car came, which is free."""
+        p = self.p
+        self.recovered_from = None
+        if t is None:
+            return 0.0, 0.0
+        if self.stuck_since is None:
+            self.stuck_since = t
+        stuck = t - self.stuck_since
+        if stuck >= p.stuck_time and not self.recovering:
+            self.recovering = True
+            self.event = 'stuck: recovery candidates'
+        if p.recovery_reverse and stuck >= p.reverse_after and self.reversed < p.reverse_max:
+            if self.backing_from is None:
+                self.backing_from = s
+                self.event = 'stuck: backing up'
+            backed = self.backing_from - s
+            if backed < min(p.reverse_distance, p.reverse_max - self.reversed):
+                return -p.reverse_speed, 0.0
+            self.reversed += backed
+            self.backing_from, self.stuck_since = None, t          # wait for a plan again
+        return 0.0, 0.0
+
+    def control(self, pose_now_world, inhibit: Inhibit,
+                t: Optional[float] = None) -> Optional[Tuple[float, float]]:
         """(v, wz) while active. None when idle. Ends the mission (state IDLE, event set) when it
-        hands over or is inhibited; the caller then sends one Twist(0)."""
+        hands over or is inhibited; the caller then sends one Twist(0). t (s) enables the recovery
+        when every path is blocked."""
         if self.state != ACTIVE:
             return None
         p = self.p
@@ -848,10 +986,17 @@ class StaticAvoid:
         if pose[0] > p.max_travel:
             self.stop('hand over: max travel', True)
             return None
-        if self.plan is None:
-            return 0.0, 0.0
-        if not self.plan.feasible:
-            return 0.0, 0.0
+        if self.plan is None or not self.plan.feasible:
+            return self._stuck(t, pose[0])
+        if self.backing_from is not None:                  # a plan again while backing up
+            self.reversed += max(self.backing_from - pose[0], 0.0)
+            self.backing_from = None
+        self.stuck_since = None
+        if self.recovering:
+            if self.recovered_from is None:
+                self.recovered_from = pose[0]
+            elif pose[0] - self.recovered_from >= p.recovery_until:
+                self.recovering, self.recovered_from = False, None
         delta = pure_pursuit(self.plan.path, pose, p)
         changing = abs(self.plan.end_offset - pose[1]) > 0.10
         v = p.slow_speed if (changing or self.plan.obstacle_cost > p.slow_cost) else p.speed

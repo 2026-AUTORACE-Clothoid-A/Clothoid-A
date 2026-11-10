@@ -171,7 +171,7 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         if int(round(t / dt)) % control_every:
             res = 'hold'
         else:
-            res = avoid.control(tracker.latest(), inh)
+            res = avoid.control(tracker.latest(), inh, t)
         if res == 'hold':
             pass
         elif res is None:
@@ -445,13 +445,38 @@ def test_skewed_frame_is_corrected_by_the_start_fit():
     check(out, w, 1)
 
 
-@pytest.mark.xfail(strict=True, reason='no recovery when every path is blocked: with the start fit '
-                   'failed the car is 0.5 m before the lane 2 obstacle when the entry-line fit turns '
-                   'the frame, and stops there (docs/STATIC_AVOID_LOCAL_PLAN.md)')
-def test_skewed_frame_without_a_start_fit():
+def test_skewed_frame_without_a_start_fit_needs_the_route():
+    """The start fit failed: the entry-line fit turns the frame 0.5 m before the lane 2 obstacle.
+    One-stage paths stop there; the two-stage route (option `route`) goes around."""
     w = 0.50
-    out = run([(1.5, 0.0), (3.5, 0.0), (3.0, -w)], direction=0, skew_deg=-12.0)
+    stuck = run([(1.5, 0.0), (3.5, 0.0), (3.0, -w)], direction=0, skew_deg=-12.0)
+    assert stuck['x'] < 2.0 and stuck['stops'] > 0
+    out = run([(1.5, 0.0), (3.5, 0.0), (3.0, -w)], direction=0, skew_deg=-12.0,
+              params=replace(AvoidParams(), route=True))
     check(out, w, 1)
+
+
+def test_reverse_recovery_backs_up_only_when_allowed():
+    blocked = StaticAvoid(AvoidParams(recovery_reverse=True))
+    blocked.activate((0.0, 0.0, 0.0))
+    blocked.plan = None
+    cmds = [blocked.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) for k in range(20)]
+    assert cmds[0] == (0.0, 0.0) and any(v < 0.0 for v, _ in cmds)
+    assert blocked.event == 'stuck: backing up'
+    off = StaticAvoid(AvoidParams())
+    off.activate((0.0, 0.0, 0.0))
+    off.plan = None
+    assert all(off.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) == (0.0, 0.0) for k in range(30))
+
+
+def test_reverse_stops_after_its_distance():
+    a = StaticAvoid(AvoidParams(recovery_reverse=True))
+    a.activate((0.0, 0.0, 0.0))
+    a.plan = None
+    for k in range(16):
+        a.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k)
+    assert a.control((-0.25, 0.0, 0.0), Inhibit(), 1.7) == (0.0, 0.0)      # backed 0.25 m >= 0.2
+    assert a.reversed == pytest.approx(0.25)
 
 
 def test_lane_frame_moves_the_lanes_not_the_costmap():
