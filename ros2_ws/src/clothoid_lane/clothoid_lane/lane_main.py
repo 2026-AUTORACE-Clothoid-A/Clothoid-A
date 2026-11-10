@@ -15,11 +15,11 @@ import cv2
 import rclpy
 from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool, Float32, Int32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
@@ -145,7 +145,7 @@ class LaneMainNode(Node):
         self.left_pub = self.create_publisher(PolygonStamped, '/lane/left_warp', 1)
         self.right_pub = self.create_publisher(PolygonStamped, '/lane/right_warp', 1)
         self.create_subscription(
-            Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
+            Image, self.get_parameter('image_topic').value, self.on_image, IMAGE_QOS)
         self.create_subscription(
             Int32, self.get_parameter('direction_topic').value, self.on_direction, 1)
         self.create_subscription(
@@ -312,6 +312,11 @@ class LaneMainNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LaneMainNode()
+    # one OpenCV thread per process: several camera nodes each spawning a pool fight over the
+    # cores (lane_shared does the same with shared_opencv_threads); 0 keeps OpenCV's default
+    threads = node.declare_parameter('opencv_threads', 1).value
+    if threads:
+        cv2.setNumThreads(threads)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
