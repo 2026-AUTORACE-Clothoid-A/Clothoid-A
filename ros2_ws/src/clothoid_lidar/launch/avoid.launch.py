@@ -50,7 +50,9 @@ def _nodes(context):
              for k in ('ignore_cone', 'debug_heavy')}
     flags['recovery_reverse'] = LaunchConfiguration('reverse').perform(context).lower() == 'true'
     cam_file, white = _lane_files(camera)
-    avoid_params = [topics, avoid_yaml] + ([cam_file] if cam_file else []) + [white, sim, flags]
+    extra = LaunchConfiguration('params').perform(context)
+    avoid_params = ([topics, avoid_yaml] + ([cam_file] if cam_file else []) + [white, sim, flags]
+                    + ([extra] if extra else []))
     note = (f'static_avoid: camera file {cam_file}' if cam_file else
             f'static_avoid: no camera_{camera}.yaml in clothoid_lane, built-in limo2 values')
     return [
@@ -71,6 +73,8 @@ def generate_launch_description():
                               description='test track only: its cone wall beside the section ends the avoidance'),
         DeclareLaunchArgument('debug_heavy', default_value='false',
                               description='also publish /avoid/candidates and /avoid/costmap (slow on the car)'),
+        DeclareLaunchArgument('params', default_value='',
+                              description='extra static_avoid parameter file, last (e.g. the simulator)'),
         DeclareLaunchArgument('reverse', default_value='false',
                               description='back up 0.2 m when every path stays blocked (recovery)'),
         OpaqueFunction(function=_nodes),
