@@ -49,12 +49,37 @@ def messages(bag, topics):
         yield topic, t * 1e-9, deserialize_message(data, c)
 
 
+def stalls_like_live(bag, legacy):
+    """(topic, stamp ns) the car's node never got: while it was busy (gaps over 0.15 s between its own
+    /avoid/active messages in the bag) only the last `depth` messages of each topic stayed queued.
+    Depths of the node as it ran on 11-10 (legacy) or as it is now."""
+    import glob
+    import sqlite3
+    db = sqlite3.connect(glob.glob(os.path.join(bag, '*.db3'))[0])
+    ids = {n: i for i, n in db.execute('select id, name from topics')}
+    def stamps(topic):
+        return np.array([r[0] for r in db.execute(
+            'select timestamp from messages where topic_id=? order by timestamp', (ids[topic],))])
+    act = stamps('/avoid/active')
+    gaps = [(a, b) for a, b in zip(act[:-1], act[1:]) if b - a > 0.15e9]
+    depth = ({'/odom': 20, '/imu': 50, '/scan': 5, '/camera/color/image_raw': 5} if legacy else
+             {'/odom': 1, '/imu': 1, '/scan': 5, '/camera/color/image_raw': 5})
+    drop = set()
+    for topic, k in depth.items():
+        ts = stamps(topic)
+        for a, b in gaps:
+            inside = ts[(ts > a) & (ts < b)]
+            drop.update((topic, int(t) // 1000) for t in inside[:max(len(inside) - k, 0)])
+    return drop, gaps
+
+
 def image_bgr(msg):
     arr = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, -1)
     return arr[:, :, ::-1] if msg.encoding == 'rgb8' else arr
 
 
-def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
+def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stall=False,
+           legacy_odom=False):
     """Same pieces as static_avoid_node: LIMO trigger, costmap, plans, entry line (camera every
     3rd frame), island from the entry line, hand-over."""
     cam = cam or CameraModel()          # limo2 = car 7, the 11-05 bags
@@ -71,7 +96,13 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
     t0 = None
     on_since, on_total = None, 0.0
     s = 0.0
+    drop = set()
+    if stall:
+        drop, gaps = stalls_like_live(bag, legacy_odom)
+        rec['stalls'] = (len(gaps), len(drop))
     for topic, t, msg in messages(bag, ['/scan', '/odom', '/imu', '/camera/color/image_raw']):
+        if drop and (topic, int(round(t * 1e6))) in drop:      # microseconds: float seconds
+            continue
         t0 = t if t0 is None else t0
         s = t - t0
         if topic == '/imu':
@@ -92,7 +123,8 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None):
                 rec['events'].append((s, avoid.event))
             continue
         if topic == '/odom':
-            tracker.odom(s, msg.twist.twist.linear.x)
+            q = msg.pose.pose.position
+            tracker.odom(s, msg.twist.twist.linear.x, None if legacy_odom else (q.x, q.y))
             if avoid.state == ACTIVE and avoid.island_source == 'estimate':
                 c = entry.recent(tracker.distance, 0.3, 0.0)     # same as the node
                 if c is not None:
@@ -235,15 +267,24 @@ def main():
     ap.add_argument('--truth', default='', help='tape-measured objects to draw, lane:distance from '
                     'the entry line to the rear [m], c prefix = cone, e.g. 2:3.00,3:2.50,c1:1.80')
     ap.add_argument('--snaps', type=int, default=6)
+    ap.add_argument('--stall-like-live', action='store_true',
+                    help='drop what the car\'s node missed while busy (from the bag\'s /avoid/active gaps)')
+    ap.add_argument('--legacy-odom', action='store_true',
+                    help='the 11-10 odometer: v * dt with gaps capped at 0.1 s, queue depths 20 / 50')
     a = ap.parse_args()
 
     direction = None if a.direction == 'none' else (None if a.direction == 'auto' else int(a.direction))
-    rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width)
+    rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
+                 stall=a.stall_like_live, legacy_odom=a.legacy_odom)
     if a.direction == 'auto' and rec['trail']:
         driven = [d for t, s, d, _ in rec['trail'] if s > 0.5 and t <= a.t_to]
         end_lane = lane_of(driven[-1], rec['p']) if driven else 2
         direction = {1: 0, 3: 1}.get(end_lane)
-        rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width)
+        rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
+                     stall=a.stall_like_live, legacy_odom=a.legacy_odom)
+    if rec.get('stalls'):
+        print(f'emulated busy node: {rec["stalls"][0]} stalls, {rec["stalls"][1]} messages dropped'
+              f'{" (11-10 odometer)" if a.legacy_odom else ""}')
     print(f'{a.bag}  ({a.t_from:.0f}-{a.t_to:.0f} s, direction {direction}, '
           f'cone flag {"ignored" if a.ignore_cone else "used"})')
     for t_ev, what in rec['events']:
