@@ -11,14 +11,19 @@ start the stopline / speed_zone nodes (off by default, see clothoid_lane/launch/
 
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
-see docs/PACKAGES.md). Platform-only arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `use_joint_states`, `steering_scale`,
-`max_inner_angle`) are forwarded to `bringup.launch.py`.
+see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `use_joint_states`,
+`require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
+`bringup.launch.py`.
+
+Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
+Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
 """
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -37,6 +42,8 @@ def generate_launch_description():
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
                      'steering_scale', 'max_inner_angle']
     debug = LaunchConfiguration('debug')
+    # defaults must match bringup.launch.py
+    mux_args = {'require_arm': 'false', 'mux_output': '/cmd_vel', 'cmd_timeout': '0.5'}
 
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
@@ -62,10 +69,11 @@ def generate_launch_description():
         DeclareLaunchArgument('use_joint_states', default_value='false'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
+        *[DeclareLaunchArgument(name, default_value=value) for name, value in mux_args.items()],
 
         # sensors, TF, limo_base, twist_mux
         include('clothoid_bringup', 'bringup.launch.py',
-                args={name: LaunchConfiguration(name) for name in platform_args}),
+                args={name: LaunchConfiguration(name) for name in [*platform_args, *mux_args]}),
 
         include('clothoid_lane', 'lane.launch.py',
                 {'debug': debug, 'camera': LaunchConfiguration('camera'),
@@ -86,6 +94,15 @@ def generate_launch_description():
                 {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_mission')),
         # YOLO boxes, mission state, stop line / stop point in RViz (rviz/stop.rviz), stop_viz:=true
         include('clothoid_debug', 'stop_viz.launch.py', condition=enabled('stop_viz')),
+
+        # read-only rate / latency / mux-winner log (clothoid_bringup/latency_monitor.py)
+        DeclareLaunchArgument('use_latency_monitor', default_value='false'),
+        DeclareLaunchArgument('latency_csv', default_value='',
+                              description='append every report to this CSV, e.g. ~/bags/latency.csv'),
+        Node(package='clothoid_bringup', executable='latency_monitor', name='latency_monitor',
+             output='screen', parameters=[{'csv_path': LaunchConfiguration('latency_csv')}],
+             condition=enabled('use_latency_monitor')),
+
         # what rviz/decision.rviz shows, only with viz:=true
         include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')},
                 enabled('viz')),

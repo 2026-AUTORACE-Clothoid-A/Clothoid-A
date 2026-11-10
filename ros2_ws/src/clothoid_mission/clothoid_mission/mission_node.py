@@ -3,8 +3,8 @@
 
 Publishes
   `cmd_topic` (Twist, twist_mux input `state`): zero velocity while the logic says stop
-  `speed_limit_topic` (Float32): heartbeat while a slow sign limit is active (never a release)
-  `direction_topic` (Int32), `parking_topic` (Bool): on change and once a second
+  `speed_limit_topic` (Float32): heartbeat while a slow sign or speed bump limit is active
+  `direction_topic` (Int32), `parking_topic` (Bool), `steering_lock_topic` (Bool): on change and once a second
   `state_topic` (String, JSON): state, what armed it, the line stop (for clothoid_debug stop_viz)
 
 Light / pedestrian stop line (`use_stop_line`): while armed (YOLO saw the pedestrian sign / red light)
@@ -36,7 +36,7 @@ from std_msgs.msg import Bool, Float32, Int32, String
 
 from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
-    Inputs, MissionLogic, MissionParams, DetectionGate, classes_seen)
+    Inputs, MissionLogic, MissionParams, DetectionGate, classes_seen, quaternion_to_pitch_deg)
 
 # FinishCore phase -> what mission_logic expects
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
@@ -75,13 +75,14 @@ class MissionNode(Node):
         self.declare_parameter('speed_limit_topic', '/speed_limit')
         self.declare_parameter('direction_topic', '/direction_flag')
         self.declare_parameter('parking_topic', '/parking_flag')
+        self.declare_parameter('steering_lock_topic', '/steering_lock')
         # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
         self.declare_parameter('parking_sign_topic', '/parking_sign')
         # one stop line right in front (clothoid_lane stopline node): where parking starts
         self.declare_parameter('parking_line_topic', '/stopline_near')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
-        self.declare_parameter('input_timeout', 0.5)   # detections / stop line older than this are dropped
+        self.declare_parameter('input_timeout', 0.5)   # detections / stop line / imu older than this are dropped
         self.declare_parameter('refresh_sec', 1.0)
         self.declare_parameter('light_max_offset_height_ratio', 3.5)
         self.declare_parameter('sign_max_offset_height_ratio', 5.0)
@@ -95,6 +96,20 @@ class MissionNode(Node):
         d = MissionParams()
         self.declare_parameter('slow_speed', d.slow_speed)
         self.declare_parameter('slow_hold_sec', d.slow_hold_sec)
+        self.declare_parameter('bump_pitch_thresh', d.bump_pitch_thresh)
+        self.declare_parameter('bump_level_thresh', d.bump_level_thresh)
+        self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
+        self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
+        self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
+        self.declare_parameter('bump_min_area', 2500.0)    # px^2, minimum bbox area to arm bump
+        self.declare_parameter('bump_min_height', 40.0)    # px, minimum bbox height to arm bump
+        self.declare_parameter('slow_min_area', 2500.0)    # px^2, minimum bbox area to trigger slow
+        self.declare_parameter('slow_min_height', 40.0)    # px, minimum bbox height to trigger slow
+        self.declare_parameter('parking_min_area', 2500.0) # px^2, minimum bbox area to latch parking
+        self.declare_parameter('parking_min_height', 40.0) # px, minimum bbox height to latch parking
+        self.declare_parameter('pedestrian_min_area', 2500.0) # px^2, minimum bbox area to arm pedestrian
+        self.declare_parameter('pedestrian_min_height', 40.0) # px, minimum bbox height to arm pedestrian
+
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
         self.declare_parameter('arm_timeout_sec', d.arm_timeout_sec)
@@ -112,16 +127,26 @@ class MissionNode(Node):
             sign_height=get('sign_min_height'), light_height=get('light_min_height'),
             edge_margin=get('detection_edge_margin'))
         self.logic = MissionLogic(MissionParams(
-            slow_speed=get('slow_speed'), slow_hold_sec=get('slow_hold_sec'),
-            pedestrian_wait_sec=get('pedestrian_wait_sec'), stop_on_yellow=get('stop_on_yellow'),
-            arm_timeout_sec=get('arm_timeout_sec'), cooldown_sec=get('cooldown_sec'),
-            use_stop_line=get('use_stop_line'), approach_speed=get('approach_speed'),
+            slow_speed=get('slow_speed'),
+            slow_hold_sec=get('slow_hold_sec'),
+            bump_pitch_thresh=get('bump_pitch_thresh'),
+            bump_level_thresh=get('bump_level_thresh'),
+            bump_level_duration_sec=get('bump_level_duration'),
+            bump_arm_timeout_sec=get('bump_arm_timeout'),
+            bump_cooldown_sec=get('bump_cooldown'),
+            pedestrian_wait_sec=get('pedestrian_wait_sec'),
+            stop_on_yellow=get('stop_on_yellow'),
+            arm_timeout_sec=get('arm_timeout_sec'),
+            cooldown_sec=get('cooldown_sec'),
+            use_stop_line=get('use_stop_line'),
+            approach_speed=get('approach_speed'),
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction'),
             parking_at_stopline=get('parking_at_stopline')))
 
         self.seen, self.seen_time = set(), None
         self.stopline, self.stopline_time = False, None
+        self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
         self.sign_time = None            # last /parking_sign true
         self.line, self.line_time = False, None
@@ -133,6 +158,8 @@ class MissionNode(Node):
         self.limit_pub = self.create_publisher(Float32, get('speed_limit_topic'), 1)
         self.direction_pub = self.create_publisher(Int32, get('direction_topic'), 1)
         self.parking_pub = self.create_publisher(Bool, get('parking_topic'), 1)
+        self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
+
         self.create_subscription(DetectionArray, get('detections_topic'), self.on_detections, 1)
         # 2025 stripe flag (clothoid_lane stopline), commented out there in 2026: the light /
         # pedestrian stop is the line stop below. `stopline` stays False.
@@ -163,7 +190,7 @@ class MissionNode(Node):
         self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data)
 
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
-        self.get_logger().info('mission started')
+        self.get_logger().info('mission started (speed bump integrated)')
         self.get_logger().info(
             f'mission implementation: {inspect.getfile(MissionNode)}; '
             f'use_stop_line={get("use_stop_line")}; confirmation='
@@ -173,16 +200,44 @@ class MissionNode(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_detections(self, msg: DetectionArray):
+        min_sizes = {
+            'sign_bump': (self.get_parameter('bump_min_area').value,
+                          self.get_parameter('bump_min_height').value),
+            'sign_slow': (self.get_parameter('slow_min_area').value,
+                          self.get_parameter('slow_min_height').value),
+            'sign_parking': (self.get_parameter('parking_min_area').value,
+                             self.get_parameter('parking_min_height').value),
+            'sign_pedestrian': (self.get_parameter('pedestrian_min_area').value,
+                                self.get_parameter('pedestrian_min_height').value),
+        }
         accepted = classes_seen(
             msg.detections, camera_center_x=self.cam.cx,
             light_max_offset_height_ratio=self.get_parameter(
                 'light_max_offset_height_ratio').value,
             sign_max_offset_height_ratio=self.get_parameter('sign_max_offset_height_ratio').value,
-            fork_max_offset_height_ratio=self.get_parameter('fork_max_offset_height_ratio').value)
+            fork_max_offset_height_ratio=self.get_parameter('fork_max_offset_height_ratio').value,
+            min_sizes=min_sizes)
         self.seen = self.detection_gate.update(
             self.now_sec(), msg.detections, accepted,
             width=self.warp.width, height=self.warp.height)
         self.seen_time = self.now_sec()
+
+        # Log sign bbox size for easy on-track tuning
+        for d in msg.detections:
+            if d.class_name in min_sizes:
+                min_area, min_h = min_sizes[d.class_name]
+                w = max(0, d.x_max - d.x_min)
+                h = max(0, d.y_max - d.y_min)
+                area = float(w * h)
+                tag = d.class_name.upper().replace('SIGN_', '')
+                if d.class_name in self.seen:
+                    self.get_logger().info(
+                        f'[{tag}] {d.class_name} ARMED (area={area:.0f}px^2, h={h}px >= min_area={min_area:.0f}, min_h={min_h:.0f})',
+                        throttle_duration_sec=1.0)
+                else:
+                    self.get_logger().info(
+                        f'[{tag}] {d.class_name} IGNORED (area={area:.0f}px^2, h={h}px < min_area={min_area:.0f}, min_h={min_h:.0f})',
+                        throttle_duration_sec=1.0)
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()
@@ -224,6 +279,9 @@ class MissionNode(Node):
     def on_imu(self, msg: Imu):
         if self.core:
             self.core.imu(self.stamp(msg, self.now_sec()), msg.angular_velocity.z)
+        q = msg.orientation
+        self.latest_pitch = quaternion_to_pitch_deg(q.x, q.y, q.z, q.w)
+        self.latest_pitch_time = self.now_sec()
 
     def on_odom(self, msg: Odometry):
         if self.core:
@@ -319,7 +377,8 @@ class MissionNode(Node):
             parking_line=self.line if self._fresh(self.line_time) else False,
             line_phase=line_phase,
             line_speed=self.line_speed,
-            parking_done=self.parking_done))
+            parking_done=self.parking_done,
+            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None))
         self.line_speed = self.line_stop_step(now, out.stop_arm)
         armed = [n for n, a in (('pedestrian', self.logic.pedestrian_armed_at),
                                 ('light', self.logic.light_armed_at)) if a is not None]
@@ -344,7 +403,7 @@ class MissionNode(Node):
             self.state = out.state
 
         if out.stop:
-            self.cmd_pub.publish(Twist())   # zero command, see docs/INTERFACES.md open points
+            self.cmd_pub.publish(Twist())   # zero command
         if out.speed_limit is not None:
             self.limit_pub.publish(Float32(data=float(out.speed_limit)))
         if out.direction is not None:
@@ -353,6 +412,9 @@ class MissionNode(Node):
         if out.parking_flag:
             self._publish_changed('parking', True,
                                   lambda v: self.parking_pub.publish(Bool(data=bool(v))))
+
+        self._publish_changed('steering_lock', out.steering_lock,
+                              lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
 
 
 def main(args=None):

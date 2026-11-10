@@ -32,7 +32,7 @@ from clothoid_debug.geometry import GroundProjection, arc_points
 from clothoid_lane.lane_detector import LaneParams, make_warp_matrix
 
 # twist_mux.yaml: name, topic, timeout, highest priority first
-MUX_INPUTS = (('state', '/cmd_vel_state', 0.3), ('parking', '/cmd_vel_parking', 0.3),
+MUX_INPUTS = (('parking', '/cmd_vel_parking', 0.3), ('state', '/cmd_vel_state', 0.3),
               ('avoid', '/cmd_vel_avoid', 0.3), ('lane', '/cmd_vel_lane', 0.3))
 
 def rgba(rgb, a=1.0) -> ColorRGBA:
