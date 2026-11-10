@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mission = clothoid_mission.mission_node:main',
+            'speed_bump = clothoid_mission.speed_bump_node:main',
         ],
     },
 )

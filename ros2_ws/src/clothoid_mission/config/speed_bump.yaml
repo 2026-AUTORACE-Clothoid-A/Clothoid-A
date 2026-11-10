@@ -1,0 +1,17 @@
+# Speed bump (mission 5): slow from the bump sign until the IMU says the bump is passed.
+# Floats need a decimal point. The pitch values are guesses: the 2026-11-05/07 bags have no bump
+# (pitch stays within about 1 deg of level), so record one over the real bump and retune.
+speed_bump:
+  ros__parameters:
+    rate_hz: 20.0
+    slow_speed: 0.2          # rules: half the base speed, 0.2 m/s at most
+    min_confidence: 0.5      # YOLO sign_bump (11-07 bag: up to 0.91)
+    confirm_frames: 2        # sign in this many detection messages in a row
+    up_deg: 3.0              # nose up: front wheels climbing (eunsoo_bump: 3.5)
+    down_deg: 3.0            # nose down: rear wheels climbing
+    level_deg: 1.0           # level again: within this of the flat-floor pitch (bags: sd 0.25 deg)
+    level_sec: 0.3           # level this long after the nose-down: whole car over the bump
+    arm_timeout_sec: 10.0    # no bump 10 s after the sign: back to normal speed (fallback)
+    on_bump_max_sec: 5.0     # stuck in on_bump this long: count the bump as passed (fallback)
+    cooldown_sec: 3.0        # ignore the sign this long after passing
+    baseline_tau_sec: 2.0    # averaging time of the flat-floor pitch
