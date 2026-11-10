@@ -12,6 +12,7 @@
 | 조향 명령 `/cmd_vel_*` | 발행 | 발행 |
 | 디버그 이미지, `/lane/*_warp` | 발행 안 함 | 발행 |
 | `decision_viz` 노드 | 안 뜸 | 안 뜸 (`viz:=true`일 때만 뜸) |
+| 카메라 오버레이 `/viz/overlay` | - | 차에서는 끔(`viz.launch.py`의 `overlay` 기본값 `false`, raw 영상을 구독하지 않음), `bag.launch.py`에서는 켬 |
 
 주행 노드를 끄는 인자는 따로 있다: `use_lane`, `use_yolo`, `use_lidar_missions`, `use_parking`, `use_mission`.
 
