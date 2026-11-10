@@ -202,7 +202,13 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         out['min_gap'] = min(out['min_gap'], min_gap(car, limos) if limos else np.inf)
         out['max_abs_y'] = max(out['max_abs_y'], float(np.abs(car[:, 1]).max()))
         if ISLAND[0] <= bx <= ISLAND[1] and np.abs(car[:, 1]).min() < w / 2 - 0.02:
-            out['island_ok'] = False
+            # the painted island narrows to a point over its first 0.25 m: the car over that tip only
+            # is counted apart (allowed when the A / B lane cannot be reached earlier)
+            tip = min((bx - ISLAND[0]) / 0.25, 1.0) * (w / 2 - 0.02)
+            if np.abs(car[:, 1]).min() < tip or bx > ISLAND[0] + 0.25:
+                out['island_ok'] = False
+            else:
+                out['island_tip'] = True
     out.update(final_y=by, final_lane=lane_of(by, p), x=bx, released=released, t=t,
                state=avoid.state, island_source_end=avoid.island_source)
     return out
@@ -445,15 +451,72 @@ def test_skewed_frame_is_corrected_by_the_start_fit():
     check(out, w, 1)
 
 
-def test_skewed_frame_without_a_start_fit_needs_the_route():
+def test_skewed_frame_without_a_start_fit():
     """The start fit failed: the entry-line fit turns the frame 0.5 m before the lane 2 obstacle.
-    One-stage paths stop there; the two-stage route (option `route`) goes around."""
+    One-stage paths stop there; the lane sequence (and the two-stage route) go around."""
     w = 0.50
-    stuck = run([(1.5, 0.0), (3.5, 0.0), (3.0, -w)], direction=0, skew_deg=-12.0)
+    limos = [(1.5, 0.0), (3.5, 0.0), (3.0, -w)]
+    stuck = run(limos, direction=0, skew_deg=-12.0, params=replace(AvoidParams(), sequence=False))
     assert stuck['x'] < 2.0 and stuck['stops'] > 0
-    out = run([(1.5, 0.0), (3.5, 0.0), (3.0, -w)], direction=0, skew_deg=-12.0,
-              params=replace(AvoidParams(), route=True))
-    check(out, w, 1)
+    check(run(limos, direction=0, skew_deg=-12.0), w, 1)
+    check(run(limos, direction=0, skew_deg=-12.0,
+              params=replace(AvoidParams(), sequence=False, route=True)), w, 1)
+
+
+def _lanes_driven(track):
+    out = []
+    for _, _, d, _ in track:
+        lane = lane_of(d, AvoidParams())
+        if not out or out[-1] != lane:
+            out.append(lane)
+    return out
+
+
+@pytest.mark.parametrize('layout', [[(1.16, 0.0), (1.98, -0.50)],      # 1108 run 1-2: L2 1.00, L3 1.82
+                                    [(3.16, 0.0), (2.66, -0.50)]])     # 1108 run 6-9: L2 3.00, L3 2.50
+def test_sign_right_goes_round_by_lane_1_then_into_lane_3(layout):
+    track = []
+    out = run(layout, direction=1, track=track)
+    check(out, 0.50, 3)
+    assert _lanes_driven(track) == [2, 1, 2, 3]
+    assert out['min_gap'] > 0.10
+
+
+def test_lane_sequence_is_kept_while_free():
+    """Re-planned every scan from the car, the chosen lane changes must not come and go."""
+    import clothoid_lidar.static_avoid as sa
+    seen = []
+    orig = sa.plan_paths
+
+    def spy(*a, **k):
+        plan = orig(*a, **k)
+        if plan.sequence is not None:
+            seen.append(tuple((x, y) for x, y, _ in plan.sequence.changes))
+        return plan
+    sa.plan_paths = spy
+    try:
+        run([(3.16, 0.0), (2.66, -0.50)], direction=1)
+    finally:
+        sa.plan_paths = orig
+    switches = sum(1 for a, b in zip(seen, seen[1:]) if a != b and set(b) - set(a))
+    assert seen and switches <= 2, seen
+
+
+def test_s_curve_is_never_sharper_than_its_radius():
+    from clothoid_lidar.lane_sequence import s_curve, s_curve_length
+    for delta in (0.5, -0.5, 1.0):
+        length = s_curve_length(delta, 0.55, math.radians(50))
+        u = np.linspace(0.0, length, 400)
+        off, head = s_curve(u, delta, 0.55, math.radians(50))
+        assert off[-1] == pytest.approx(delta, abs=1e-6)
+        curvature = np.abs(np.gradient(head, u)) * np.cos(head)    # d heading / d arc length
+        assert curvature[2:-2].max() <= 1.0 / 0.55 + 0.05
+
+
+def test_target_lane_limo_just_before_the_island_is_reached_over_the_tip_at_most():
+    w = 0.50
+    out = run([(1.2, 0.0), (3.36, -w)], direction=1)        # lane 3 LIMO rear 3.2 m: very late
+    check(out, w, 3)
 
 
 def test_reverse_recovery_backs_up_only_when_allowed():

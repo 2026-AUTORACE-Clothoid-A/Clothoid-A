@@ -19,6 +19,8 @@ from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
 
 import numpy as np
+
+from clothoid_lidar.lane_sequence import Sequence, plan_sequence
 from scipy.ndimage import distance_transform_edt
 
 from clothoid_lidar.section_cues import CameraModel, ColourParams, LaneObservation, find_lane_lines
@@ -102,6 +104,21 @@ class AvoidParams:
     route_start_step: float = 0.25
     route_margin: float = 0.40
     route_after: float = 0.40
+    # lane-sequence planner (lane_sequence.py): lane centre to lane centre with S-curves no sharper
+    # than lc_radius, into the A / B lane by route_margin before the island (else over its pointed
+    # tip: late), kept while it stays free. Used with the direction known and the island measured.
+    # sim (tools/static_avoid/sim_layouts.py): 12/12 of the 1108 layouts and 80/80 random ones, the
+    # one-stage planner 12/12 and 68/80
+    sequence: bool = True
+    seq_step: float = 0.10
+    seq_sample: float = 0.05
+    lc_radius: float = 0.55           # m, car 7 turns at 0.47 m (rear axle, full lock)
+    lc_max_heading_deg: float = 50.0
+    lc_blend: float = 0.40            # m over which the present heading is blended out
+    w_change: float = 30.0            # per lane change
+    w_keep: float = 15.0              # bonus for the change already chosen
+    w_off_target: float = 8.0         # per m outside the A / B lane: change early, with margin
+    late_tip: bool = True             # allow the island's pointed tip when the target lane is late
     # stuck (every path blocked for stuck_time): sharper transitions if recovery_sharp (off: in the
     # simulation the car could not follow them and hit the LIMO), then back up if allowed
     recovery_sharp: bool = False
@@ -405,6 +422,7 @@ class Plan:
     obstacle_cost: float
     candidates: List[Tuple[np.ndarray, float]] = field(default_factory=list)  # (path, cost) for debug
     feasible: bool = True
+    sequence: Optional['Sequence'] = None     # lane-sequence plan, if that planner made it
 
 
 def lane_centres(p: AvoidParams) -> np.ndarray:
@@ -551,7 +569,8 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
                keep_candidates: bool = False,
                island: Optional[Tuple[float, float]] = None,
                lane_in_costmap: Optional[SectionFrame] = None,
-               forbid_island: bool = False, recovery: bool = False) -> Plan:
+               forbid_island: bool = False, recovery: bool = False,
+               keep: Optional[Sequence] = None) -> Plan:
     """pose, island and the returned paths are in lane coordinates; lane_in_costmap is the lane frame
     expressed in the costmap's section frame (None = the same frame).
 
@@ -571,6 +590,11 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     tc = target_centre(direction, p)
     args = (costmap, travelled, direction, last_end, p, island, lane_in_costmap, forbid_island)
 
+    if p.sequence and tc is not None and forbid_island and island[0] - s0 > 0.3:
+        plan = _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep)
+        if plan is not None:
+            return plan
+
     front = island[0] - p.route_margin
     if p.route and tc is not None and forbid_island and front - s0 > min(p.transition_lengths):
         ds = np.arange(p.path_ds, max(p.horizon, front - s0 + p.route_after) + 1e-9, p.path_ds)
@@ -588,6 +612,59 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     d, slope = _hermite(ds, d0, m0, E, Lt)
     cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=False)
     return _plan(s, d, E, cost, obstacle, keep_candidates)
+
+
+def _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep) -> Optional[Plan]:
+    s0, d0, psi = pose
+    w = p.lane_width
+    off = np.asarray(p.footprint_offsets)
+
+    def costs(s, d, h):
+        fs = s[:, None] + off * np.cos(h)[:, None]
+        fd = d[:, None] + off * np.sin(h)[:, None]
+        q = np.column_stack((fs.ravel(), fd.ravel()))
+        if lane_in_costmap is not None:
+            q = lane_in_costmap.points_from(q)
+        return costmap.lookup(q).reshape(fs.shape)
+
+    def blocked(s, d, h, late):
+        c = costs(s, d, h)
+        lethal = (c >= LETHAL).any(axis=1) & (s - s0 > p.lethal_free_start)
+        corner = np.abs(d) + p.car_half_length * np.abs(np.sin(h)) + p.car_half_width * np.cos(h)
+        out = corner > 1.5 * w - p.line_margin + 1e-6
+        tip = np.clip(np.minimum(s - island[0], island[1] - s) / p.island_tip, 0.0, 1.0)
+        on = (s >= island[0]) & (s <= island[1]) & (np.abs(d) < tip * w / 2.0 + p.car_half_width)
+        if late and p.late_tip:
+            on &= s >= island[0] + p.island_tip          # the pointed tip may be crossed
+        return lethal | out | on
+
+    def closeness(s, d, h):
+        return np.minimum(costs(s, d, h), 100.0).mean(axis=1)
+
+    target = {0: 1, 1: 3}.get(direction)
+    # the chosen sequence's path while it is still free: the car lags the S-curves a little, and a
+    # sequence re-made from its pose every scan would come and go
+    if keep is not None and keep.path[-1, 0] > s0 + 0.3:
+        ahead = keep.path[keep.path[:, 0] >= s0]
+        if len(ahead) > 2:
+            h = np.arctan(np.gradient(ahead[:, 1], ahead[:, 0]))
+            if not blocked(ahead[:, 0], ahead[:, 1], h, keep.late).any():
+                e1 = float(ahead[min(len(ahead) - 1, int(p.horizon / p.seq_sample)), 1])
+                c = closeness(ahead[:, 0], ahead[:, 1], h)
+                return Plan(path=ahead, end_offset=e1, cost=keep.cost,
+                            obstacle_cost=float(c[ahead[:, 0] <= s0 + p.horizon].mean()),
+                            sequence=keep)
+    end = max(island[0] + p.island_tip + p.route_after, s0 + p.horizon)
+    seq = plan_sequence(s0, d0, psi, target, island[0] - p.route_margin, island[0] + p.island_tip,
+                        end, p, blocked, closeness, keep)
+    if seq is None:
+        return None
+    path = seq.path
+    e1 = {1: w, 2: 0.0, 3: -w}[seq.lanes[0] if seq.lanes else seq.first_lane]
+    near = path[path[:, 0] <= s0 + p.horizon]
+    c = closeness(near[:, 0], near[:, 1], np.zeros(len(near)))
+    return Plan(path=path, end_offset=e1, cost=seq.cost, obstacle_cost=float(c.mean()),
+                sequence=seq)
 
 
 def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
@@ -919,11 +996,14 @@ class StaticAvoid:
         now = self.lane_pose(pose_now_world)
         self.plan = plan_paths(now, now[0], self.costmap, self.direction, self.last_end,
                                self.p, keep_candidates, self.island, self.lane_in_costmap(),
-                               self.island_source == 'entry line', self.recovering)
+                               self.island_source == 'entry line', self.recovering,
+                               self.sequence)
+        self.sequence = self.plan.sequence
         if self.plan.feasible:
             self.last_end = self.plan.end_offset
 
     def reset_recovery(self) -> None:
+        self.sequence: Optional[Sequence] = None
         self.stuck_since: Optional[float] = None
         self.recovering = False
         self.recovered_from: Optional[float] = None   # s where a plan was found again
