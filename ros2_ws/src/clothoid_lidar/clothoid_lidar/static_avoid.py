@@ -171,18 +171,32 @@ class PoseTracker:
         self.trace: List[Tuple[float, float, float, float]] = []
 
     def imu(self, t: float, yaw: float) -> None:
+        self.last_pos: Optional[Tuple[float, float]] = None   # /odom position of the last message
         # unwrap so interpolation never jumps by 2 pi
         self.yaw = yaw if self.yaw is None else self.yaw + wrap(yaw - self.yaw)
 
-    def odom(self, t: float, v: float) -> None:
+    def odom(self, t: float, v: float, pos: Optional[Tuple[float, float]] = None,
+             max_jump: float = 0.5, max_gap: float = 2.0) -> None:
+        """pos = the driver's accumulated /odom position: the step is the distance between the last two
+        messages received, so messages dropped by a busy node lose no distance (its heading is wrong
+        on the LIMO, only the length is used; the direction is the IMU's). Without pos: v * dt, gaps
+        capped at 0.1 s (simulation, old bags)."""
         self.speed = v
         if self.yaw is None:
             return
-        if self.last_t is not None:
-            dt = min(max(t - self.last_t, 0.0), 0.1)
-            self.x += v * dt * math.cos(self.yaw)
-            self.y += v * dt * math.sin(self.yaw)
-            self.distance += v * dt
+        step = None
+        if pos is not None:
+            if self.last_pos is not None and self.last_t is not None and t - self.last_t <= max_gap:
+                d = math.hypot(pos[0] - self.last_pos[0], pos[1] - self.last_pos[1])
+                if d <= max_jump:                       # a larger jump is a driver reset
+                    step = math.copysign(d, v) if v != 0.0 else 0.0
+            self.last_pos = (float(pos[0]), float(pos[1]))
+        elif self.last_t is not None:
+            step = v * min(max(t - self.last_t, 0.0), 0.1)
+        if step:
+            self.x += step * math.cos(self.yaw)
+            self.y += step * math.sin(self.yaw)
+            self.distance += step
         self.last_t = t
         self.trace.append((t, self.x, self.y, self.yaw))
         while self.trace and self.trace[0][0] < t - self.history:

@@ -601,3 +601,43 @@ def test_a_retry_from_a_new_line_clears_done():
                           entry_pose=new) for k in range(5)]
     assert any(started) and not a.done and a.state == ACTIVE
 
+
+def _drive(tracker, keep, legacy=False, v=0.3, rate=50.0, time=4.0):
+    """Straight at v, /odom at `rate` Hz with the driver's accumulated position; keep(k) says whether
+    message k reaches the node."""
+    tracker.imu(0.0, 0.0)
+    n = int(time * rate)
+    for k in range(n + 1):
+        t = k / rate
+        if keep(k):
+            tracker.odom(t, v, None if legacy else (v * t, 0.0))
+    return v * n / rate
+
+
+def test_odometer_keeps_the_distance_when_messages_are_dropped():
+    tr = PoseTracker()
+    true = _drive(tr, lambda k: k % 25 == 0 or k == 200)          # one message per 0.5 s
+    assert tr.distance == pytest.approx(true, abs=0.01)
+    old = PoseTracker()
+    _drive(old, lambda k: k % 25 == 0 or k == 200, legacy=True)    # the 11-10 odometer
+    assert old.distance < 0.3 * true
+
+
+def test_odometer_skips_a_long_silence_and_a_reset():
+    tr = PoseTracker()
+    tr.imu(0.0, 0.0)
+    tr.odom(0.0, 0.3, (0.0, 0.0))
+    tr.odom(0.02, 0.3, (0.006, 0.0))
+    tr.odom(3.0, 0.3, (0.9, 0.0))           # 3 s without /odom: not trusted
+    tr.odom(3.02, 0.3, (0.906, 0.0))
+    tr.odom(3.04, 0.3, (5.0, 0.0))          # driver reset jump
+    tr.odom(3.06, 0.3, (5.006, 0.0))
+    assert tr.distance == pytest.approx(0.018, abs=1e-6)
+
+
+def test_odometer_goes_back_when_reversing():
+    tr = PoseTracker()
+    tr.imu(0.0, 0.0)
+    tr.odom(0.0, -0.2, (0.0, 0.0))
+    tr.odom(0.5, -0.2, (-0.1, 0.0))
+    assert tr.distance == pytest.approx(-0.1) and tr.x == pytest.approx(-0.1)
