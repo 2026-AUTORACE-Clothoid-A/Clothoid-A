@@ -25,6 +25,13 @@ Changes, all in `src/limo_driver.cpp` unless noted:
 - **Zero speed:** `linear.x` near 0 or non-finite gives speed 0, steering centred. The original turned to full lock, and
   `Twist(0, 0)` went through a NaN.
 - **Mode:** `motion_mode_` is invalid until the body reports it (`limo_driver.h`), so no command goes out in a guessed mode.
+- **YOLO startup:** `require_yolo_ready` defaults false for standalone platform use.
+  `full.launch.py` enables it when YOLO is used: all ROS motion requests are sent
+  as zero until the first successful inference publishes `/yolo/ready=true`.
+  The readiness subscription is reliable/transient-local for either startup order;
+  a later false readiness message stops ROS motion again. This does not gate RC hardware control.
+  Absolute UART paths are accepted, allowing the real compiled driver to be tested
+  against a pseudo-terminal without opening the vehicle port (`test/test_yolo_startup_serial.py`).
 - **Removed:** `limo_ackerman_base` and the launch files other than `limo_base.launch.py`. With this workspace sourced,
   `limo_base_ackerman.launch.py` no longer resolves.
 - **Build:** `CMakeLists.txt` skips the package where `limo_msgs` is missing (the PC image).

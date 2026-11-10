@@ -23,7 +23,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -59,6 +59,8 @@ def generate_launch_description():
                               description='start the stop line view: stop_viz + RViz rviz/stop.rviz'),
         DeclareLaunchArgument('use_stopline', default_value='false'),
         DeclareLaunchArgument('share_lane_camera', default_value='true'),
+        DeclareLaunchArgument('wait_for_yolo', default_value='true',
+                              description='hold automatic driving until YOLO completes its first image'),
         DeclareLaunchArgument('use_speed_zone', default_value='false'),
         DeclareLaunchArgument('camera', default_value='limo2',
                               description='camera profile: limo1 or limo2 (clothoid_lane/config)'),
@@ -78,7 +80,10 @@ def generate_launch_description():
 
         # sensors, TF, limo_base, twist_mux
         include('clothoid_bringup', 'bringup.launch.py',
-                args={name: LaunchConfiguration(name) for name in [*platform_args, *mux_args]}),
+                args={**{name: LaunchConfiguration(name) for name in [*platform_args, *mux_args]},
+                      'require_yolo_ready': PythonExpression([
+                          "'", LaunchConfiguration('use_yolo'), "'.lower() == 'true' and '",
+                          LaunchConfiguration('wait_for_yolo'), "'.lower() == 'true'"])}),
 
         include('clothoid_lane', 'lane.launch.py',
                 {'debug': debug, 'camera': LaunchConfiguration('camera'),

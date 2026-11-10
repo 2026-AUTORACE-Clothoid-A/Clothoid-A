@@ -37,6 +37,8 @@ def generate_launch_description():
                                                  description='inner wheel limit in rad, official 28 deg')
     cmd_timeout_arg = DeclareLaunchArgument('cmd_timeout', default_value='0.5',
                                             description='seconds without /cmd_vel before stopping, 0.0 disables')
+    yolo_ready_arg = DeclareLaunchArgument('require_yolo_ready', default_value='false',
+                                           description='hold automatic commands at zero until /yolo/ready')
 
     sim_control_rate_arg = DeclareLaunchArgument('control_rate', default_value='50',
                                                  description='Simulation control loop update rate')
@@ -56,6 +58,7 @@ def generate_launch_description():
                 'steering_scale': launch.substitutions.LaunchConfiguration('steering_scale'),
                 'max_inner_angle': launch.substitutions.LaunchConfiguration('max_inner_angle'),
                 'cmd_timeout': launch.substitutions.LaunchConfiguration('cmd_timeout'),
+                'require_yolo_ready': launch.substitutions.LaunchConfiguration('require_yolo_ready'),
                 'control_rate': launch.substitutions.LaunchConfiguration('control_rate'),
         }],
         namespace='limo'
@@ -71,6 +74,7 @@ def generate_launch_description():
         steering_scale_arg,
         max_inner_angle_arg,
         cmd_timeout_arg,
+        yolo_ready_arg,
         # is_scout_mini_arg,
         # is_omni_wheel_arg,
         # simulated_robot_arg,

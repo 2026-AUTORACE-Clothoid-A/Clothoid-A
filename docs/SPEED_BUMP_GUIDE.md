@@ -1,6 +1,6 @@
 # 방지턱 제어와 시뮬 검증
 
-2026-11-11, 최신 main을 반영한 `namgyu/bump` 기준. 커밋 전 작업이며 리모의
+2026-11-11, 최신 main을 반영한 `namgyu/bump` 기준. 리모의
 `/home/wego/2026-autorace-namgyu/Clothoid-A`에 반영하고 `--symlink-install`로 빌드했다.
 
 ## 현재 제어

@@ -11,7 +11,9 @@ import rclpy
 from clothoid_interfaces.msg import Detection, DetectionArray
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
@@ -108,6 +110,14 @@ class YoloNode(Node):
 
         self.aliases = dict(item.split(':', 1) for item in get('class_aliases') if ':' in item)
         self.warned_unknown = set()
+        # Transient local: a base driver started after inference also gets readiness.
+        # Initial false is published before loading the first image. backend=none
+        # deliberately never signals successful inference.
+        self.ready = False
+        self.ready_pub = self.create_publisher(Bool, '/yolo/ready', QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.ready_pub.publish(Bool(data=False))
 
         self.pub = self.create_publisher(DetectionArray, get('detections_topic'), 1)
         self.debug_pub = self.create_publisher(Image, get('debug_image_topic'), 1)
@@ -139,6 +149,10 @@ class YoloNode(Node):
             d.x_min, d.y_min, d.x_max, d.y_max = box.x_min, box.y_min, box.x_max, box.y_max
             out.detections.append(d)
         self.pub.publish(out)
+        if self.backend is not None and not self.ready:
+            self.ready = True
+            self.ready_pub.publish(Bool(data=True))
+            self.get_logger().info('first YOLO inference complete; automatic driving may start')
 
         need_debug = self.get_parameter('debug').value
         need_show = self.get_parameter('show').value
