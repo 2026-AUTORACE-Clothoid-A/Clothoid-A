@@ -44,6 +44,7 @@ def generate_launch_description():
                  name='base_link_to_laser_link',
                  arguments=['--x', '0.103', '--z', '-0.034',
                             '--frame-id', 'base_link', '--child-frame-id', 'laser_link']),
-            include('clothoid_debug', 'viz.launch.py', {'camera': LaunchConfiguration('camera')}),
+            include('clothoid_debug', 'viz.launch.py',
+                    {'camera': LaunchConfiguration('camera'), 'overlay': 'true'}),
         ]),
     ])

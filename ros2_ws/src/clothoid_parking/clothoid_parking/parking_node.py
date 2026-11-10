@@ -1,173 +1,195 @@
 #!/usr/bin/env python3
-"""T-parking node (ROS2 port of 2025 `parking_rect.py`).
+"""T-parking node (2026): find the empty bay with the lidar, one forward arc in, stop.
 
-Waits for `/parking_flag`, starts the step sequence when the start line is seen, publishes a
-Twist on `cmd_topic` (twist_mux input `parking`) at `rate_hz`, and publishes `/parking_done`
-(true, once) after the last step. The step table lives in config/parking.yaml.
+Idle until `/parking_flag` turns true, then drives on `cmd_topic` (twist_mux input `parking`, above
+lane) through SEARCH -> TURN -> ENTER -> DONE (see planner.py). In DONE it keeps publishing zero
+speed so lane cannot take the car back, and repeats `/parking_done` true once a second.
+Phase changes go to the log and to `state_topic`. With `debug:=true` it also publishes RViz
+markers on `marker_topic` (see viz.py, `ros2 launch clothoid_parking rviz.launch.py`).
+With `lazy_sensors` (default) /imu, /odom and /scan are subscribed only from the flag until DONE: the
+flag subscribes them and the run starts once all three arrive (at most `arm_wait_sec`).
 """
 import math
+from dataclasses import fields
 
-import numpy as np
 import rclpy
 from geometry_msgs.msg import Twist
-from rcl_interfaces.msg import SetParametersResult
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from sensor_msgs.msg import Image, LaserScan
-from std_msgs.msg import Bool
-from visualization_msgs.msg import Marker
+from sensor_msgs.msg import Imu, LaserScan
+from std_msgs.msg import Bool, String
+from visualization_msgs.msg import MarkerArray
 
-from clothoid_common.image_utils import bgr_to_image, image_to_bgr
-from clothoid_parking.parking_sequence import (
-    ParkingSequence, SequenceParams, step_to_twist_values, steps_from_lists)
-from clothoid_parking.start_line import StartLineDetector, StartLineParams
+from clothoid_parking.bay_finder import BayParams
+from clothoid_parking.core import ParkingCore
+from clothoid_parking.planner import Phase, PlanParams
+from clothoid_parking.viz import markers
 
-_LINE_FIELDS = ['x_h', 'x_l', 'y_h', 'y_l', 'crop_x', 'crop_y', 'gray_low', 'gray_high',
-                'margin', 'shift', 'min_line_len', 'trigger_row']
+STALE_SEC = 0.5
 
 
 class ParkingNode(Node):
     def __init__(self):
         super().__init__('parking')
-
-        self.declare_parameter('image_topic', '/camera/color/image_raw')
-        self.declare_parameter('scan_topic', '/scan')
-        self.declare_parameter('parking_topic', '/parking_flag')
-        self.declare_parameter('cmd_topic', '/cmd_vel_parking')
-        self.declare_parameter('parking_done_topic', '/parking_done')
-        self.declare_parameter('marker_topic', '/closest_point_marker')
-        self.declare_parameter('debug_image_topic', '/parking/debug_image')
+        for name, default in (('scan_topic', '/scan'), ('imu_topic', '/imu'), ('odom_topic', '/odom'),
+                              ('parking_topic', '/parking_flag'), ('cmd_topic', '/cmd_vel_parking'),
+                              ('parking_done_topic', '/parking_done'),
+                              ('state_topic', '/parking/state'),
+                              ('marker_topic', '/parking/markers')):
+            self.declare_parameter(name, default)
         self.declare_parameter('wheelbase', 0.2)
-        self.declare_parameter('rate_hz', 10.0)
+        self.declare_parameter('rate_hz', 20.0)
+        self.declare_parameter('laser_x', 0.103)
         self.declare_parameter('debug', False)
+        # /imu 100 Hz + /odom 50 Hz + /scan cost ~20-25 % of an Orin core just to receive while the
+        # car is nowhere near the parking; ParkingCore uses nothing from before the flag
+        self.declare_parameter('lazy_sensors', True)
+        self.declare_parameter('arm_wait_sec', 1.0)
+        plan = self._declare_dataclass(PlanParams(), 'plan.')
+        bay = self._declare_dataclass(BayParams(), 'bay.')
+        get = lambda n: self.get_parameter(n).value  # noqa: E731
 
-        s = SequenceParams(steps=[])
-        self.declare_parameter('step_duration', [0.0])
-        self.declare_parameter('step_speed', [0.0])
-        self.declare_parameter('step_steer', [0.0])
-        self.declare_parameter('sensor_step', -1)   # -1 = no lidar step
-        self.declare_parameter('angle_limit', s.angle_limit)
-        self.declare_parameter('range_limit', s.range_limit)
-        self.declare_parameter('sensor_step_max_sec', s.sensor_step_max_sec)
-
-        d = StartLineParams()
-        for name in _LINE_FIELDS:
-            self.declare_parameter(name, getattr(d, name))
-        self.declare_parameter('hsv_lower', list(d.hsv_lower))
-        self.declare_parameter('hsv_upper', list(d.hsv_upper))
-
-        get = lambda name: self.get_parameter(name).value  # noqa: E731
-        self.sequence = ParkingSequence(self._sequence_params(get))
-        self.detector = StartLineDetector(self._line_params(get))
-
-        self.parking_flag = False
-        self.closest_angle = None
-        self.closest_range = None
-        self.done_sent = False
+        self.core = ParkingCore(plan, bay, laser_x=get('laser_x'))
+        self.wheelbase = get('wheelbase')
+        self.last = {'imu': None, 'odom': None, 'scan': None}
+        self.phase = self.core.phase
+        self.t_done_sent = 0.0
+        self.sent_final_stop = False
+        self.lazy = get('lazy_sensors')
+        self.arm_wait = get('arm_wait_sec')
+        self.t_armed = None           # flag seen, waiting for the sensors (lazy_sensors)
+        self.sensor_subs = []
 
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
-        self.marker_pub = self.create_publisher(Marker, get('marker_topic'), 10)
-        self.debug_pub = self.create_publisher(Image, get('debug_image_topic'), 1)
-        self.create_subscription(Image, get('image_topic'), self.on_image, qos_profile_sensor_data)
-        self.create_subscription(LaserScan, get('scan_topic'), self.on_scan,
-                                 qos_profile_sensor_data)
+        self.state_pub = self.create_publisher(String, get('state_topic'), 1)
+        if not self.lazy:
+            self._sensors_on(True)
         self.create_subscription(Bool, get('parking_topic'), self.on_flag, 1)
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
+        if get('debug'):
+            self.marker_pub = self.create_publisher(MarkerArray, get('marker_topic'), 1)
+            self.create_timer(0.2, lambda: self.marker_pub.publish(
+                markers(self.core, self.get_clock().now().to_msg())))
+        self.get_logger().info(
+            f'parking ready: R {plan.turn_radius} m, bays on the {"right" if plan.side < 0 else "left"}')
 
-        self.add_on_set_parameters_callback(self.on_parameters)
-        self.get_logger().info('parking started')
+    def _declare_dataclass(self, obj, prefix):
+        for f in fields(obj):
+            value = self.declare_parameter(prefix + f.name, getattr(obj, f.name)).value
+            setattr(obj, f.name, type(getattr(obj, f.name))(value))
+        return obj
 
-    @staticmethod
-    def _sequence_params(get) -> SequenceParams:
-        sensor = get('sensor_step')
-        return SequenceParams(
-            steps=steps_from_lists(get('step_duration'), get('step_speed'), get('step_steer')),
-            sensor_step=None if sensor < 0 else sensor,
-            angle_limit=get('angle_limit'), range_limit=get('range_limit'),
-            sensor_step_max_sec=get('sensor_step_max_sec'))
-
-    @staticmethod
-    def _line_params(get) -> StartLineParams:
-        values = {name: get(name) for name in _LINE_FIELDS}
-        return StartLineParams(hsv_lower=tuple(get('hsv_lower')),
-                               hsv_upper=tuple(get('hsv_upper')), **values)
-
-    def on_parameters(self, params):
-        # table / detector changes apply on the next start; a manoeuvre in progress keeps its table
-        proposed = {p.name: p.value for p in params}
-        get = lambda n: proposed.get(n, self.get_parameter(n).value)  # noqa: E731
-        try:
-            sequence = self._sequence_params(get)
-            ParkingSequence(sequence)  # validates sensor_step against the table
-            line = self._line_params(get)
-            self.detector.configure(line)
-        except Exception as exc:
-            return SetParametersResult(successful=False, reason=str(exc))
-        if not self.sequence.started or self.sequence.done:
-            self.sequence = ParkingSequence(sequence)
-        return SetParametersResult(successful=True)
-
-    def now_sec(self) -> float:
+    def now(self) -> float:
+        # node clock: simulated time in the simulator (use_sim_time), wall time on the car
         return self.get_clock().now().nanoseconds * 1e-9
 
+    def stamp(self, msg) -> float:
+        """Message time for integration; the receive time can bunch up (the simulator's /clock
+        ticks coarsely), which drops or doubles samples."""
+        t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        return t if t > 0 else self.now()
+
+    def on_imu(self, msg: Imu):
+        self.last['imu'] = self.now()
+        self.core.imu(self.stamp(msg), msg.angular_velocity.z)
+
+    def on_odom(self, msg: Odometry):
+        self.last['odom'] = self.now()
+        self.core.odom(self.stamp(msg), msg.twist.twist.linear.x)
+
+    def on_scan(self, msg: LaserScan):
+        self.last['scan'] = self.now()
+        self.core.scan(self.last['scan'], msg.ranges, msg.angle_min, msg.angle_increment,
+                       msg.range_min, msg.range_max)
+
+    def _sensors_on(self, on: bool):
+        get = lambda n: self.get_parameter(n).value  # noqa: E731
+        if on and not self.sensor_subs:
+            self.sensor_subs = [
+                self.create_subscription(Imu, get('imu_topic'), self.on_imu, qos_profile_sensor_data),
+                self.create_subscription(Odometry, get('odom_topic'), self.on_odom, qos_profile_sensor_data),
+                self.create_subscription(LaserScan, get('scan_topic'), self.on_scan, qos_profile_sensor_data)]
+            if self.lazy:
+                self.get_logger().info('imu/odom/scan subscribed')
+        elif not on and self.sensor_subs and self.lazy:
+            for sub in self.sensor_subs:
+                self.destroy_subscription(sub)
+            self.sensor_subs = []
+            self.last = {k: None for k in self.last}
+            self.get_logger().info('imu/odom/scan released')
+
     def on_flag(self, msg: Bool):
-        self.parking_flag = msg.data
+        if msg.data and not self.core.flag:
+            if self.t_armed is not None:
+                return                  # already waiting for the sensors (on_timer starts the run)
+            stale = self.stale()
+            if stale and self.lazy and self.core.phase == Phase.IDLE:
+                self._sensors_on(True)
+                self.t_armed = self.now()
+                return
+            if stale:
+                self.get_logger().error(f'parking flag but no {stale}: not starting')
+                return
+        if not msg.data:
+            self.t_armed = None
+        self.core.set_flag(self.now(), msg.data)
 
-    def on_scan(self, scan: LaserScan):
-        ranges = np.asarray(scan.ranges, dtype=float)
-        valid = np.isfinite(ranges) & (ranges > scan.range_min) & (ranges < scan.range_max)
-        if not valid.any():
-            return
-        index = int(np.flatnonzero(valid)[np.argmin(ranges[valid])])
-        self.closest_range = float(ranges[index])
-        self.closest_angle = scan.angle_min + index * scan.angle_increment
-        if self.get_parameter('debug').value:
-            self.publish_marker(scan.header.frame_id)
+    def check_armed(self, now: float):
+        """lazy_sensors: start the run once every sensor arrived after the flag subscribed them."""
+        stale = self.stale()
+        if not stale:
+            self.t_armed = None
+            self.get_logger().info('sensors in: parking starts')
+            self.core.set_flag(now, True)
+        elif now - self.t_armed > self.arm_wait:
+            self.t_armed = None
+            self.get_logger().error(
+                f'parking flag but no {stale} after {self.arm_wait:.1f} s: not starting')
 
-    def publish_marker(self, frame_id: str):
-        marker = Marker()
-        marker.header.frame_id = frame_id
-        marker.header.stamp = self.get_clock().now().to_msg()
-        marker.ns, marker.id = 'closest_point', 0
-        marker.type, marker.action = Marker.SPHERE, Marker.ADD
-        marker.pose.position.x = self.closest_range * math.cos(self.closest_angle)
-        marker.pose.position.y = self.closest_range * math.sin(self.closest_angle)
-        marker.pose.orientation.w = 1.0
-        marker.scale.x = marker.scale.y = marker.scale.z = 0.2
-        marker.color.r, marker.color.a = 1.0, 1.0
-        marker.lifetime.nanosec = 100_000_000
-        self.marker_pub.publish(marker)
+    def stale(self):
+        now = self.now()
+        return [k for k, t in self.last.items() if t is None or now - t > STALE_SEC]
 
-    def on_image(self, msg: Image):
-        if self.sequence.started:
-            return  # the start line is only needed to trigger
-        try:
-            bgr = image_to_bgr(msg)
-        except ValueError as exc:
-            self.get_logger().error(str(exc), throttle_duration_sec=5.0)
-            return
-
-        debug = self.get_parameter('debug').value
-        result = self.detector.detect(bgr, debug)
-        if debug and result.debug_image is not None:
-            self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
-        if self.parking_flag and self.detector.should_start(result):
-            self.get_logger().info(f'parking start line at row {result.center_y}: START')
-            self.sequence.start(self.now_sec())
-            self.done_sent = False
+    def send(self, v: float, steer: float):
+        msg = Twist()
+        msg.linear.x = float(v)
+        msg.angular.z = float(v * math.tan(steer) / self.wheelbase) if v else 0.0
+        self.cmd_pub.publish(msg)
 
     def on_timer(self):
-        step = self.sequence.update(self.now_sec(), self.closest_angle, self.closest_range)
-        if step is not None:
-            cmd = Twist()
-            cmd.linear.x, cmd.angular.z = step_to_twist_values(
-                step, self.get_parameter('wheelbase').value)
-            self.cmd_pub.publish(cmd)
-        elif self.sequence.done and not self.done_sent:
-            self.done_sent = True
-            self.done_pub.publish(Bool(data=True))
-            self.get_logger().info('parking sequence finished')
+        now = self.now()
+        if self.t_armed is not None:
+            self.check_armed(now)
+        out = self.core.command(now)
+        if self.core.phase != self.phase:
+            self.phase = self.core.phase
+            text = f'{self.phase.value}: {self.core.planner.reason}'
+            self.state_pub.publish(String(data=text))
+            bay = self.core.planner.bay
+            if bay is not None and self.phase == Phase.TURN:
+                text += f' (bay gap {bay.width:.2f} m)'
+            self.get_logger().info(text)
+        if self.phase == Phase.DONE:
+            # out of the bay: stop publishing so twist_mux hands the car back to lane after its
+            # timeout (0.3 s); one zero first so the reverse does not carry on until then
+            if not self.sent_final_stop:
+                self.send(0.0, 0.0)
+                self.sent_final_stop = True
+                self._sensors_on(False)
+            if now - self.t_done_sent >= 1.0:
+                self.done_pub.publish(Bool(data=True))
+                self.t_done_sent = now
+            return
+        if out is None:
+            return
+        moving = (Phase.SEARCH, Phase.TURN, Phase.ENTER, Phase.EXIT_BACK, Phase.EXIT_TURN)
+        if self.phase in moving and self.stale():
+            self.send(0.0, 0.0)
+            self.get_logger().warn(f'no {self.stale()}: holding', throttle_duration_sec=1.0)
+            return
+        self.send(*out)
 
 
 def main(args=None):

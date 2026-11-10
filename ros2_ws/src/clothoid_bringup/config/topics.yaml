@@ -6,6 +6,9 @@
   ros__parameters:
     # sensors
     image_topic: /camera/color/image_raw
+    # every 3rd colour frame (~10 Hz), bringup use_image_10hz:=true (topic_tools throttle). For
+    # consumers that do not need 30 Hz; such a node declares image_10hz_topic and subscribes to it
+    image_10hz_topic: /camera/color/image_10hz
     scan_topic: /scan
     odom_topic: /odom
     imu_topic: /imu

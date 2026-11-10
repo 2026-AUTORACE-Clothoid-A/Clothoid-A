@@ -18,6 +18,11 @@ lane_main:
     # jumps per minute); the dawn lap was 0.3 x 1.0. E.g. 0.6 m/s -> about 0.45, 0.4 m/s -> 0.65.
     # The cone section steers with its own pure pursuit (cone_follower), not with this.
     steer_gain: 0.33
+    # below base_speed (stop line approach, slow sign, zigzag) the gain rises as base_speed / speed so
+    # speed x gain stays at 0.26, at most steer_gain_max (the 0.3 m/s dawn lap drove with 1.0). Without
+    # it the 0.2 m/s stop line approach in a corner turned a quarter of what it needed (2026-11-09).
+    steer_gain_speed_scaling: true
+    steer_gain_max: 1.0
     # left boundary first (2026-11-08): in right corners the inner (right) line leaves the view and the
     # target jumped to the left line; following the left (outer) line cut the boundary switches about
     # 3x in the bags. On two-lane parts the left boundary is the dashed divider.

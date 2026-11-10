@@ -7,6 +7,7 @@ Change it only by agreement; topic names live in `ros2_ws/src/clothoid_bringup/c
 | Topic | Type | Notes |
 |---|---|---|
 | `/camera/color/image_raw` | `sensor_msgs/Image` | 640x480, `rgb8`, `frame_id: camera_color_optical_frame`. Rate depends on light, measured on limo2 on 2026-11-02: 29.3 Hz in a lit room with all streams on; in the dark 12.3 Hz alone, 12.4 Hz with all streams, 10.9 Hz with all mission nodes. Bringup enables color only |
+| `/camera/color/image_10hz` | `sensor_msgs/Image` | same frames as `image_raw`, thinned by `topic_tools throttle` (rate 12.0: a frame once 83 ms have passed). Only with `use_image_10hz:=true` (bringup/full.launch, default false). 10 Hz from the 30 Hz camera (limo2 2026-11-11: raw stays 29.9 Hz, throttle 6~9 % CPU); when the camera drops to ~12 Hz in the dark it passes every 2nd frame, ~6 Hz. For consumers that do not need 30 Hz (static_avoid first); topics.yaml `image_10hz_topic` |
 | `/scan` | `sensor_msgs/LaserScan` | YDLidar Tmini Plus, 10 Hz, ±110°, ~410 points per turn, frame `laser_link` |
 | `/odom` | `nav_msgs/Odometry` | from our `limo_base` (needs the LIMO body and motor battery connected). 50 Hz measured in Ackermann mode, frames `odom` → `base_link`. The factory `limo_base` publishes none in that mode |
 | `/imu` | `sensor_msgs/Imu` | from the base driver. 100 Hz measured, frame `imu_link`. Yaw and gyro respond to the chassis being turned by hand; 90° accuracy and sign not confirmed (see `PACKAGES.md`) |
@@ -27,7 +28,7 @@ Pixel boxes refer to the 640x480 color image.
 ## Other detection outputs
 | Topic | Type | Publisher | Meaning |
 |---|---|---|---|
-| `/stopline_detected` | `std_msgs/Bool` | `clothoid_lane` `stopline` | stop line / crosswalk stripes ahead (every frame) |
+| `/stopline_detected` | `std_msgs/Bool` | `clothoid_lane` `stopline` | 2025 crosswalk stripes, commented out since 2026-11-09 (not published) |
 | `/lidar/obstacles` | `geometry_msgs/PoseArray` | `clothoid_lidar` `obstacle_extractor` | obstacle centres in `base_link` (positions only), shared by the cone and static obstacle missions |
 | `/cone/left_boundary`, `/cone/right_boundary` | `nav_msgs/Path` | `clothoid_lidar` `cone_sorter` | sorted cones of each side while the cone course runs |
 | `/cone/mission_active` | `std_msgs/Bool` | `clothoid_lidar` `cone_sorter` | cone course start / end |
@@ -74,5 +75,8 @@ angles still need measuring, see Open points.
 - **Lidar angle convention:** `clothoid_parking` compares the closest point's angle in the scan frame
   (2025 used `-2.0 rad`, which the ±110° Tmini Plus can never reach). Check which way the lidar's
   zero angle points before retuning `angle_limit`.
-- **Stop line distance:** `/stopline_detected` is a yes/no flag. The ±5 cm stop at signals and the
-  pedestrian sign needs a distance (or odometry since the line appeared); not implemented yet.
+- **Stop line (light / pedestrian):** done inside `mission` (no extra topic): while armed it reads the
+  camera and runs clothoid_finish's FinishCore with the cross line in white (`line_stop.py`); its speed
+  goes out as `/speed_limit` (lane_main keeps steering), its STOP as zero on `/cmd_vel_state`.
+  `/mission/state` (`std_msgs/String`, JSON) and `/mission/line_debug_image` (debug) are for
+  clothoid_debug `stop_viz` / `rviz/stop.rviz`. `/stopline_detected` (2025 stripes) is commented out.

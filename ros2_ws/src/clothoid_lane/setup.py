@@ -27,6 +27,7 @@ setup(
             'lane_main = clothoid_lane.lane_main:main',
             'speed_zone = clothoid_lane.speed_zone_node:main',
             'stopline = clothoid_lane.stopline_node:main',
+            'lane_shared = clothoid_lane.shared_camera:main',
         ],
     },
 )

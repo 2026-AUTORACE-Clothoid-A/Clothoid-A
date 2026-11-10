@@ -20,7 +20,8 @@
 - [x] `limo_base`에 `steering_scale`, `max_inner_angle`, `cmd_timeout` 인자를 넘기도록 bringup·full 연결(기본값은 공식값, 확정은 바닥 시험 뒤). 2026-11-04 PC(Humble)에서 빌드와 `--show-args`만 확인, Jetson 실행 전.
 - [x] 안전 장치(2026-11-04, 브랜치 `feature/mux-mission`): `require_arm`(기본 `false`로 변경 2026-11-09, 아래 "첫 자율 실행 절차"), `mux_output`(`/cmd_vel_dry`면 섀도 주행).
 - [x] `latency_monitor`(2026-11-05, `clothoid_bringup`): 토픽별 Hz·최대 끊김·header 기준 나이, `cmd_vel_*`는 원본 센서 stamp부터의 지연, mux 승자 집계. `full.launch.py use_latency_monitor:=true latency_csv:=~/bags/lat.csv`. bag 재생(PC)에서 `/scan` 도착 시 나이 약 97 ms(스탬프가 회전 시작), 카메라→`/cmd_vel_lane` 17~35 ms. Jetson에서 다시 잰다.
-- [ ] 오프라인 분석 도구 `tools/offline_pipeline/`: 차량별 warp와 `lane_width_m`으로 바뀐 lane 설정에 맞춘 뒤 별도 PR로 올린다(2026-11-09 PR에서 제외, 코드는 커밋 9c1608c에 있음). `tools/mux_arm_test.py`는 포함.
+- [x] 오프라인 분석 도구 `tools/offline_pipeline/`: 차량별 warp(`--camera`), track2026, `lane_width_m`에 맞춘 최소 수정(2026-11-10, 브랜치 `feature/offline-tools`). 1105 bag은 `--camera limo1`.
+- [ ] main의 미션이 자리 잡은 뒤 도구 본격 개편: 단계 목록 하나로 정리, 이름 붙은 열, 새 검출기(`/stopline_near`, finish 등) 추가.
 - [x] `scripts/setup_jetson.sh`(`--check`, `--no-build` 지원), `requirements-jetson.txt`(dl_env용, ultralytics만). Docker에서 `--check` 동작만 확인했고 Jetson 실행은 아직.
 - [ ] limo1에서 `bash scripts/setup_jetson.sh --check` 후 설치, limo2에서도 같은 결과인지 확인.
 
@@ -29,13 +30,17 @@
 - [ ] `cone_follower`와 같은 우선순위(80)를 쓰므로 동시에 발행하지 않게 게이트. 안으로는 "코스가 켜진 동안만 발행"(콘은 `/cone/mission_active`로 이미 그렇게 한다)을 따른다.
 - [ ] 차선 변경에 애커만 기준 전방 약 0.85m가 필요하다는 제약 반영.
 
-### 3. 정지 위치(±5cm)
-`/stopline_detected`는 Bool이라 거리를 모른다. 2025는 시간으로 처리했다. 제안(복잡도 낮은 순서):
-1. **정지선이 처음 보이는 순간(false→true)부터 `/odom` 주행거리를 재서 `stop_after_m`만큼 가고 정지.** 파라미터 하나다. 값은 트랙에서 앞바퀴가 선에 닿을 때까지 몇 번 시험해 맞춘다. 카메라 위치, 앞바퀴 오프셋(`base_link` +0.1m), 정지 후 미끄러짐이 모두 이 한 값에 흡수되므로 오프셋을 따로 파라미터로 만들 필요가 없다.
-2. 접근 속도를 고정한다. 정지선 직전 구간은 미션 노드가 `/speed_limit` 0.2를 걸어 속도를 낮추고 일정하게 만든다. 0.2m/s에서 지연 100ms는 2cm다(0.3m/s는 3cm).
-3. `/odom`이 바닥에서 믿을 만하지 않으면 시간(`stop_after_sec = stop_after_m / 접근속도`)으로 대체. 파라미터 `stop_mode: odom | time`.
-- 아직 못 하는 것: 위 값 보정과 `/odom` 정확도는 바닥 시험이 필요하다.
-- 정지선 감지 위치의 흔들림이 오차의 한계다. 감지 ROI 아래쪽 경계를 기준으로 하고, 첫 프레임만 쓴다.
+### 3. 정지 위치(±5cm) — 구현 (2026-11-09, `namgyu/mis`)
+- `clothoid_mission`이 직접 한다. YOLO가 보행자 표지판/적색 신호를 보면 무장하고, 무장 동안만 카메라를 구독해 `clothoid_finish`의 `FinishCore`를 돌린다(`line_stop.py`의 `LineStopCore`).
+- finish 그대로: `Bev` 거리, `Tracker` 오돔 x0.98, 3프레임 확정, 목표 = 선 - 범퍼 0.161 - `stop_gap` 0.03, 속도 `min(0.2, 1.5 x 남은 거리)`(최소 0.06).
+- finish와 다른 점 3가지:
+  1. 가로선(정지선)은 흰색으로 찾는다(왼쪽 선은 노란색 그대로).
+  2. 가로선 행 판정 = 끊기지 않은 흰 구간이 밴드의 70% 이상(주차 시작선 `NearLineParams.min_run` 규칙). finish의 "50% 채움"은 신호등 앞 "천천히" 글자를 정지선으로 잡아 26 cm 일찍 섰다.
+  3. 확정 뒤 4 cm 넘게 먼 선은 무시. 횡단보도 줄무늬/끝선을 잡아 56 cm 늦게 서던 것을 막는다.
+- 조향은 계속 `lane_main`. FinishCore의 속도만 `/speed_limit`, STOP이면 `/cmd_vel_state` 0. finish의 왼쪽 노란선 조향은 보행자 횡단보도 앞 지그재그에서 9° 틀어져서 쓰지 않는다(`lost_hold_sec` 1e9로 왼쪽 선 놓침 중단도 끔).
+- 2025 줄무늬 검출(`/stopline_detected`)은 주석 처리. 2026 미션에 횡단보도 인지는 필요 없다(규정은 정지선 기준).
+- 시뮬(YOLO, limo2 카메라): 보행자 범퍼 -0.5 cm(옆 0.8 cm), 신호등 +0.1 cm(옆 1.1 cm).
+- [ ] 바닥에서 확인. RViz: `ros2 launch clothoid_debug stop_sim.launch.py model_path:=...`(시뮬), `rviz/stop.rviz`.
 
 ### 4. E-stop / teleop
 - 우리 저장소에는 `/cmd_vel_teleop`을 발행하는 노드가 없다. `bringup`은 `twist_mux` 입력만 만들어 둔다. 조이스틱이 이미 있다고 했으니 **어떤 노드가 어떤 토픽에 내는지 확인**한다(`ros2 node list`, `ros2 topic info`).

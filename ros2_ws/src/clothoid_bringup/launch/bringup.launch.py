@@ -11,8 +11,9 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -66,6 +67,11 @@ def generate_launch_description():
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
+        DeclareLaunchArgument('use_image_10hz', default_value='false',
+                              description='republish the colour image at 10 Hz on /camera/color/image_10hz '
+                                          '(topic_tools throttle) for consumers that do not need 30 Hz'),
+        DeclareLaunchArgument('use_joint_states', default_value='false',
+                              description='joint_state_publisher (wheel joints for the RViz model)'),
         DeclareLaunchArgument('use_ekf', default_value='false',
                               description='fuse /odom and /imu into /odometry/filtered'),
         DeclareLaunchArgument('steering_scale', default_value='1.06',
@@ -73,8 +79,23 @@ def generate_launch_description():
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
                               description='limo_base: inner wheel limit in rad (official 28 deg)'),
 
-        # URDF: base_link -> laser_link, imu_link, wheels
-        include('limo_description', 'launch', 'load_urdf.launch.py'),
+        # URDF: base_link -> laser_link, imu_link (fixed joints), as limo_description's
+        # load_urdf.launch.py. joint_state_publisher only feeds the wheel joints (always 0 deg) for
+        # the RViz model; nothing else reads them, so it is off by default (~3.5 % of a core on limo2,
+        # 2026-11-09). use_joint_states:=true brings it back.
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            parameters=[{'robot_description': ParameterValue(
+                Command(['xacro ', PathJoinSubstitution(
+                    [FindPackageShare('limo_description'), 'urdf', 'limo_four_diff.xacro'])]),
+                value_type=str)}],
+        ),
+        Node(
+            package='joint_state_publisher',
+            executable='joint_state_publisher',
+            condition=IfCondition(LaunchConfiguration('use_joint_states')),
+        ),
 
         # colour camera lens of the DaBai, measured on limo2 2026-11-07 (wego had 0.23, 0.05, 0.06):
         # x 5 cm ahead of the front axle (base_link is midway between the axles, wheelbase 0.2),
@@ -103,6 +124,17 @@ def generate_launch_description():
                 'publish_tf': 'false',
             }.items(),
             condition=IfCondition(LaunchConfiguration('use_camera'))),
+
+        # one C++ subscriber to the raw image instead of every slow consumer taking 30 Hz in Python
+        # (docs/PIPELINE_LOAD_PLAN.md 0.1, step 4). apt: ros-humble-topic-tools
+        # throttle passes a frame once 1/rate s have gone by: 10.0 on the 30 Hz camera waited for the
+        # 4th frame half the time (8.8 Hz on limo2), 12.0 (83 ms) takes every 3rd frame = 10 Hz
+        Node(
+            package='topic_tools',
+            executable='throttle',
+            name='image_10hz',
+            arguments=['messages', '/camera/color/image_raw', '12.0', '/camera/color/image_10hz'],
+            condition=IfCondition(LaunchConfiguration('use_image_10hz'))),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(

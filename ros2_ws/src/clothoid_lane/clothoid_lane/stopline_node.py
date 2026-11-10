@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """Stop line node (ROS2 port of 2025 `crosswalk.py`).
 
-Publishes std_msgs/Bool on `stopline_topic` every frame (true = stripes seen). It does not
-move the car: the mission node stops, waits and restarts. Distance to the line is not
-published yet; the +-5 cm stop in the rules will need it (see docs/INTERFACES.md).
+Publishes `near_topic` (/stopline_near, std_msgs/Bool) every frame: one stop line right in front
+with no crosswalk past it, the parking trigger. It does not move the car.
+
+The 2025 crosswalk stripe flag (`stopline_topic`, /stopline_detected) is commented out (2026-11-09):
+no 2026 mission needs crosswalks recognised (lights / pedestrians stop on the stop line, done in
+clothoid_mission with finish's FinishCore). StopLineDetector stays because the parking trigger takes
+its warp and white thresholds.
 """
+import cv2
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 
-from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.image_utils import bgr_to_image, image_to_bgr  # noqa: F401  (bgr_to_image: stripe debug, commented out)
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_lane.lane_detector import LaneParams
-from clothoid_lane.stopline import StopLineDetector, StopLineParams
+from clothoid_lane.stopline import NearLineDetector, NearLineParams, StopLineDetector, StopLineParams
 
 
 class StopLineNode(Node):
-    def __init__(self):
+    def __init__(self, subscribe_images=True):
         super().__init__('stopline')
 
         self.declare_parameter('image_topic', '/camera/color/image_raw')
@@ -42,14 +47,24 @@ class StopLineNode(Node):
         self.declare_parameter('min_count', d.min_count)
         self.declare_parameter('min_white_ratio', d.min_white_ratio)
         self.declare_parameter('debug', False)
+        # one stop line right in front (bottom of the warped image): the parking trigger
+        self.declare_parameter('near_topic', '/stopline_near')
+        self.declare_parameter('near_frames', 2)      # consecutive frames before it counts
 
         self.detector = StopLineDetector(self._build(lambda n: self.get_parameter(n).value))
+        p = self.detector.p
+        self.near = NearLineDetector(NearLineParams(warp=p.warp, hsv_lower=p.hsv_lower,
+                                                    hsv_upper=p.hsv_upper, gray_low=p.gray_low))
+        self.near_count = 0
+        self.near_pub = self.create_publisher(Bool, self.get_parameter('near_topic').value, 1)
 
-        self.pub = self.create_publisher(Bool, self.get_parameter('stopline_topic').value, 1)
+        # 2025 stripe flag, not used in 2026 (see the module docstring)
+        # self.pub = self.create_publisher(Bool, self.get_parameter('stopline_topic').value, 1)
         self.debug_pub = self.create_publisher(
             Image, self.get_parameter('debug_image_topic').value, 1)
-        self.create_subscription(
-            Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
+        if subscribe_images:
+            self.create_subscription(
+                Image, self.get_parameter('image_topic').value, self.on_image, IMAGE_QOS)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info('stopline started')
@@ -70,6 +85,9 @@ class StopLineNode(Node):
         try:
             self.detector.configure(
                 self._build(lambda n: proposed.get(n, self.get_parameter(n).value)))
+            p = self.detector.p
+            self.near.configure(NearLineParams(warp=p.warp, hsv_lower=p.hsv_lower,
+                                               hsv_upper=p.hsv_upper, gray_low=p.gray_low))
         except Exception as exc:
             return SetParametersResult(successful=False, reason=str(exc))
         return SetParametersResult(successful=True)
@@ -81,16 +99,28 @@ class StopLineNode(Node):
             self.get_logger().error(str(exc), throttle_duration_sec=5.0)
             return
 
-        debug = self.get_parameter('debug').value
-        result = self.detector.detect(bgr, debug)
-        if debug and result.debug_image is not None:
-            self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
-        self.pub.publish(Bool(data=bool(result.found)))
+        self.on_bgr(bgr)
+
+    def on_bgr(self, bgr):
+        """The exact same detector, with either a standalone or shared image subscription."""
+        # 2025 stripe flag, not used in 2026 (see the module docstring)
+        # debug = self.get_parameter('debug').value
+        # result = self.detector.detect(bgr, debug)
+        # if debug and result.debug_image is not None:
+        #     self.debug_pub.publish(bgr_to_image(result.debug_image, msg.header))
+        # self.pub.publish(Bool(data=bool(result.found)))
+        self.near_count = self.near_count + 1 if self.near.detect(bgr) else 0
+        self.near_pub.publish(Bool(data=self.near_count >= self.get_parameter('near_frames').value))
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = StopLineNode()
+    # one OpenCV thread per process: several camera nodes each spawning a pool fight over the
+    # cores (lane_shared does the same with shared_opencv_threads); 0 keeps OpenCV's default
+    threads = node.declare_parameter('opencv_threads', 1).value
+    if threads:
+        cv2.setNumThreads(threads)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

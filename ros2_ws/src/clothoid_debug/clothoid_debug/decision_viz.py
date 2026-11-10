@@ -58,9 +58,13 @@ class DecisionViz(Node):
         self.declare_parameter('fy', 489.14)
         self.declare_parameter('cx', 322.0)
         self.declare_parameter('cy', 217.0)
+        # camera overlay on /viz/overlay. Off on the car (viz.launch.py): receiving the raw image costs
+        # a Python node ~30-40 % of an Orin core (docs/PIPELINE_LOAD_PLAN.md); markers stay on
+        self.declare_parameter('overlay', True)
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.wheelbase, self.rear_axle_x = get('wheelbase'), get('rear_axle_x')
         self.use_odom_pose = get('use_odom_pose')
+        self.overlay = get('overlay')
         self.warp_params = LaneParams(x_h=get('warp_x_h'), x_l=get('warp_x_l'),
                                       y_h=get('warp_y_h'), y_l=get('warp_y_l'))
         self.projection = GroundProjection(
@@ -78,12 +82,14 @@ class DecisionViz(Node):
         self.last_imu = self.last_odom = None
         self.pose_stamp = RosTime()
 
-        self.overlay_pub = self.create_publisher(Image, '/viz/overlay', 1)
+        if self.overlay:
+            self.overlay_pub = self.create_publisher(Image, '/viz/overlay', 1)
         self.marker_pub = self.create_publisher(MarkerArray, '/viz/markers', 1)
         self.tf_pub = TransformBroadcaster(self)
 
-        self.create_subscription(Image, '/camera/color/image_raw', self.on_image,
-                                 qos_profile_sensor_data)
+        if self.overlay:
+            self.create_subscription(Image, '/camera/color/image_raw', self.on_image,
+                                     qos_profile_sensor_data)
         self.create_subscription(PolygonStamped, '/lane/left_warp', self.on_left, 5)
         self.create_subscription(PolygonStamped, '/lane/right_warp', self.on_right, 5)
         self.create_subscription(PointStamped, '/lane/target_warp', self.on_target, 5)
@@ -116,7 +122,7 @@ class DecisionViz(Node):
     def on_target(self, msg):
         self.target = msg
         frame = self.frames.get((msg.header.stamp.sec, msg.header.stamp.nanosec))
-        if frame is not None:
+        if self.overlay and frame is not None:
             self.publish_overlay(frame, msg)
 
     def on_cone_target(self, msg):

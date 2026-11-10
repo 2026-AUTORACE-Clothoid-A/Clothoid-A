@@ -14,6 +14,7 @@
   <test_depend>python3-pytest</test_depend>
 
   <exec_depend>twist_mux</exec_depend>
+  <exec_depend>topic_tools</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
@@ -28,6 +29,7 @@
   <exec_depend>clothoid_yolo</exec_depend>
   <exec_depend>clothoid_lidar</exec_depend>
   <exec_depend>clothoid_parking</exec_depend>
+  <exec_depend>clothoid_finish</exec_depend>
   <exec_depend>clothoid_mission</exec_depend>
   <exec_depend>clothoid_debug</exec_depend>
 
