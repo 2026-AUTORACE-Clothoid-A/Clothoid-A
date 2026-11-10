@@ -105,11 +105,16 @@ def min_gap(car_poly, limos):
 
 
 def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, remove_at=None,
-        seed=1, t_max=45.0, params=None, see_entry=True, skew_deg=None):
+        seed=1, t_max=45.0, params=None, see_entry=True, skew_deg=None, start_fit=False, steer_gain=1.0,
+        control_every=1, track=None):
     """Drive the section once. Returns a dict of what happened.
     direction: 0 / 1 / None, or (value, x) for a fork sign first seen when the car passes x.
     skew_deg: the section frame is wrong by this much until the camera lane fit, 0.5 m past the entry
-    line (a start while leaving the corner)."""
+    line (a start while leaving the corner). start_fit: corrected 0.3 s after the start instead, as the
+    camera start fit does (the entry-line fit stands for a start fit that failed).
+    steer_gain: the real wheel angle is this times car 7's table (tools/static_avoid/sim_tracking.py).
+    control_every: control() every n-th 0.05 s step, the command held in between (a busy node).
+    track: list to append (t, s, d of the car, the plan's path) at each control step while avoiding."""
     rng = np.random.default_rng(seed)
     w = lane_width
     p = params or replace(AvoidParams(), lane_width=w)
@@ -153,7 +158,9 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
                 out['island_source'] = avoid.island_source
                 if skew_deg is not None:
                     avoid.frame = SectionFrame(pose[0], pose[1], pose[2] + math.radians(skew_deg))
-            if skew_deg is not None and avoid.state == ACTIVE and bx >= 0.5 and avoid.lane_frame is None:
+                    out['t_start'] = t
+            fit_now = (t >= out.get('t_start', t) + 0.3) if start_fit else bx >= 0.5
+            if skew_deg is not None and avoid.state == ACTIVE and fit_now and avoid.lane_frame is None:
                 # the lane is the world x axis; origin on lane 2 centre at the entry line
                 avoid.on_lane_fit(SectionFrame(pose[0] - bx, pose[1] - by, 0.0))
             ok = np.isfinite(r)
@@ -161,8 +168,13 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
             free = np.column_stack((np.cos(ang[~ok]), np.sin(ang[~ok])))
             avoid.on_scan(hits, np.array([LIDAR_X, 0.0]), pose, pose, flag,
                           free_dirs_base=free)
-        res = avoid.control(tracker.latest(), inh)
-        if res is None:
+        if int(round(t / dt)) % control_every:
+            res = 'hold'
+        else:
+            res = avoid.control(tracker.latest(), inh)
+        if res == 'hold':
+            pass
+        elif res is None:
             if avoid.event and (not out['events'] or out['events'][-1][1] != avoid.event):
                 out['events'].append((round(t, 2), avoid.event, round(bx, 2)))
                 if avoid.event.startswith('hand over'):
@@ -179,7 +191,9 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         else:
             cmd = res
             out['stops'] += int(res[0] == 0.0)
-        delta = real_central(cmd[0], cmd[1])
+            if track is not None and avoid.plan is not None and avoid.plan.feasible:
+                track.append((t, *avoid.lane_pose(tracker.latest())[:2], avoid.plan.path.copy()))
+        delta = steer_gain * real_central(cmd[0], cmd[1])
         xr += cmd[0] * math.cos(th) * dt
         yr += cmd[0] * math.sin(th) * dt
         th += cmd[0] * math.tan(delta) / L * dt
