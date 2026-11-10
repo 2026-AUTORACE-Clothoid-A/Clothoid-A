@@ -7,6 +7,7 @@ Change it only by agreement; topic names live in `ros2_ws/src/clothoid_bringup/c
 | Topic | Type | Notes |
 |---|---|---|
 | `/camera/color/image_raw` | `sensor_msgs/Image` | 640x480, `rgb8`, `frame_id: camera_color_optical_frame`. Rate depends on light, measured on limo2 on 2026-11-02: 29.3 Hz in a lit room with all streams on; in the dark 12.3 Hz alone, 12.4 Hz with all streams, 10.9 Hz with all mission nodes. Bringup enables color only |
+| `/camera/color/image_10hz` | `sensor_msgs/Image` | same frames as `image_raw`, thinned by `topic_tools throttle` (rate 12.0: a frame once 83 ms have passed). Only with `use_image_10hz:=true` (bringup/full.launch, default false). 10 Hz from the 30 Hz camera (limo2 2026-11-11: raw stays 29.9 Hz, throttle 6~9 % CPU); when the camera drops to ~12 Hz in the dark it passes every 2nd frame, ~6 Hz. For consumers that do not need 30 Hz (static_avoid first); topics.yaml `image_10hz_topic` |
 | `/scan` | `sensor_msgs/LaserScan` | YDLidar Tmini Plus, 10 Hz, ±110°, ~410 points per turn, frame `laser_link` |
 | `/odom` | `nav_msgs/Odometry` | from our `limo_base` (needs the LIMO body and motor battery connected). 50 Hz measured in Ackermann mode, frames `odom` → `base_link`. The factory `limo_base` publishes none in that mode |
 | `/imu` | `sensor_msgs/Imu` | from the base driver. 100 Hz measured, frame `imu_link`. Yaw and gyro respond to the chassis being turned by hand; 90° accuracy and sign not confirmed (see `PACKAGES.md`) |
