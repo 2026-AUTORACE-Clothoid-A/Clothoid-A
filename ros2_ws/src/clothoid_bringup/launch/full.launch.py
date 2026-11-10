@@ -17,9 +17,10 @@ see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_li
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
+Every node gets `OMP_NUM_THREADS=1` and `OPENBLAS_NUM_THREADS=1` (docs/PIPELINE_LOAD_PLAN.md 6.0).
 """
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -46,6 +47,10 @@ def generate_launch_description():
     mux_args = {'require_arm': 'false', 'mux_output': '/cmd_vel', 'cmd_timeout': '0.5'}
 
     return LaunchDescription([
+        # one BLAS/OpenMP thread per process: numpy/torch would otherwise start one per core in
+        # every node and fight over the Jetson's cores (docs/PIPELINE_LOAD_PLAN.md 6.0)
+        SetEnvironmentVariable('OMP_NUM_THREADS', '1'),
+        SetEnvironmentVariable('OPENBLAS_NUM_THREADS', '1'),
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
         DeclareLaunchArgument('debug', default_value='false'),
         DeclareLaunchArgument('viz', default_value='false',
