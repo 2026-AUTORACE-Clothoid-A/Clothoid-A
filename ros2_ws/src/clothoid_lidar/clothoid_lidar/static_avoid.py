@@ -112,9 +112,12 @@ class AvoidParams:
     w_short: float = 0.5              # per 1/m of transition length
     w_hysteresis: float = 4.0         # per m away from the last chosen end offset
     # per m^2 away from the A/B lane centre, once /direction_flag is known
-    w_target: float = 150.0
-    w_target_near: float = 400.0      # within target_near of the island: go to the A/B lane now
-    target_near: float = 2.0
+    # pull to the A / B lane. Weak at first: a strong pull steers into the gap between a lane 2 LIMO and
+    # one in the target lane and dead-locks there (sim, 1108 run 1-3 layouts). Strong from target_near
+    # before the island front (from about the entry line + 1.4 m), so that the car is back in time
+    w_target: float = 20.0
+    w_target_near: float = 400.0
+    target_near: float = 3.0
     w_lane2: float = 3.0              # lane 2 end without a direction (the island ahead)
     # x share of path samples on the painted island; soft because its position is only estimated
     # and a hard limit can dead-lock the car in lane 2 when the fork sign comes late
@@ -168,10 +171,10 @@ class PoseTracker:
         self.x = self.y = 0.0
         self.speed = 0.0
         self.distance = 0.0           # odometer, m
+        self.last_pos: Optional[Tuple[float, float]] = None   # /odom position of the last message
         self.trace: List[Tuple[float, float, float, float]] = []
 
     def imu(self, t: float, yaw: float) -> None:
-        self.last_pos: Optional[Tuple[float, float]] = None   # /odom position of the last message
         # unwrap so interpolation never jumps by 2 pi
         self.yaw = yaw if self.yaw is None else self.yaw + wrap(yaw - self.yaw)
 
