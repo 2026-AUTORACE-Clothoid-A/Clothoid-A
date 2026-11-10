@@ -15,7 +15,9 @@ import cv2
 import rclpy
 from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
+from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import Bool, Float32, Int32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
@@ -111,6 +113,12 @@ class LaneMainNode(Node):
         # (config/camera_*.yaml), so the width in pixels is lane_width_m x warp_px_per_m.
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
         self.declare_parameter('steering_lock_topic', '/steering_lock')
+        self.declare_parameter('steering_lock_timeout', 1.5)  # mission refreshes every 1 s
+        self.declare_parameter('imu_topic', '/imu')
+        self.declare_parameter('steering_lock_level_deg', 1.2)
+        self.declare_parameter('steering_lock_reference_timeout', 1.0)
+        self.declare_parameter('steering_lock_imu_timeout', 0.25)
+        self.declare_parameter('steering_lock_sync_tolerance', 0.04)
         self.declare_parameter('lane_width_m', 0.5)
         self.declare_parameter('parking_lane_width_m', 0.68)
         self.declare_parameter('warp_px_per_m', 340.0)
@@ -130,6 +138,9 @@ class LaneMainNode(Node):
         self.speed_limit = None
         self.speed_limit_stamp = None
         self.steering_locked = False
+        self.steering_lock_stamp = None
+        self.imu_pitch = self.imu_stamp = None
+        self.level_steer = self.level_steer_stamp = self.level_target = None
         self.last_steer = 0.0
         self.last_cmd = None
         self.last_found_stamp = None
@@ -154,6 +165,8 @@ class LaneMainNode(Node):
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
         self.create_subscription(
             Bool, self.get_parameter('steering_lock_topic').value, self.on_steering_lock, 1)
+        self.create_subscription(
+            Imu, self.get_parameter('imu_topic').value, self.on_imu, qos_profile_sensor_data)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
@@ -211,7 +224,40 @@ class LaneMainNode(Node):
             self.speed_limit_stamp = self.get_clock().now()
 
     def on_steering_lock(self, msg: Bool):
+        now = self.get_clock().now()
+        if msg.data and not self.steering_locked and self.level_steer_stamp is not None and (
+                now-self.level_steer_stamp).nanoseconds * 1e-9 <= self.get_parameter(
+                    'steering_lock_reference_timeout').value:
+            # At the entry threshold the camera has already tilted. Use the
+            # actual angle last commanded while the IMU still reported level.
+            self.last_steer = self.level_steer
+            self.used_target = self.level_target
+        if bool(msg.data) != self.steering_locked:
+            self.get_logger().info(f'steering lock {bool(msg.data)}: last angle '
+                                   f'{math.degrees(self.last_steer):.2f} deg')
         self.steering_locked = bool(msg.data)
+        self.steering_lock_stamp = now
+
+    def on_imu(self, msg: Imu):
+        q = msg.orientation
+        norm = q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w
+        if msg.orientation_covariance[0] < 0 or not math.isfinite(norm) or norm < .5:
+            self.imu_pitch = self.imu_stamp = None
+            return
+        sinp = 2.*(q.w*q.y-q.z*q.x)/norm
+        self.imu_pitch = math.degrees(math.asin(max(-1., min(1., sinp))))
+        self.imu_stamp = self.sensor_time(msg.header, self.get_clock().now())
+
+    @staticmethod
+    def sensor_time(header, fallback):
+        if header.stamp.sec == 0 and header.stamp.nanosec == 0:
+            return fallback
+        return Time.from_msg(header.stamp, clock_type=fallback.clock_type)
+
+    def current_steering_lock(self, now) -> bool:
+        return (self.steering_locked and self.steering_lock_stamp is not None and
+                (now-self.steering_lock_stamp).nanoseconds * 1e-9 <=
+                self.get_parameter('steering_lock_timeout').value)
 
     def current_speed(self) -> float:
         speed = self.get_parameter('base_speed').value
@@ -249,8 +295,10 @@ class LaneMainNode(Node):
         result = self.detector.detect(bgr, self.side, self.lane_width, debug)
 
         now = self.get_clock().now()
+        frame_time = self.sensor_time(header, now)
+        locked = self.current_steering_lock(now) and self.last_cmd is not None
         target = None
-        if result.found:
+        if result.found and not locked:
             prev = self.used_target
             if self.last_found_stamp is None or \
                     (now - self.last_found_stamp).nanoseconds * 1e-9 > TARGET_RESET_SEC:
@@ -269,34 +317,38 @@ class LaneMainNode(Node):
 
         if result.zigzag:
             self.last_zigzag_stamp = now
-        if result.found:
-            if self.steering_locked and self.last_cmd is not None:
-                steer = self.last_steer
-            else:
-                steer = steer_angle(target[0], target[1],
-                                    self.detector.p.warp_w, self.detector.p.warp_h,
-                                    self.get_parameter('steer_gain').value,
-                                    self.get_parameter('max_steer_rad').value)
-                self.last_steer = steer
+        if result.found or locked:
             speed = self.current_speed()
             zigzag_speed = self.get_parameter('zigzag_speed').value
             if zigzag_speed > 0.0 and self.last_zigzag_stamp is not None and (
                     now - self.last_zigzag_stamp).nanoseconds * 1e-9 <= \
                     self.get_parameter('zigzag_hold_sec').value:
                 speed = min(speed, zigzag_speed)
-            gain = self.get_parameter('steer_gain').value
-            if self.get_parameter('steer_gain_speed_scaling').value:
-                gain = speed_scaled_gain(gain, self.get_parameter('base_speed').value, speed,
-                                         self.get_parameter('steer_gain_max').value)
-            steer = steer_angle(target[0], target[1],
-                                self.detector.p.warp_w, self.detector.p.warp_h,
-                                gain, self.get_parameter('max_steer_rad').value)
+            if locked:
+                steer = self.last_steer
+            else:
+                gain = self.get_parameter('steer_gain').value
+                if self.get_parameter('steer_gain_speed_scaling').value:
+                    gain = speed_scaled_gain(gain, self.get_parameter('base_speed').value, speed,
+                                             self.get_parameter('steer_gain_max').value)
+                steer = steer_angle(target[0], target[1],
+                                    self.detector.p.warp_w, self.detector.p.warp_h,
+                                    gain, self.get_parameter('max_steer_rad').value)
+                self.last_steer = steer       # remember the angle actually commanded
+                if (self.imu_stamp is not None and
+                        0. <= (now-self.imu_stamp).nanoseconds * 1e-9 <= self.get_parameter(
+                            'steering_lock_imu_timeout').value and
+                        abs((frame_time-self.imu_stamp).nanoseconds * 1e-9) <= self.get_parameter(
+                            'steering_lock_sync_tolerance').value and
+                        abs(self.imu_pitch) <= self.get_parameter('steering_lock_level_deg').value):
+                    self.level_steer, self.level_steer_stamp, self.level_target = steer, frame_time, target
 
             cmd = Twist()
             cmd.linear.x = speed
             cmd.angular.z = angular_z(speed, steer, self.get_parameter('wheelbase').value)
             self.last_cmd = cmd
-            self.last_found_stamp = now
+            if result.found:
+                self.last_found_stamp = now
             self.cmd_pub.publish(cmd)
             return
 

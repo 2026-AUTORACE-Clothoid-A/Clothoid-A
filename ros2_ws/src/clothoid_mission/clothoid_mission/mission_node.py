@@ -392,6 +392,9 @@ class MissionNode(Node):
             'remaining': None if left is None else round(left, 4),
             'line': None if core is None or core.cross_x is None else round(core.cross_x, 4),
             'front': self.finish_params.front, 'speed_limit': out.speed_limit,
+            'bump_state': self.logic.bump_state,
+            'imu_pitch': self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
+            'steering_lock': out.steering_lock,
             'stopped_for': (round(now - self.logic.stopped_at, 2) if out.stop else None)})))
 
         log = (self.logic.parking_armed, out.parking_flag)

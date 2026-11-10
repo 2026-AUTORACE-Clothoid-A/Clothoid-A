@@ -32,10 +32,10 @@ mission:
     slow_speed: 0.2             # rules: 0.2 m/s or less
     slow_hold_sec: 4.0          # general slow sign hold timer
     # speed bump (IMU Pitch + YOLO fusion)
-    bump_pitch_thresh: 3.5      # deg, nose-up angle to detect climbing
+    bump_pitch_thresh: 3.5      # deg, absolute pitch; supports either IMU sign convention
     bump_level_thresh: 1.2      # deg, abs angle to detect vehicle leveled
-    bump_level_duration: 0.3    # sec, continuous leveling to confirm exit
-    bump_arm_timeout: 6.0       # sec, auto-expire if bump not hit after sign
+    bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
+    bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
     bump_min_area: 2500.0       # px^2, minimum bbox area (approx 50x50 px) to trigger bump logic
     bump_min_height: 40.0       # px, minimum bbox height to trigger bump logic

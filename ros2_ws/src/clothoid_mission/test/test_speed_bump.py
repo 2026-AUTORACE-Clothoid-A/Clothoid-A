@@ -1,6 +1,7 @@
 """Scenario tests for integrated Speed Bump IMU logic in MissionLogic."""
 import os
 import sys
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
@@ -97,6 +98,36 @@ def test_bump_arm_timeout():
     out = logic.step(Inputs(now=6.1, seen=set(), imu_pitch=0.0))
     assert logic.bump_state == BUMP_IDLE
     assert out.speed_limit is None
+
+
+@pytest.mark.parametrize('polarity', [-1., 1.])
+def test_bump_requires_opposite_tilt_before_level_exit(polarity):
+    logic = MissionLogic(MissionParams())
+    logic.step(Inputs(now=0., seen={'sign_bump'}))
+    out = logic.step(Inputs(now=1., imu_pitch=polarity*5.))
+    assert out.steering_lock and out.speed_limit == .2
+    # A long flat interval while the bump is between the two axles.
+    logic.step(Inputs(now=1.2, imu_pitch=0.))
+    assert logic.step(Inputs(now=1.8, imu_pitch=0.)).steering_lock
+    logic.step(Inputs(now=2., imu_pitch=-polarity*3.))
+    logic.step(Inputs(now=2.2, imu_pitch=0.))
+    assert not logic.step(Inputs(now=2.55, imu_pitch=0.)).steering_lock
+    assert logic.bump_state == BUMP_COOLDOWN
+
+
+def test_visible_sign_refreshes_approach_timeout_and_missing_imu_cannot_clear():
+    logic = MissionLogic(MissionParams(bump_arm_timeout_sec=6.))
+    logic.step(Inputs(now=0., seen={'sign_bump'}))
+    logic.step(Inputs(now=5., seen={'sign_bump'}))
+    assert logic.step(Inputs(now=9., imu_pitch=0.)).speed_limit == .2
+    logic.step(Inputs(now=10., imu_pitch=-5.))
+    logic.step(Inputs(now=10.3, imu_pitch=4.))
+    logic.step(Inputs(now=10.5, imu_pitch=0.))
+    missing = logic.step(Inputs(now=10.8, imu_pitch=None))
+    assert missing.speed_limit == .2 and not missing.steering_lock
+    assert logic.bump_state == BUMP_ON
+    assert logic.step(Inputs(now=11., imu_pitch=0.)).steering_lock
+    assert not logic.step(Inputs(now=11.4, imu_pitch=0.)).steering_lock
 
 
 class DummyDetection:

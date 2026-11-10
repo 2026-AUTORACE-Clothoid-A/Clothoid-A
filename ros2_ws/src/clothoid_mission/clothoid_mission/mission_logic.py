@@ -39,8 +39,8 @@ BUMP_COOLDOWN = 'cooldown'
 def quaternion_to_pitch_deg(x: float, y: float, z: float, w: float) -> float:
     """Convert orientation quaternion (x, y, z, w) to vehicle Pitch angle in degrees.
 
-    Positive pitch: nose up (climbing bump).
-    Negative pitch: nose down (descending bump).
+    ROS right-handed body axes: negative pitch raises the nose. The bump
+    detector accepts both signs to tolerate the hardware driver's convention.
     """
     sinp = 2.0 * (w * y - z * x)
     if abs(sinp) >= 1.0:
@@ -93,10 +93,10 @@ class MissionParams:
     slow_speed: float = 0.2            # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0         # general slow sign hold timer
     # speed bump (IMU Pitch + YOLO fusion)
-    bump_pitch_thresh: float = 3.5      # deg, nose-up angle to detect climbing
+    bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
     bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
     bump_level_duration_sec: float = 0.3  # sec, continuous leveling to confirm exit
-    bump_arm_timeout_sec: float = 6.0   # sec, auto-expire if bump not hit after sign
+    bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
@@ -153,6 +153,8 @@ class MissionLogic:
         self.bump_armed_at = -1.0
         self.bump_level_started_at: Optional[float] = None
         self.bump_cooldown_until = -1.0
+        self.bump_entry_sign = 0.
+        self.bump_opposite_seen = False
 
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
@@ -185,7 +187,10 @@ class MissionLogic:
             direction=self.direction,
             parking_flag=self.parking_flag,
             stop_arm=arm,
-            steering_lock=(self.bump_state == BUMP_ON))
+            # Keep the slow limit on unknown attitude, but let lane following
+            # steer again if IMU updates disappear during a crossing.
+            steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
+                           math.isfinite(inputs.imu_pitch)))
 
     def _update_bump(self, inputs: Inputs) -> None:
         now, seen, pitch, p = inputs.now, inputs.seen, inputs.imu_pitch, self.p
@@ -197,8 +202,10 @@ class MissionLogic:
 
             if self.bump_state == BUMP_IDLE:
                 self.bump_state = BUMP_APPROACHING
-                self.bump_armed_at = now
                 self.bump_level_started_at = None
+            if self.bump_state == BUMP_APPROACHING:
+                # A still-visible confirmed sign is fresh approach evidence.
+                self.bump_armed_at = now
 
         # 2. State transitions using IMU pitch and timers
         if self.bump_state == BUMP_COOLDOWN:
@@ -209,13 +216,18 @@ class MissionLogic:
             # Expire if bump not hit within timeout
             if now - self.bump_armed_at > p.bump_arm_timeout_sec:
                 self.bump_state = BUMP_IDLE
-            elif pitch is not None and pitch >= p.bump_pitch_thresh:
+            elif pitch is not None and abs(pitch) >= p.bump_pitch_thresh:
                 # Front wheels climbing bump
                 self.bump_state = BUMP_ON
                 self.bump_level_started_at = None
+                self.bump_entry_sign = math.copysign(1., pitch)
+                self.bump_opposite_seen = False
 
         elif self.bump_state == BUMP_ON:
-            if pitch is not None and abs(pitch) <= p.bump_level_thresh:
+            if pitch is not None and pitch*self.bump_entry_sign < -p.bump_level_thresh:
+                self.bump_opposite_seen = True
+            # The flat interval between front and rear axles is not the exit.
+            if self.bump_opposite_seen and pitch is not None and abs(pitch) <= p.bump_level_thresh:
                 if self.bump_level_started_at is None:
                     self.bump_level_started_at = now
                 elif now - self.bump_level_started_at >= p.bump_level_duration_sec:

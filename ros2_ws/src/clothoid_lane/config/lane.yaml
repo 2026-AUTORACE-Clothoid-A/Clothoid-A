@@ -10,6 +10,11 @@ lane_main:
     zigzag_speed: 0.2          # m/s while the zigzag is seen; 0 = no change
     zigzag_hold_sec: 0.5       # bags: the zone state drops for 0.2 s at most inside the zone
     lost_hold_sec: 0.0         # >0 keeps the last heading when the lane is lost
+    steering_lock_timeout: 1.5 # seconds since mission heartbeat; prevents a stale lock persisting
+    steering_lock_level_deg: 1.2 # cache steering while level, before the camera tilts
+    steering_lock_reference_timeout: 1.0
+    steering_lock_imu_timeout: 0.25
+    steering_lock_sync_tolerance: 0.04 # camera/IMU sensor-stamp difference when caching level steering
     # the steered-to target moves at most this many warped px per frame (0 = off); see lane_main.py
     target_max_step_px: 8.0
     # multiplies the 2025 steering law. The turn rate for a steering angle grows with the speed, so keep
