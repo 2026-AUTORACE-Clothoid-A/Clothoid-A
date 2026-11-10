@@ -67,6 +67,9 @@ def generate_launch_description():
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
+        DeclareLaunchArgument('use_image_10hz', default_value='false',
+                              description='republish the colour image at 10 Hz on /camera/color/image_10hz '
+                                          '(topic_tools throttle) for consumers that do not need 30 Hz'),
         DeclareLaunchArgument('use_joint_states', default_value='false',
                               description='joint_state_publisher (wheel joints for the RViz model)'),
         DeclareLaunchArgument('use_ekf', default_value='false',
@@ -121,6 +124,17 @@ def generate_launch_description():
                 'publish_tf': 'false',
             }.items(),
             condition=IfCondition(LaunchConfiguration('use_camera'))),
+
+        # one C++ subscriber to the raw image instead of every slow consumer taking 30 Hz in Python
+        # (docs/PIPELINE_LOAD_PLAN.md 0.1, step 4). apt: ros-humble-topic-tools
+        # throttle passes a frame once 1/rate s have gone by: 10.0 on the 30 Hz camera waited for the
+        # 4th frame half the time (8.8 Hz on limo2), 12.0 (83 ms) takes every 3rd frame = 10 Hz
+        Node(
+            package='topic_tools',
+            executable='throttle',
+            name='image_10hz',
+            arguments=['messages', '/camera/color/image_raw', '12.0', '/camera/color/image_10hz'],
+            condition=IfCondition(LaunchConfiguration('use_image_10hz'))),
 
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(
