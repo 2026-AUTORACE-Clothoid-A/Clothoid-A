@@ -20,7 +20,10 @@
     # mission signals
     direction_topic: /direction_flag      # std_msgs/Int32, 0 left lane, 1 right lane
     parking_topic: /parking_flag          # std_msgs/Bool
+    parking_prepare_topic: /parking_prepare  # std_msgs/Bool, passive scan only
+    parking_scene_topic: /parking/bay_candidate # PoseStamped, scan timestamp, base_link bay face
     speed_limit_topic: /speed_limit       # std_msgs/Float32, <=0 releases the limit
+    bump_approach_topic: /bump/approaching # std_msgs/Bool, mission heartbeat for bounded lane gaps
     stopline_topic: /stopline_detected    # std_msgs/Bool, stop line / crosswalk stripes ahead
     parking_done_topic: /parking_done     # std_msgs/Bool, true once after the parking sequence ends
 

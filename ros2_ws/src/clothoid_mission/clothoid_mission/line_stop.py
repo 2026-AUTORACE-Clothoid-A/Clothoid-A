@@ -28,6 +28,7 @@ import numpy as np
 
 from clothoid_finish.bev import Bev
 from clothoid_finish.finish_core import FinishCore, FinishParams, Phase  # noqa: F401  (re-exported)
+from clothoid_mission.scene_evidence import FloorObservation
 
 
 def longest_runs(mask: np.ndarray) -> np.ndarray:
@@ -51,6 +52,8 @@ class LineStopCore(FinishCore):
         self.max_frame_gap = 0.25
         self._last_sighting = None
         self.require_crosswalk = False
+        self.observe_scene = False
+        self.observation = FloorObservation()
         # the band (|y| <= p.band ahead of base_link) never moves in the warped image: only its
         # columns are converted and scanned
         band = (np.abs(bev.gy) <= p.band) & bev.valid
@@ -75,6 +78,19 @@ class LineStopCore(FinishCore):
                 return True
         return False
 
+    def _crosswalk_spans(self, white):
+        starts = white & ~np.pad(white[:, :-1], ((0, 0), (1, 0)))
+        count = starts.sum(1)
+        fill = white.sum(1) / np.maximum(self._per_row, 1)
+        rows = np.flatnonzero((count >= 3) & (fill >= .3) & (fill <= .85))
+        spans = []
+        for group in np.split(rows, np.flatnonzero(np.diff(rows) > 1) + 1):
+            if len(group) >= 2:
+                near, far = float(self._row_x[group].min()), float(self._row_x[group].max())
+                if far - near >= .06:
+                    spans.append((near, far))
+        return tuple(spans)
+
     def _sighting(self, now: float, line_at: float):
         if self.phase == Phase.COMMIT and self.target is not None and abs(
                 line_at - (self.target + self.p.front + self.p.stop_gap)) > self.p.confirm_tolerance:
@@ -92,6 +108,7 @@ class LineStopCore(FinishCore):
         warped = self.bev.warp_image(bgr)[:, self._c0:self._c1]
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         white = (hsv[..., 1] <= self.white_s_max) & (hsv[..., 2] >= self.white_v_min) & self._band
+        crosswalks = self._crosswalk_spans(white) if self.observe_scene or self.require_crosswalk else ()
         if self.debug:
             full = np.zeros(self.bev.valid.shape, bool)
             full[:, self._c0:self._c1] = white
@@ -103,7 +120,7 @@ class LineStopCore(FinishCore):
         rows = np.nonzero((per_row > 10) & (runs >= self.min_run * np.maximum(per_row, 1)))[0]
         self.cross_x = None
         groups = np.split(rows, np.where(np.diff(rows) > 1)[0] + 1)
-        candidates = []
+        candidates, lines = [], []
         for group in groups:
             if len(group) < 2:
                 continue
@@ -111,9 +128,15 @@ class LineStopCore(FinishCore):
             thickness = float(np.median(self._gx[far][self._band[far]]) -
                               np.median(self._gx[near][self._band[near]]))
             if self.min_thickness <= thickness <= self.max_thickness:
+                line_x = float(np.min(self._gx[near][self._band[near]]))
+                lines.append(line_x)
+                far_x = float(self._row_x[far])
+                behind = any(min(end, far_x + .45) - max(start, far_x + .02) >= .06
+                             for start, end in crosswalks)
                 if (not self.require_crosswalk or self.phase == Phase.COMMIT or
-                        self.crosswalk_behind(white, far)):
+                        behind):
                     candidates.append(near)
+        self.observation = FloorObservation(tuple(lines), crosswalks)
         if candidates:
             near = max(candidates)
             self.cross_x = float(np.min(self._gx[near][self._band[near]]))   # near edge of the line

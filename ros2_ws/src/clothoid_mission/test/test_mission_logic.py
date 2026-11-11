@@ -15,7 +15,7 @@ def run(logic, now, *seen, stopline=False, line=False, phase=None, speed=None):
 
 def flag_params(**kw):
     """2025 behaviour: stop on the stripe flag (the scenarios below were written for it)."""
-    return MissionParams(use_stop_line=False, **kw)
+    return MissionParams(use_stop_line=False, require_scene_confirmation=False, slow_arms_bump=False, **kw)
 
 
 def test_idle_drive_has_no_outputs():
@@ -124,7 +124,7 @@ def test_parking_at_the_sign_when_asked():
 def test_sign_arms_stop_line_and_its_arrival_holds_the_car():
     logic = MissionLogic(MissionParams(pedestrian_wait_sec=3.5))
     out = run(logic, 0.0, 'sign_pedestrian')
-    assert out.stop_arm and not out.stop and out.speed_limit == 0.2   # until stop_line answers
+    assert out.stop_arm and not out.stop and out.speed_limit is None  # observation, lane still drives
     assert run(logic, 1.0, phase='search', speed=0.2).stop_arm
     out = run(logic, 2.0, phase='commit', speed=0.09)
     assert out.speed_limit == 0.09 and not out.stop                    # finish's ramp
