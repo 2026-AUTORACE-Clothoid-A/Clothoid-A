@@ -14,7 +14,8 @@ def generate_launch_description():
         os.path.join(yolo_share, 'config', 'yolo.yaml'),
         {'backend': LaunchConfiguration('backend'),
          'model_path': LaunchConfiguration('model_path'),
-         'show': LaunchConfiguration('show')},
+         'show': LaunchConfiguration('show'),
+         'debug': LaunchConfiguration('debug')},
     ]
 
     try:
@@ -29,6 +30,7 @@ def generate_launch_description():
         DeclareLaunchArgument('backend', default_value='ultralytics'),
         DeclareLaunchArgument('model_path', default_value=''),
         DeclareLaunchArgument('show', default_value='false'),
+        DeclareLaunchArgument('debug', default_value='false'),
         Node(
             package='clothoid_yolo',
             executable='yolo',

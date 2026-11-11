@@ -25,7 +25,7 @@ from .monitor_state import MonitorState
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 
-DEFAULT_PARAM_TARGET_NODES = ['lane_main', 'clothoid_mission', 'limo_base', 'clothoid_finish']
+DEFAULT_PARAM_TARGET_NODES = ['lane_main', 'clothoid_mission', 'limo_base', 'clothoid_finish', 'yolo']
 
 _HIDDEN_PARAM_NAMES = frozenset({'use_sim_time', 'start_type_description_service'})
 
@@ -174,7 +174,7 @@ class MonitorNode(Node):
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('debug_image', True)
         self.declare_parameter('lane_topic', '/lane/debug_image')
-        self.declare_parameter('yolo_topic', '/detections_image')
+        self.declare_parameter('yolo_topic', '/yolo/debug_image')
         self.declare_parameter('aruco_topic', '/parking/debug_image')
         self.declare_parameter('lidar_topic', '/scan')
         self.declare_parameter('lidar_max_range', 3.0)
@@ -194,6 +194,8 @@ class MonitorNode(Node):
         self.declare_parameter('image_display_height', 480)
         self.declare_parameter('debug_log', False)
         self.declare_parameter('param_target_nodes', DEFAULT_PARAM_TARGET_NODES)
+        self.declare_parameter('auto_enable_debug', True)
+        self.declare_parameter('auto_debug_nodes', ['lane_main', 'yolo'])
 
         self.battery_topic = str(self.get_parameter('battery_topic').value)
         self.image_topic = str(self.get_parameter('image_topic').value)
@@ -220,6 +222,11 @@ class MonitorNode(Node):
         self.image_display_width = int(self.get_parameter('image_display_width').value)
         self.image_display_height = int(self.get_parameter('image_display_height').value)
         self.param_target_nodes = list(self.get_parameter('param_target_nodes').value)
+        self.auto_enable_debug = bool(self.get_parameter('auto_enable_debug').value)
+        self.auto_debug_nodes = list(self.get_parameter('auto_debug_nodes').value)
+        self._auto_enabled_nodes = set()
+        self._auto_debug_pending = set()
+        self._auto_debug_timer = None
 
         self.header_logo_path = resolve_resource_path('Telechips-CI-White.png')
         self.telechips_logo_path = resolve_resource_path('Telechips-CI-White.png')
@@ -309,7 +316,12 @@ class MonitorNode(Node):
 
         self.server_thread.start()
 
+        if self.auto_enable_debug and self.auto_debug_nodes:
+            self._auto_debug_timer = self.create_timer(1.0, self._check_and_enable_debug_params)
+            self._check_and_enable_debug_params()
+
         display_host = detect_lan_ip() if self.web_host in ('0.0.0.0', '') else self.web_host
+        auto_debug_info = f'{self.auto_debug_nodes}' if self.auto_enable_debug else 'Disabled'
         self.get_logger().info(
             f'\n=======================================================\n'
             f' [Clothoid-A Monitor Started]\n'
@@ -317,6 +329,8 @@ class MonitorNode(Node):
             f' Image Topic   : {self.image_topic}\n'
             f' Control Topic : {self.control_topic}\n'
             f' Lane Debug    : {self.lane_topic}\n'
+            f' YOLO Debug    : {self.yolo_topic}\n'
+            f' Auto Debug    : {auto_debug_info}\n'
             f' Param Nodes   : {self.param_target_nodes}\n'
             f'======================================================='
         )
@@ -513,10 +527,71 @@ class MonitorNode(Node):
         result = response.results[0]
         return bool(result.successful), str(result.reason)
 
+    def _check_and_enable_debug_params(self):
+        for node_name in self.auto_debug_nodes:
+            clients = self._param_client_group(node_name)
+            set_client = clients['set']
+            ready = set_client.service_is_ready()
+
+            if not ready:
+                self._auto_enabled_nodes.discard(node_name)
+                self._auto_debug_pending.discard(node_name)
+                continue
+
+            if node_name in self._auto_enabled_nodes or node_name in self._auto_debug_pending:
+                continue
+
+            param_val = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=True)
+            param = Parameter(name='debug', value=param_val)
+            req = SetParameters.Request(parameters=[param])
+
+            self._auto_debug_pending.add(node_name)
+            future = set_client.call_async(req)
+            future.add_done_callback(
+                lambda f, name=node_name: self._on_auto_debug_param_set(name, f)
+            )
+
+    def _on_auto_debug_param_set(self, node_name: str, future):
+        self._auto_debug_pending.discard(node_name)
+        try:
+            resp = future.result()
+            if resp and resp.results and resp.results[0].successful:
+                self._auto_enabled_nodes.add(node_name)
+                self.get_logger().info(f'[clothoid_monitor] Auto-enabled debug parameter for /{node_name}')
+            else:
+                reason = resp.results[0].reason if (resp and resp.results) else 'unknown'
+                self.get_logger().warn(
+                    f'[clothoid_monitor] Failed to auto-enable debug for /{node_name}: {reason}'
+                )
+        except Exception as exc:
+            self.get_logger().warn(
+                f'[clothoid_monitor] Error setting debug for /{node_name}: {exc}'
+            )
+
     def destroy_node(self):
+        if hasattr(self, '_auto_debug_timer') and self._auto_debug_timer is not None:
+            self._auto_debug_timer.cancel()
+
         if hasattr(self, 'server_thread') and self.server_thread is not None:
             self.server_thread.shutdown()
             self.server_thread.join(timeout=2.0)
+
+        # Revert auto-enabled debug parameters back to False on exit to save CPU/battery
+        if getattr(self, 'auto_enable_debug', False) and getattr(self, '_auto_enabled_nodes', None):
+            for node_name in list(self._auto_enabled_nodes):
+                try:
+                    clients = self._param_clients.get(node_name)
+                    if clients and clients['set'].service_is_ready():
+                        param_val = ParameterValue(type=ParameterType.PARAMETER_BOOL, bool_value=False)
+                        param = Parameter(name='debug', value=param_val)
+                        req = SetParameters.Request(parameters=[param])
+                        future = clients['set'].call_async(req)
+                        if self.executor is not None and rclpy.ok():
+                            self.executor.spin_until_future_complete(future, timeout_sec=0.5)
+                        self.get_logger().info(f'[clothoid_monitor] Reverted debug parameter for /{node_name} to False')
+                except Exception as exc:
+                    self.get_logger().debug(f'Could not revert debug param for {node_name}: {exc}')
+
         super().destroy_node()
 
 

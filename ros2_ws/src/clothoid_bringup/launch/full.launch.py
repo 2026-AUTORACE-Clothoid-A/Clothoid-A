@@ -90,7 +90,8 @@ def generate_launch_description():
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
-                 'show': LaunchConfiguration('show')}, enabled('use_yolo')),
+                 'show': LaunchConfiguration('show'),
+                 'debug': debug}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         # after /parking_done: left yellow line to the end line (needs the camera)
