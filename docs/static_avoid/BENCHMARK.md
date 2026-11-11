@@ -128,6 +128,53 @@
 - 지나간 차로 순서 (차로 순서 방식): 2-3 15판, 2-1 9판, 2-3-2-1 8판, 2-1-2-3 5판, 2-1-2-1 3판.
 - 시뮬레이터 배치는 칸이 0.47 m 간격이라 Python 시뮬의 무작위 배치보다 덜 빠듯하다. 그래서 1단도 대부분 통과했다.
 
+## 4. 영상 10 Hz 입력 (main merge 후, 2026-11-11)
+회피 노드가 `/camera/color/image_10hz`(bringup `use_image_10hz:=true`, throttle로 30 Hz 원본의 3장 중 1장)를 받아 매 프레임 처리하도록 바꿨다. 어두운 대회장에서 카메라가 약 12 Hz로 떨어지면 이 토픽은 약 6 Hz가 되므로 둘 다 본다.
+
+### 4.1 bag 재생 (`replay_bag.py --image-every 1 / 3 / 5` = 30 / 10 / 6 Hz)
+**처음 결과:** 19개 중 18개가 같았고, 1108 run 6만 6 Hz에서 입구 선 맞춤이 −5.0° → +1.0°, 넘기기가 섬 1.22 m 전 → 섬 앞끝 뒤로 바뀌었다.
+
+**원인: 입구 선 통과 추정이 다른 흰 표시 한 장에 덮였다.**
+- 차선 방향 측정은 같았다. 샘플의 절대 방향이 10 Hz −200.6°, 6 Hz −200.5°다. 각도가 달라 보인 건 기준이 된 "입구 선 통과 순간의 차 헤딩"이 달라서다.
+- 입구 선은 주행 거리 1.60~1.74 m에서 연속으로 보였고, 통과 추정이 2.54 → 2.39 m로 수렴했다.
+- 2.13 m에서 다른 표시가 한 번 "0.64 m 앞"으로 잡혔다(추정 2.77 m). 이때 입구 선은 이미 카메라 바닥 시야(약 0.45 m)보다 가까워 보일 수 없었다.
+- `EntryLineTracker`가 "마지막으로 본 한 장"으로 통과를 정해서, 그 프레임을 처리한 30 Hz와 6 Hz는 0.38 m 틀렸다. 10 Hz는 그 프레임을 건너뛰어 우연히 맞았다.
+- 0.38 m 뒤로 밀린 통과 위치는 섬 위치와 차로 좌표 원점을 그만큼 옮긴다. 코너를 빠져나오며 도는 중이라 차로 각도 기준도 6° 바뀌었다.
+
+**수정 (`section_cues.py` `EntryLineTracker`):**
+- 추정 통과 위치가 직전 관측과 0.15 m 넘게 다르면 다른 표시로 본다. 이전 선의 통과를 그 자리에서 확정하고 새 선으로 시작한다.
+- 2장 이상 연속으로 보인 선만 통과로 인정한다. 처음엔 3장으로 했는데, 코너 직후 입구 선이 약 0.15 m 구간만 보이는 run(1108 run 3·6·7·9)을 6 Hz에서 놓쳐서 2장으로 낮췄다.
+
+**수정 후:** bag 19개 모두 30 / 10 / 6 Hz에서 결과가 같다.
+- 입구 선 통과 위치: 5 cm 이내
+- 입구 선 맞춤: ±1° 이내
+- 넘긴 차로와 위치: 같음
+- 1108 run 6 (6 Hz): 맞춤 −4.0°, 섬 1.22 m 전 1차선에서 넘김
+
+### 4.2 시뮬레이터 고정 배치
+노드가 원본 영상을 받아 3장(10 Hz) 또는 5장(6 Hz)마다 1장 처리한다(`--image-every 0`, `image_every` 3 / 5). 알고리즘이 보는 프레임 간격은 차와 같고, throttle 단계만 빠진다.
+
+| 배치 | 표지판 | 10 Hz | 6 Hz |
+|---|---|---|---|
+| 1108 run 1·2 | 왼쪽 / 오른쪽 | 2-1, 33 cm / 2-1-2-3, 32 cm | 2-1, 33 cm / 2-1-2-3, 33 cm |
+| 1108 run 3 | 왼쪽 / 오른쪽 | 2-3-2-1, 31 cm / 2-3, 31 cm | 2-3-2-1, 32 cm / 2-3, 32 cm |
+| 1108 run 6~9 | 왼쪽 / 오른쪽 | 2-1, 23 cm / 2-1-2-3, 32 cm | 2-1, 22 cm / **섬** (2-1-2-3, 20 cm) |
+| 시뮬 기본 7대 | 왼쪽 / 오른쪽 | 교착 / 교착 | 교착 / 교착 |
+| **1108 배치 합계** | | **6/6** | 5/6 |
+
+- 원자료: `benchmark/simul_fixed_10hz_6hz_2026-11-11.json`
+- **6 Hz 실패 1판 (미해결):** 출발 직후 0.67 m의 입구 선을 노드가 놓쳤다. 그래서 섬 위치가 추정값(시작점 +4.65 m)이 됐다.
+  - 같은 판을 녹화해 6 Hz로 재생하면 정상 인식한다(4장, 0.67 m).
+  - 시뮬은 입구 선 0.66 m 앞에서 출발해 선이 처음 0.2 m만 보인다. 그래서 2장 이상 규칙을 겨우 넘기는 조건이다. 실제 트랙에서는 코너를 나오며 0.95 m부터 보인다.
+  - 노드가 그 순간 몇 장을 받았는지는 확인하지 않았다.
+  - 출발을 더 뒤로 미뤄 다시 볼 것.
+
+**버린 결과와 이유 (같은 날):**
+- 실행기 안에서 원본을 다시 내보내 `/camera/color/image_10hz`를 만든 판들은 노드가 1~2 Hz만 받았다. 이 PC에서는 Python이 0.9 MB 영상을 받아 다시 내는 데 시뮬 렌더링과 CPU를 다퉜다. 별도 프로세스, RELIABLE 발행도 같았다(`image_relay.py`). 차에서는 C++ `topic_tools throttle`이 낸다.
+- `image:=raw`가 무시돼 영상을 못 받은 판들: yaml의 노드 이름 키(`static_avoid: image_source`)가 launch 인자(`/**`)보다 우선했다. 같은 이유로 `reverse:=true`, `debug_heavy:=true`도 동작하지 않았다. yaml에서 그 키들을 빼서 고쳤다.
+
+**차에서 확인할 것:** 회피 노드가 10 Hz 토픽을 실제로 몇 장 받는지. 5 s마다 찍히는 `load` 로그의 `image n`이 약 50이면 10 Hz다. BEST_EFFORT 구독(영상 QoS)이 큰 영상을 놓치지 않는지 본다.
+
 ## 그림
 - bag 재생 (지금 코드, 2026-11-11): `replay_2026-11-11/1108`, `1109`, `1110` (`replay_bag.py --plot`). 1108 run 4·5는 회피가 시작되지 않아 그림이 없다.
 - 계획 비교: `benchmark/lane_sequence_vs_one_stage.png` (`tools/static_avoid/viz_candidates.py`, Python 시뮬, 표지판 오른쪽)
@@ -163,6 +210,8 @@ python3 tools/static_avoid/viz_candidates.py docs/static_avoid/benchmark/lane_se
 export ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1
 python3 tools/static_avoid/simul_batch.py --set fixed --conf 'seq={}' --conf 'one-stage={"sequence": false}' \
     --json docs/static_avoid/benchmark/simul_fixed_<날짜>.json
+python3 tools/static_avoid/simul_batch.py --set fixed --conf 'seq={}' --image-every 5   # 6 Hz
+python3 tools/static_avoid/replay_bag.py <bag> --image-every 5 --ignore-cone
 python3 tools/static_avoid/simul_batch.py --set random --count 20 --conf 'seq={}' \
     --conf 'one-stage={"sequence": false}' --json docs/static_avoid/benchmark/simul_random_<날짜>.json
 ```

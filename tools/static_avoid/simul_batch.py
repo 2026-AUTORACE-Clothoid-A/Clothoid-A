@@ -47,6 +47,7 @@ from rclpy.parameter import Parameter  # noqa: E402
 from std_msgs.msg import Bool, Int32, String  # noqa: E402
 
 SIM = os.environ.get('SIMUL_DIR', '/home/a/simul')
+RELAY = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'image_relay.py')
 WS = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', 'ros2_ws'))
 ENTRY_X, ISLAND_TIP_X, ISLAND_LEN, TIP = 8.64, 4.27, 1.75, 0.25
 LANE_Y = {1: 0.42, 2: 0.94, 3: 1.46}
@@ -148,6 +149,7 @@ class Driver(Node):
         self.create_subscription(Twist, '/cmd_vel_avoid', self.on_avoid, 10)
         self.create_subscription(String, '/sim/parking_status', self.on_status, 10)
         self.create_subscription(Log, '/rosout', self.on_log, 50)
+
         self.flag_sent = 0.0
 
     def now(self):
@@ -225,7 +227,8 @@ def stop(proc):
             proc.wait()
 
 
-def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN):
+def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN, image_every=0,
+            record=False):
     tmp = tempfile.mkdtemp(prefix='simul_batch_')
     env = dict(os.environ, ROS_DOMAIN_ID=DOMAIN, ROS_LOCALHOST_ONLY='1')
     map_path = write_map(tmp, cells)
@@ -236,9 +239,22 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN)
     # headless rendering through EGL without a display (Intel / Mesa on this PC)
     sim = start(f'cd {SIM} && EGL_PLATFORM=surfaceless ./run.sh --map {map_path} --headless --spawn {spawn[0]} '
                 f'{spawn[1]} {spawn[2]} --duration {t_max + 30}', sim_log, env)
+    rec = None
+    if record:                       # raw sensors for replay_bag.py (the run's directory is kept)
+        keep_dir = True
+        rec = start(f'source /opt/ros/humble/setup.bash && ros2 bag record -o {tmp}/bag '
+                    '/camera/color/image_raw /scan /odom /imu /sim/ground_truth /rosout /avoid/active',
+                    open(os.path.join(tmp, 'record.log'), 'w'), env)
     avoid = start(f'source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && '
                   f'ros2 launch clothoid_lidar avoid.launch.py camera:=limo2 use_sim_time:=true '
-                  f'ignore_cone:=true params:={params}', avoid_log, env)
+                  f'ignore_cone:=true params:={params} image:={"10hz" if image_every else "raw"}',
+                  avoid_log, env)
+    relay = None
+    if image_every:
+        # the car's bringup throttle (topic_tools is not installed here) in its own process: inside
+        # the driver's single thread it passed ~1 frame/s of the 30 Hz raw image
+        relay = start(f'source /opt/ros/humble/setup.bash && python3 {RELAY} {image_every}',
+                      open(os.path.join(tmp, 'relay.log'), 'w'), env)
     drv = Driver(direction, sign_at)
     limos = [(cell_x(c), LANE_Y[lane]) for lane, cols in cells.items() for c in cols]
     track, min_gap, island, ok_start, arrived = [], math.inf, None, False, False
@@ -269,6 +285,10 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN)
     finally:
         drv.cmd_pub.publish(Twist())
         stop(avoid)
+        if relay is not None:
+            stop(relay)
+        if rec is not None:
+            stop(rec)
         stop(sim)
         sim_log.close()
         avoid_log.close()
@@ -313,6 +333,10 @@ def main():
     ap.add_argument('--t-max', type=float, default=45.0, help='simulated s per run')
     ap.add_argument('--only', type=int, default=None, help='just this layout index')
     ap.add_argument('--keep', action='store_true', help='keep logs (printed directory)')
+    ap.add_argument('--record', action='store_true', help='also record a bag of the raw sensors (kept)')
+    ap.add_argument('--image-every', type=int, default=3,
+                    help='republish every n-th raw frame on /camera/color/image_10hz and run avoid on it '
+                         '(3 = the car\'s 10 Hz throttle, 5 = 6 Hz); 0 = avoid reads the raw image')
     ap.add_argument('--spawn', type=float, nargs=3, default=list(SPAWN), metavar=('X', 'Y', 'YAW'),
                     help='start pose in map coordinates (default: corner exit, lane 2)')
     ap.add_argument('--json', default=None, help='write every result here')
@@ -331,7 +355,8 @@ def main():
             for name, cells in lays:
                 for sign in a.sign:
                     d = {'L': 0, 'R': 1}[sign]
-                    r = run_one(name, cells, d, conf, a.sign_at, a.t_max, a.keep, tuple(a.spawn))
+                    r = run_one(name, cells, d, conf, a.sign_at, a.t_max, a.keep, tuple(a.spawn),
+                                a.image_every, a.record)
                     r['conf'] = cname
                     results.append(r)
                     print(f'[{cname}] {name} sign {sign}: {"ok" if not r["why"] else " ".join(r["why"])}'
