@@ -25,6 +25,19 @@ TF: `base_link → laser_link` is (0.103, 0, -0.034) with no rotation (URDF).
 Pixel boxes refer to the 640x480 color image.
 
 ## Other detection outputs
+
+`namgyu/mission-triggers` (2026-11-11) adds these local scene observations. None encode route order.
+
+| Topic | Type | Publisher → subscriber | Meaning |
+|---|---|---|---|
+| `/parking_prepare` | `std_msgs/Bool` | mission → parking | Enable passive scan-only probing; lane retains control |
+| `/parking/bay_candidate` | `geometry_msgs/PoseStamped` | parking → mission | Repeatedly observed bay face centre in `base_link`, row yaw in orientation, original scan timestamp. No message means no fresh confirmation; mission expires after `input_timeout` |
+| `/bump/approaching` | `std_msgs/Bool` | mission → lane | Refreshed approach state permitting a bounded low-speed continuation through a short lane occlusion before bump contact |
+
+The default parking flag now requires a prepared P track, a reached entry line outside the tracked
+crosswalk, and fresh bay evidence. `/stopline_near` alone no longer transfers control.
+The selected traffic-light track ID and prepared/confirmed scene state appear in `/mission/state`.
+
 | Topic | Type | Publisher | Meaning |
 |---|---|---|---|
 | `/stopline_detected` | `std_msgs/Bool` | `clothoid_lane` `stopline` | 2025 crosswalk stripes, commented out since 2026-11-09 (not published) |

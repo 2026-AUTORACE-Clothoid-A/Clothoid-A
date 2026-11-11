@@ -35,6 +35,24 @@ def test_no_sensor_subscriptions_before_flag(node):
     assert sensor_topics(node) == set()
 
 
+def test_prepare_observes_only_scan_and_does_not_start_or_command_parking(node):
+    node.on_prepare(Bool(data=True))
+    assert sensor_topics(node) == {'/scan'}
+    assert node.core.phase == Phase.IDLE and not node.core.flag
+    node.on_timer()
+    assert node.core.phase == Phase.IDLE
+    node.on_prepare(Bool(data=False))
+    assert sensor_topics(node) == set()
+
+
+def test_handover_removes_passive_scan_before_high_rate_sensors_start(node):
+    node.on_prepare(Bool(data=True))
+    node.on_flag(Bool(data=True))
+    assert node.probe_sub is None
+    assert sum(s.topic_name == '/scan' for s in node.subscriptions) == 1
+    assert sensor_topics(node) == {'/imu', '/odom', '/scan'}
+
+
 def test_flag_subscribes_then_starts_when_data_arrives(node):
     node.on_flag(Bool(data=True))
     assert sensor_topics(node) == {'/imu', '/odom', '/scan'}

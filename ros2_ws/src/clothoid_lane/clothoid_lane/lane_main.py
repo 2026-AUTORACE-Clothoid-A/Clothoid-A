@@ -17,6 +17,7 @@ from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
+from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import Bool, Float32, Int32
 
@@ -24,6 +25,7 @@ from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_common.qos import IMAGE_QOS
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
+from clothoid_lane.bump_gap import BumpGap, BumpGapParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
                                     limit_step, speed_scaled_gain, steer_angle)
 
@@ -102,6 +104,10 @@ class LaneMainNode(Node):
         self.declare_parameter('zigzag_hold_sec', 0.5)   # keeps the slow speed over short misses
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
+        self.declare_parameter('bump_approach_topic', '/bump/approaching')
+        self.declare_parameter('odom_topic', '/odom')
+        for name, value in BumpGapParams().__dict__.items():
+            self.declare_parameter('bump_gap_' + name, value)
         # the target point used for steering moves at most this many warped px per frame (0 = off).
         # 2026-11-08 bag 01:02: normal frames move it 0.3 px (median), corners 7 px (p95); the jumps
         # that flipped the steering by up to +-28 deg moved it 29 px (median). 8 px removed 23 of 30
@@ -140,6 +146,12 @@ class LaneMainNode(Node):
         self.steering_locked = False
         self.steering_lock_stamp = None
         self.imu_pitch = self.imu_stamp = None
+        self.imu_yaw = None
+        self.odom_pose = self.odom_stamp = None
+        self.odom_travel = 0.0
+        self.bump_approaching = False
+        self.bump_approach_stamp = None
+        self.bump_gap = BumpGap()
         self.level_steer = self.level_steer_stamp = self.level_target = None
         self.last_steer = 0.0
         self.last_cmd = None
@@ -167,6 +179,10 @@ class LaneMainNode(Node):
             Bool, self.get_parameter('steering_lock_topic').value, self.on_steering_lock, 1)
         self.create_subscription(
             Imu, self.get_parameter('imu_topic').value, self.on_imu, qos_profile_sensor_data)
+        self.create_subscription(
+            Odometry, self.get_parameter('odom_topic').value, self.on_odom, qos_profile_sensor_data)
+        self.create_subscription(
+            Bool, self.get_parameter('bump_approach_topic').value, self.on_bump_approach, 1)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
@@ -189,6 +205,9 @@ class LaneMainNode(Node):
             return proposed.get(name, self.get_parameter(name).value)
 
         width = WIDTH_PARAMS & proposed.keys()
+        gap_names = ('bump_gap_' + name for name in BumpGapParams.__dataclass_fields__)
+        if any(not math.isfinite(value(name)) or value(name) < 0 for name in gap_names):
+            return SetParametersResult(successful=False, reason='bump gap limits must be finite and >= 0')
         if width and any(value(name) <= 0.0 for name in WIDTH_PARAMS):
             return SetParametersResult(successful=False, reason='lane widths must be > 0')
         if DETECTOR_PARAMS & proposed.keys():
@@ -209,6 +228,7 @@ class LaneMainNode(Node):
 
     def on_parking(self, msg: Bool):
         self.parking_started = msg.data
+        self.bump_gap.clear()
         if msg.data:
             self.side = SIDE_RIGHT
             self.parking_width = True
@@ -246,7 +266,44 @@ class LaneMainNode(Node):
             return
         sinp = 2.*(q.w*q.y-q.z*q.x)/norm
         self.imu_pitch = math.degrees(math.asin(max(-1., min(1., sinp))))
+        self.imu_yaw = math.atan2(2.*(q.w*q.z+q.x*q.y), norm-2.*(q.y*q.y+q.z*q.z))
         self.imu_stamp = self.sensor_time(msg.header, self.get_clock().now())
+
+    def on_odom(self, msg: Odometry):
+        now = self.get_clock().now()
+        stamp = self.sensor_time(msg.header, now)
+        p, q = msg.pose.pose.position, msg.pose.pose.orientation
+        norm = q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w
+        if not all(math.isfinite(v) for v in (p.x, p.y, norm)) or norm < .5:
+            self.odom_pose = self.odom_stamp = None
+            self.bump_gap.clear()
+            return
+        pose = (p.x, p.y, math.atan2(2*(q.w*q.z+q.x*q.y), norm-2*(q.y*q.y+q.z*q.z)))
+        if self.odom_pose is not None:
+            dt = (stamp-self.odom_stamp).nanoseconds*1e-9
+            step = math.hypot(p.x-self.odom_pose[0], p.y-self.odom_pose[1])
+            if not 0 < dt <= .25 or step > 2.*dt:
+                self.bump_gap.clear()
+            else:
+                self.odom_travel += step
+        self.odom_pose, self.odom_stamp = pose, stamp
+
+    def on_bump_approach(self, msg: Bool):
+        self.bump_approaching = bool(msg.data)
+        self.bump_approach_stamp = self.get_clock().now()
+        if not msg.data:
+            self.bump_gap.clear()
+
+    def bump_gap_ready(self, now, frame_time):
+        return (self.bump_approaching and not self.parking_started and
+                self.get_parameter('bump_gap_speed').value > 0 and
+                self.bump_approach_stamp is not None and
+                0 <= (now-self.bump_approach_stamp).nanoseconds*1e-9 <=
+                self.get_parameter('steering_lock_timeout').value and
+                self.imu_stamp is not None and self.odom_stamp is not None and
+                0 <= (now-self.imu_stamp).nanoseconds*1e-9 <= .25 and
+                0 <= (now-self.odom_stamp).nanoseconds*1e-9 <= .25 and
+                0 <= (now-frame_time).nanoseconds*1e-9 <= .15)
 
     @staticmethod
     def sensor_time(header, fallback):
@@ -297,6 +354,9 @@ class LaneMainNode(Node):
         now = self.get_clock().now()
         frame_time = self.sensor_time(header, now)
         locked = self.current_steering_lock(now) and self.last_cmd is not None
+        gap_ready = self.bump_gap_ready(now, frame_time)
+        if not gap_ready:
+            self.bump_gap.clear()
         target = None
         if result.found and not locked:
             prev = self.used_target
@@ -349,8 +409,29 @@ class LaneMainNode(Node):
             self.last_cmd = cmd
             if result.found:
                 self.last_found_stamp = now
+            if (gap_ready and result.found and not locked and
+                    abs(self.imu_pitch) <= self.get_parameter('steering_lock_level_deg').value and
+                    abs((frame_time-self.imu_stamp).nanoseconds*1e-9) <= self.get_parameter(
+                        'steering_lock_sync_tolerance').value):
+                self.bump_gap.remember(now.nanoseconds*1e-9, steer, self.odom_pose,
+                                       self.imu_yaw, self.odom_travel)
+            else:
+                self.bump_gap.clear()
             self.cmd_pub.publish(cmd)
             return
+
+        if gap_ready:
+            params = BumpGapParams(**{name: self.get_parameter('bump_gap_' + name).value
+                                     for name in BumpGapParams.__dataclass_fields__})
+            steer = self.bump_gap.steering(now.nanoseconds*1e-9, self.odom_pose, self.imu_yaw,
+                                          self.odom_travel, self.get_parameter('wheelbase').value, params)
+            if steer is not None:
+                cmd = Twist()
+                cmd.linear.x = min(self.current_speed(), params.speed)
+                cmd.angular.z = angular_z(cmd.linear.x, steer, self.get_parameter('wheelbase').value)
+                self.last_cmd, self.last_steer = cmd, steer
+                self.cmd_pub.publish(cmd)
+                return
 
         hold = self.get_parameter('lost_hold_sec').value
         if hold > 0.0 and self.last_cmd is not None and self.last_found_stamp is not None:
