@@ -17,6 +17,20 @@ parking:
     probe.max_gap: 0.75
     probe.tolerance: 0.08
 
+    # Experimental registered six-bay search. False selects the legacy lidar gap finder.
+    layout.enabled: true
+    layout.control_enabled: false  # bag replay still shows unobserved swept areas; publish candidates only
+    layout.scan_hz: 5.0
+    layout.columns: 3
+    layout.rows: 2
+    layout.bay_width: 0.50
+    layout.bay_depth: 0.60
+    layout.line_width: 0.02
+    layout.position_tolerance: 0.07
+    layout.confirm_frames: 3
+    layout.confirm_scans: 3
+    layout.evidence_age: 1.5
+
     plan.side: -1.0            # bays on the right
     # limo2, fitted to 5 parking bags against the lidar (2026-11-09): rear slides at full lock.
     # Simulator: -p plan.rear_offset:=0.0 -p plan.odom_scale:=0.985 -p plan.turn_radius:=0.46

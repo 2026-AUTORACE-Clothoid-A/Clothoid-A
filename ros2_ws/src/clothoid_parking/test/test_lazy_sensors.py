@@ -35,9 +35,9 @@ def test_no_sensor_subscriptions_before_flag(node):
     assert sensor_topics(node) == set()
 
 
-def test_prepare_observes_only_scan_and_does_not_start_or_command_parking(node):
+def test_registered_layout_prepare_tracks_motion_without_commanding_parking(node):
     node.on_prepare(Bool(data=True))
-    assert sensor_topics(node) == {'/scan'}
+    assert sensor_topics(node) == {'/imu', '/odom', '/scan'}
     assert node.core.phase == Phase.IDLE and not node.core.flag
     node.on_timer()
     assert node.core.phase == Phase.IDLE
@@ -76,6 +76,34 @@ def test_always_on_when_lazy_off():
     n = ParkingNode()
     try:
         assert sensor_topics(n) == {'/imu', '/odom', '/scan'}
+    finally:
+        n.destroy_node()
+        rclpy.shutdown()
+
+
+def test_legacy_prepare_remains_scan_only():
+    rclpy.init(args=['--ros-args', '-p', 'layout.enabled:=false'])
+    n = ParkingNode()
+    try:
+        n.on_prepare(Bool(data=True))
+        assert sensor_topics(n) == {'/scan'}
+        assert n.core.command(n.now()) is None
+    finally:
+        n.destroy_node()
+        rclpy.shutdown()
+
+
+def test_inspection_auto_observes_and_ignores_driving_flags():
+    rclpy.init(args=['--ros-args', '-p', 'inspection_only:=true'])
+    n = ParkingNode()
+    try:
+        assert n.core.preparing and sensor_topics(n) == {'/imu', '/odom', '/scan'}
+        assert not n.core.layout.p.control_enabled
+        n.on_prepare(Bool(data=False))
+        n.on_flag(Bool(data=True))
+        n.on_timer()
+        assert n.core.preparing and n.core.phase == Phase.IDLE
+        assert n.core.command(n.now()) is None
     finally:
         n.destroy_node()
         rclpy.shutdown()

@@ -66,6 +66,7 @@ class PlanParams:
     enter_max_sec: float = 12.0    # a second-row bay is 0.6 m further in
     front_stop: float = 0.10       # m, lidar front clearance that ends a forward ENTER
     park_hold_sec: float = 3.0     # s standing in the bay before backing out
+    strict_completion: bool = False  # registered layout: timeout/obstacle is not successful parking
     exit_enabled: bool = True
     exit_speed: float = 0.15
     exit_early_deg: float = 2.0    # end the reverse arc this short of the row heading (it stops right
@@ -207,10 +208,10 @@ class Planner:
                 self._reversals += 1
             self._enter_dir = direction
             if self._reversals > p.max_reversals or now - self._t_phase > p.enter_max_sec:
-                self._go(Phase.PARKED, now, f'stopped at depth error {depth:+.3f} m')
+                self._go(Phase.ABORT if p.strict_completion else Phase.PARKED, now, f'stopped at depth error {depth:+.3f} m')
                 return 0.0, 0.0
             if direction > 0 and front_range is not None and front_range < p.front_stop:
-                self._go(Phase.PARKED, now, f'front {front_range:.2f} m, depth error {depth:+.3f} m')
+                self._go(Phase.ABORT if p.strict_completion else Phase.PARKED, now, f'front {front_range:.2f} m, depth error {depth:+.3f} m')
                 return 0.0, 0.0
             v = direction * max(p.min_speed, min(p.enter_speed, 1.5 * abs(depth)))
             return v, self._hold(pose, b.entry_yaw, v)

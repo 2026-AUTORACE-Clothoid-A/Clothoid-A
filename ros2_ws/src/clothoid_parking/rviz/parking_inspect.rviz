@@ -1,0 +1,66 @@
+Panels:
+- Class: rviz_common/Displays
+  Name: Displays
+Visualization Manager:
+  Class: ''
+  Displays:
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Observed map and status
+    Enabled: true
+    Topic:
+      Value: /parking/observation_markers
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+  - Class: rviz_default_plugins/LaserScan
+    Name: Raw lidar (optional TF required)
+    Enabled: false
+    Topic:
+      Value: /scan
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      Depth: 5
+    Size (m): 0.025
+    Style: Flat Squares
+    Color Transformer: FlatColor
+    Color: 255; 40; 40
+    Decay Time: 0
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Registered six bays (experimental)
+    Enabled: true
+    Topic:
+      Value: /parking/layout_markers
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
+  - Class: rviz_default_plugins/Axes
+    Name: base_link
+    Enabled: true
+    Reference Frame: base_link
+    Length: 0.15
+    Radius: 0.01
+  - Class: rviz_default_plugins/Image
+    Name: Camera input
+    Enabled: true
+    Topic:
+      Value: /camera/color/image_raw
+      Reliability Policy: Best Effort
+      Durability Policy: Volatile
+      Depth: 1
+  Global Options:
+    Background Color: 25; 25; 30
+    Fixed Frame: base_link
+    Frame Rate: 15
+  Tools:
+  - Class: rviz_default_plugins/MoveCamera
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Current View
+      Scale: 160
+      X: 0.8
+      Y: -0.35
+      Angle: 0
+Window Geometry:
+  Width: 1300
+  Height: 900

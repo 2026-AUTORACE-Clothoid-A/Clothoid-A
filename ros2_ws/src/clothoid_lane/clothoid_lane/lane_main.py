@@ -25,6 +25,7 @@ from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_common.qos import IMAGE_QOS
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
+from clothoid_lane.parking_landmark_publisher import LandmarkPublisher
 from clothoid_lane.bump_gap import BumpGap, BumpGapParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
                                     limit_step, speed_scaled_gain, steer_angle)
@@ -158,6 +159,7 @@ class LaneMainNode(Node):
         self.last_found_stamp = None
         self.used_target = None       # target point the last command steered to (after limit_step)
         self.last_zigzag_stamp = None
+        self.parking_landmark = LandmarkPublisher(self)
         self.image_observers = []  # optional in-process consumers of the same decoded frame
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
@@ -345,7 +347,10 @@ class LaneMainNode(Node):
 
         for observer in self.image_observers:
             observer(bgr)
-        self.process_bgr(bgr, msg.header)
+        result = self.process_bgr(bgr, msg.header)
+        # Publish lane control first; optional parking analysis reuses this frame/result afterwards.
+        if hasattr(self, 'parking_landmark'):
+            self.parking_landmark.process(bgr, msg.header, result, self.detector.p)
 
     def process_bgr(self, bgr, header):
         debug = self.get_parameter('debug').value
@@ -418,7 +423,7 @@ class LaneMainNode(Node):
             else:
                 self.bump_gap.clear()
             self.cmd_pub.publish(cmd)
-            return
+            return result
 
         if gap_ready:
             params = BumpGapParams(**{name: self.get_parameter('bump_gap_' + name).value
@@ -431,7 +436,7 @@ class LaneMainNode(Node):
                 cmd.angular.z = angular_z(cmd.linear.x, steer, self.get_parameter('wheelbase').value)
                 self.last_cmd, self.last_steer = cmd, steer
                 self.cmd_pub.publish(cmd)
-                return
+                return result
 
         hold = self.get_parameter('lost_hold_sec').value
         if hold > 0.0 and self.last_cmd is not None and self.last_found_stamp is not None:
@@ -440,6 +445,7 @@ class LaneMainNode(Node):
                 cmd.linear.x = min(self.last_cmd.linear.x, self.current_speed())
                 cmd.angular.z = self.last_cmd.angular.z
                 self.cmd_pub.publish(cmd)
+        return result
 
 
 def main(args=None):

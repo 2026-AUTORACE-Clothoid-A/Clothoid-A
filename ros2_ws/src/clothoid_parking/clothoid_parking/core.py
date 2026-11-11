@@ -1,20 +1,23 @@
 """Everything between the sensor callbacks and the command, without ROS (the node only wires it)."""
 import math
+from dataclasses import replace
+from collections import deque
 from typing import Optional, Tuple
 
 import numpy as np
 
 from clothoid_parking.bay_finder import BayParams, find_bay, row_slope_angle
 from clothoid_parking.planner import Phase, PlanParams, Planner
-from clothoid_parking.tracker import Tracker
+from clothoid_parking.tracker import Tracker, Pose2D
+from clothoid_parking.layout import ParkingLayout
 
 
 class ParkingCore:
     def __init__(self, plan: PlanParams = PlanParams(), bay: BayParams = BayParams(),
                  laser_x: float = 0.103, grid: float = 0.02, max_cells: int = 20000,
-                 front_half_deg: float = 10.0, min_hits: int = 2):
+                 front_half_deg: float = 10.0, min_hits: int = 2, layout=None):
         self.tracker = Tracker(rear_offset=plan.rear_offset, odom_scale=plan.odom_scale)
-        self.planner = Planner(plan)
+        self.planner = Planner(replace(plan, strict_completion=True) if layout is not None and layout.enabled and layout.control_enabled else plan)
         self.bay_params = bay
         self.laser_x = laser_x
         self.grid = grid
@@ -26,6 +29,9 @@ class ParkingCore:
         self.min_hits = min_hits
         self.front_range: Optional[float] = None
         self.flag = False
+        self.layout = ParkingLayout(layout) if layout is not None and layout.enabled else None
+        self.preparing = False
+        self.pose_history = deque(maxlen=400)
 
     @property
     def phase(self) -> Phase:
@@ -36,6 +42,35 @@ class ParkingCore:
 
     def odom(self, now: float, speed: float):
         self.tracker.odom(now, speed)
+        p = self.tracker.pose
+        if not self.pose_history or now > self.pose_history[-1][0]:
+            self.pose_history.append((now, Pose2D(p.x, p.y, p.yaw)))
+
+    def prepare(self, on):
+        if on and not self.preparing and self.phase == Phase.IDLE and self.layout:
+            self.layout.reset()
+        self.preparing = on
+
+    def pose_at(self, stamp):
+        if not self.pose_history or stamp < self.pose_history[0][0] or stamp > self.pose_history[-1][0]+.10:
+            return None
+        if stamp >= self.pose_history[-1][0]:
+            return self.pose_history[-1][1]
+        for (a, p), (b, q) in zip(self.pose_history, list(self.pose_history)[1:]):
+            if a <= stamp <= b:
+                t = (stamp-a)/(b-a)
+                dyaw = math.atan2(math.sin(q.yaw-p.yaw), math.cos(q.yaw-p.yaw))
+                return Pose2D(p.x+t*(q.x-p.x), p.y+t*(q.y-p.y), p.yaw+t*dyaw)
+        return None
+
+    def observe_entry(self, stamp, origin, yaw):
+        pose = self.pose_at(stamp)
+        if self.layout is None or pose is None or not (self.preparing or self.flag):
+            return False
+        # Re-localization during a committed manoeuvre cannot move its target.
+        if self.phase not in (Phase.IDLE, Phase.SEARCH):
+            return False
+        return self.layout.observe(stamp, origin, yaw, pose)
 
     def set_flag(self, now: float, on: bool):
         if on and not self.flag and self.planner.phase == Phase.IDLE:
@@ -45,6 +80,20 @@ class ParkingCore:
 
     def scan(self, now: float, ranges, angle_min: float, angle_increment: float,
              range_min: float = 0.02, range_max: float = 12.0):
+        if self.layout is not None and (self.preparing or self.flag):
+            pose = self.pose_at(now)
+            if pose is not None:
+                updated = self.layout.scan(now, ranges, angle_min, angle_increment,
+                                           range_min, range_max, pose, self.laser_x)
+                if updated and self.phase in (Phase.IDLE, Phase.SEARCH):
+                    candidate = self.layout.choose(now, self.tracker.pose, self.planner.p)
+                    if self.layout.p.control_enabled and self.phase == Phase.SEARCH:
+                        # Revoke a candidate even inside the legacy freeze distance.
+                        self.planner.bay = candidate
+                        if self.layout.origin is not None:
+                            self.planner.row_hint = self.layout.yaw
+            if self.layout.p.control_enabled:
+                return
         r = np.asarray(ranges, dtype=float)
         a = angle_min + np.arange(len(r)) * angle_increment
         ok = np.isfinite(r) & (r > max(range_min, 0.02)) & (r < range_max)
@@ -81,4 +130,14 @@ class ParkingCore:
         return np.array(pts) if pts else np.zeros((0, 2))
 
     def command(self, now: float) -> Optional[Tuple[float, float]]:
+        if self.layout is not None and self.layout.p.control_enabled and self.phase not in (Phase.IDLE, Phase.DONE, Phase.ABORT):
+            if now-self.layout.last_scan > .5:
+                return 0., 0.
+            if self.phase == Phase.SEARCH and (self.layout.origin is None or self.layout.support_count < self.layout.p.confirm_scans):
+                return 0., 0.
+            out = self.planner.step(now, self.tracker.pose, self.front_range)
+            if out is not None and not self.layout.motion_clear(now, self.tracker.pose, *out, .2):
+                self.layout.reason = 'holding: next swept footprint occupied or unobserved'
+                return 0., 0.
+            return out
         return self.planner.step(now, self.tracker.pose, self.front_range)

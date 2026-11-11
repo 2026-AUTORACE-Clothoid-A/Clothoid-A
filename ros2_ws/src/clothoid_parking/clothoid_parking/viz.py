@@ -91,3 +91,88 @@ def markers(core, stamp) -> MarkerArray:
     text.text = f'{planner.phase.value}: {planner.reason}'
     out.markers.append(text)
     return out
+
+
+def layout_markers(core, stamp) -> MarkerArray:
+    """Six candidate rectangles; grey remains uncorroborated, never imply it is a goal."""
+    out = MarkerArray()
+    layout = core.layout
+    if layout is None:
+        return out
+    for i, bay in enumerate(layout.bays()):
+        state = layout.states[i]
+        supported = layout.support_count >= layout.p.confirm_scans
+        if not supported:
+            rgba = (.5, .5, .5, .7)
+        elif state == 'occupied':
+            rgba = (1., .2, .2, 1.)
+        elif state == 'free':
+            rgba = (.1, .9, .2, 1.)
+        else:
+            rgba = (1., .65, .1, 1.)
+        box = _marker(stamp, 'layout', i, Marker.LINE_STRIP, rgba, .012)
+        box.points = _rect(core.tracker.pose, bay.x, bay.y, bay.entry_yaw,
+                           layout.p.bay_depth, layout.p.bay_width)
+        out.markers.append(box)
+        label = _marker(stamp, 'layout_state', i, Marker.TEXT_VIEW_FACING, rgba, .06)
+        label.pose.position = _to_base(core.tracker.pose, bay.x, bay.y)
+        label.pose.position.z = .05
+        label.text = f'{i+1}: {state if supported else "candidate"}'
+        out.markers.append(label)
+    return out
+
+
+def observation_markers(core, stamp, now) -> MarkerArray:
+    """Recent evidence in the vehicle frame, generated only while a viewer subscribes.
+
+    Grey background is unknown, not an observed free floor. Cells use their real
+    evidence timestamps, so stale data disappears even when scans stop arriving.
+    """
+    out = MarkerArray()
+    layout, pose = core.layout, core.tracker.pose
+    if layout is None:
+        return out
+    background = _marker(stamp, 'evidence_background', 0, Marker.CUBE,
+                         (.24, .24, .28, 1.), 1.)
+    background.scale.x = background.scale.y = 2*layout.p.lidar_range
+    background.scale.z = .005
+    background.pose.position.z = -.03
+    out.markers.append(background)
+    free = _marker(stamp, 'observed_free', 0, Marker.CUBE_LIST, (.1, .55, .65, .65), layout.p.grid)
+    occupied = _marker(stamp, 'observed_occupied', 0, Marker.CUBE_LIST, (1., .15, .12, 1.), layout.p.grid)
+    # World-aligned cells rotate as well as translate into base_link.
+    for marker in (free, occupied):
+        marker.pose.position = _to_base(pose, 0., 0.)
+        marker.pose.orientation.z = math.sin(-pose.yaw/2)
+        marker.pose.orientation.w = math.cos(-pose.yaw/2)
+        marker.scale.z = .01
+    for (ix, iy), (seen, hit) in layout.cells.items():
+        if not 0 <= now-seen <= layout.p.evidence_age:
+            continue
+        x, y = (ix+.5)*layout.p.grid, (iy+.5)*layout.p.grid
+        relative = _to_base(pose, x, y)
+        if max(abs(relative.x), abs(relative.y)) > layout.p.lidar_range:
+            continue
+        point = Point(x=float(x), y=float(y), z=0.)
+        (occupied if hit else free).points.append(point)
+    out.markers.extend((free, occupied))
+    vehicle = _marker(stamp, 'vehicle', 0, Marker.LINE_STRIP, (.4, .65, 1., 1.), .018)
+    vehicle.points = _rect(pose, pose.x, pose.y, pose.yaw, layout.p.body_length, layout.p.body_width)
+    out.markers.append(vehicle)
+    if layout.origin is not None:
+        arrow = _marker(stamp, 'grid_reference', 0, Marker.ARROW, (1., .9, .1, 1.), .02)
+        arrow.scale.y, arrow.scale.z = .045, .07
+        x, y = map(float, layout.origin)
+        arrow.points = [_to_base(pose, x, y),
+                        _to_base(pose, x+.25*math.cos(layout.yaw), y+.25*math.sin(layout.yaw))]
+        out.markers.append(arrow)
+    status = _marker(stamp, 'observation_status', 0, Marker.TEXT_VIEW_FACING, (1., 1., 1., 1.), .075)
+    status.pose.position.x, status.pose.position.y, status.pose.position.z = 1., 1., .1
+    age = now-layout.last_scan
+    freshness = 'waiting for scan' if not math.isfinite(age) else f'scan age {age:.1f}s'
+    mode = 'CONTROL' if layout.p.control_enabled else 'OBSERVE'
+    status.text = (f'{mode} | {freshness}\n{layout.reason}\n'
+                   'MAP: cyan=observed free / red=hit / grey=unknown\n'
+                   'BAYS: grey=candidate / orange=unconfirmed route / green=clear')
+    out.markers.append(status)
+    return out

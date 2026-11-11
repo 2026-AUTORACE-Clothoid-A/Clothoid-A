@@ -14,7 +14,7 @@ import math
 from dataclasses import fields
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, Twist, PoseWithCovarianceStamped, PoseArray, Pose
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -24,9 +24,10 @@ from visualization_msgs.msg import MarkerArray
 
 from clothoid_parking.bay_finder import BayParams
 from clothoid_parking.core import ParkingCore
+from clothoid_parking.layout import LayoutParams
 from clothoid_parking.planner import Phase, PlanParams
 from clothoid_parking.scene_probe import ParkingSceneProbe, ProbeParams
-from clothoid_parking.viz import markers
+from clothoid_parking.viz import markers, layout_markers, observation_markers
 
 STALE_SEC = 0.5
 
@@ -46,6 +47,7 @@ class ParkingNode(Node):
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('laser_x', 0.103)
         self.declare_parameter('debug', False)
+        self.inspection_only = self.declare_parameter('inspection_only', False).value
         # /imu 100 Hz + /odom 50 Hz + /scan cost ~20-25 % of an Orin core just to receive while the
         # car is nowhere near the parking; ParkingCore uses nothing from before the flag
         self.declare_parameter('lazy_sensors', True)
@@ -53,9 +55,12 @@ class ParkingNode(Node):
         plan = self._declare_dataclass(PlanParams(), 'plan.')
         bay = self._declare_dataclass(BayParams(), 'bay.')
         probe = self._declare_dataclass(ProbeParams(), 'probe.')
+        layout = self._declare_dataclass(LayoutParams(), 'layout.')
+        if self.inspection_only:
+            layout.enabled, layout.control_enabled = True, False
         get = lambda n: self.get_parameter(n).value  # noqa: E731
 
-        self.core = ParkingCore(plan, bay, laser_x=get('laser_x'))
+        self.core = ParkingCore(plan, bay, laser_x=get('laser_x'), layout=layout)
         self.probe = ParkingSceneProbe(bay, probe, laser_x=get('laser_x'))
         self.probe_sub = None
         self.wheelbase = get('wheelbase')
@@ -71,6 +76,12 @@ class ParkingNode(Node):
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
+        self.observation_pub = self.create_publisher(MarkerArray, '/parking/observation_markers', 1)
+        self.layout_marker_pub = self.create_publisher(MarkerArray, '/parking/layout_markers', 1)
+        self.layout_pub = self.create_publisher(PoseArray, '/parking/layout', 1)
+        self.layout_status_pub = self.create_publisher(String, '/parking/layout_status', 1)
+        self.create_subscription(PoseWithCovarianceStamped, '/parking/entry_candidate', self.on_entry, 1)
+        self.create_timer(.5, self.publish_layout)
         self.candidate_pub = self.create_publisher(PoseStamped, get('parking_scene_topic'), 1)
         if not self.lazy:
             self._sensors_on(True)
@@ -83,6 +94,9 @@ class ParkingNode(Node):
                 markers(self.core, self.get_clock().now().to_msg())))
         self.get_logger().info(
             f'parking ready: R {plan.turn_radius} m, bays on the {"right" if plan.side < 0 else "left"}')
+
+        if self.inspection_only:
+            self.on_prepare(Bool(data=True))
 
     def _declare_dataclass(self, obj, prefix):
         for f in fields(obj):
@@ -110,12 +124,56 @@ class ParkingNode(Node):
 
     def on_scan(self, msg: LaserScan):
         self.last['scan'] = self.now()
-        self.core.scan(self.last['scan'], msg.ranges, msg.angle_min, msg.angle_increment,
+        self.core.scan(self.stamp(msg), msg.ranges, msg.angle_min, msg.angle_increment,
                        msg.range_min, msg.range_max)
+        if self.core.layout is not None and self.core.preparing:
+            self.on_probe_scan(msg)
+
+    def on_entry(self, msg):
+        stamp = self.stamp(msg)
+        if msg.header.frame_id != 'base_link' or not -.05 <= self.now()-stamp <= .5:
+            return
+        q = msg.pose.pose.orientation
+        values = (q.x, q.y, q.z, q.w, msg.pose.pose.position.x, msg.pose.pose.position.y)
+        if not all(math.isfinite(v) for v in values) or abs(sum(v*v for v in values[:4])-1) > .01:
+            return
+        yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
+        self.core.observe_entry(stamp, (msg.pose.pose.position.x, msg.pose.pose.position.y), yaw)
+
+    def publish_layout(self):
+        layout = self.core.layout
+        if layout is None or self.core.phase in (Phase.DONE, Phase.ABORT) or not (self.core.preparing or self.core.flag):
+            return
+        msg = PoseArray()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        current = self.core.tracker.pose
+        c, s = math.cos(current.yaw), math.sin(current.yaw)
+        for bay in layout.bays():
+            pose = Pose()
+            dx, dy = bay.x-current.x, bay.y-current.y
+            pose.position.x, pose.position.y = float(c*dx+s*dy), float(-s*dx+c*dy)
+            yaw = bay.entry_yaw-current.yaw
+            pose.orientation.z, pose.orientation.w = math.sin(yaw/2), math.cos(yaw/2)
+            msg.poses.append(pose)
+        self.layout_pub.publish(msg)
+        self.layout_marker_pub.publish(layout_markers(self.core, msg.header.stamp))
+        if self.observation_pub.get_subscription_count():
+            self.observation_pub.publish(observation_markers(self.core, msg.header.stamp, self.now()))
+        mode = 'control' if layout.p.control_enabled else 'observe'
+        self.layout_status_pub.publish(String(data=mode+': '+layout.reason+'; '+', '.join(
+            f'{i+1}:{state}' for i, state in enumerate(layout.states))))
 
     def on_prepare(self, msg: Bool):
-        on = msg.data and self.core.phase == Phase.IDLE and self.t_armed is None
-        if on and self.probe_sub is None:
+        on = (msg.data or self.inspection_only) and self.core.phase == Phase.IDLE and self.t_armed is None
+        if on != self.core.preparing:
+            self.probe.reset()
+        self.core.prepare(on)
+        if self.core.layout is not None and on:
+            self._sensors_on(True)
+        elif self.core.layout is not None and not on and not msg.data and self.core.phase == Phase.IDLE and self.t_armed is None:
+            self._sensors_on(False)
+        if on and self.probe_sub is None and self.core.layout is None:
             self.probe.reset()
             self.probe_sub = self.create_subscription(
                 LaserScan, self.get_parameter('scan_topic').value, self.on_probe_scan, qos_profile_sensor_data)
@@ -163,8 +221,13 @@ class ParkingNode(Node):
             self.get_logger().info('imu/odom/scan released')
 
     def on_flag(self, msg: Bool):
+        if self.inspection_only:
+            return
         if msg.data and not self.core.flag:
-            self.on_prepare(Bool(data=False))
+            if self.probe_sub is not None:
+                self.destroy_subscription(self.probe_sub)
+                self.probe_sub = None
+                self.probe.reset()
             if self.t_armed is not None:
                 return                  # already waiting for the sensors (on_timer starts the run)
             stale = self.stale()
