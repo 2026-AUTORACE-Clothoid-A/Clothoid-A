@@ -92,6 +92,30 @@ ros2 run clothoid_debug lane_viewer ../bag/lane_1107_201620 --tune
 
 같은 그림이 차에서 `debug:=true`일 때 `/lane/debug_image`로도 나온다.
 
+## yolo_viewer: bag에서 YOLO 박스가 미션 트리거가 되는 과정 보기
+
+ROS를 띄우지 않고 bag의 카메라 프레임에 YOLO 모델을 한 번 돌린 뒤(결과는 bag 폴더의 `yolo_cache_<모델>.json`에 저장), 박스마다 차의 코드와 같은 순서로 걸러서 보여준다. bag에 차가 낸 `/detections`가 있으면 그것을 쓴다(`--source car`). 파라미터는 `yolo.yaml` + `mission.yaml`이고 `-p`로 바꿔 볼 수 있다.
+
+| 단계 | 코드 | 파라미터 |
+|---|---|---|
+| YOLO 노드 발행 | `yolo_node` | `min_confidence` |
+| 크기, 옆 차선 | `classes_seen()` | `<bump/slow/parking/pedestrian>_min_area`, `_min_height`, `*_max_offset_height_ratio` |
+| 확정 | `DetectionGate` | `detection_confidence`, `sign_min_height`, `light_min_height`, `detection_edge_margin`, `detection_confirm_hits` / `detection_window` / `detection_max_age` |
+| 미션 동작 | `MissionLogic` | 감속, 정지 준비(arm), 방지턱(IMU pitch), 갈림길, 주차 |
+
+```
+ros2 run clothoid_debug yolo_viewer bag/2026-11-10/bag_1110_223908            # 모델: clothoid_yolo/models/best.pt
+ros2 run clothoid_debug yolo_viewer bag/2026-11-10/bag_1110_223908 --tune     # 슬라이더
+ros2 run clothoid_debug yolo_viewer <bag> --model ~/best.pt --yolo-hz 15 -p sign_min_height=20
+```
+
+- `--yolo-hz`(기본 10, 슬라이더도 있음): 차의 YOLO가 1초에 처리하는 프레임 수. 확정은 프레임 수로 세므로 이 값에 따라 결과가 달라진다. 0이면 모든 프레임.
+- `--tune`: 슬라이더 창 `yolo_params`와, 슬라이더 순서대로 번호·파라미터 이름·실제 값을 보여주는 `yolo_param_list` 창(yaml과 다른 값은 노란색)이 같이 뜬다.
+- 박스 색: 회색 `min_confidence` 미만(발행 안 됨), 빨강 걸러짐(이유가 박스 위에 나옴), 주황 확정 대기(hits k/N), 초록 트리거.
+- 아래 타임라인: 클래스별로 bag 전체에서 박스가 어떻게 됐는지, 그 아래는 미션 출력(감속, 보행자/신호 정지 준비, 방지턱 상태, 갈림길, 주차). 클릭하면 그 시점으로 간다.
+- 정지선(FinishCore)은 재생하지 않는다. 보행자 표지판과 빨간불은 "정지 준비(armed)"까지만 나온다.
+- 키: space 재생/멈춤, d/a 또는 →/← 한 프레임, n/b 다음/이전 트리거 변화, w/s 빠르게/느리게, p png 저장, y 바꾼 파라미터 출력, q 종료.
+
 ## 알아둘 점
 - **로컬라이저가 아니다.** `track` 좌표계는 시작 위치를 원점으로 `/imu` yaw와 `/odom` 바퀴 속도를 적분한 값이다. 보정이 없어 오래 달릴수록 오차가 쌓이고, 지도와 맞춘 위치도 아니다. 화면 표시에만 쓰고 주행 노드는 이 값을 쓰지 않는다.
 - **`/odom` yaw를 쓰지 않는 이유:** 조향값으로 계산한 값이라 실제 회전과 다르다. 2026-11-05 bag에서 회전 중 자이로의 약 1.9배였고, 한 주행 누적 287~354°로 자이로의 약 450°와 달랐다.

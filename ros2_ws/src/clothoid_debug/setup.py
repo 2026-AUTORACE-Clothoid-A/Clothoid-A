@@ -27,6 +27,7 @@ setup(
             'decision_viz = clothoid_debug.decision_viz:main',
             'lane_viewer = clothoid_debug.lane_viewer:main',
             'stop_viz = clothoid_debug.stop_viz:main',
+            'yolo_viewer = clothoid_debug.yolo_viewer:main',
         ],
     },
 )
