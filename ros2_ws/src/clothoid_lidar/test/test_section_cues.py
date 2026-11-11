@@ -77,6 +77,42 @@ def test_tracker_turns_the_last_sighting_into_a_crossing():
     assert tr.recent(c.odometer + 3.5, 3.0) is None
 
 
+def _sighting(ahead, heading=0.3):
+    from clothoid_lidar.section_cues import EntryLine
+    return EntryLine(row=0, ahead=ahead, heading=heading)
+
+
+def test_another_mark_seen_once_does_not_move_the_crossing():
+    """1108 run 6: the entry line seen down to 0.65 m (crossing 2.39), then a single sighting of
+    another mark 0.64 m ahead when the car was at 2.13 (2.77) must not replace it."""
+    tr = EntryLineTracker()
+    t, odo = 0.0, 1.60
+    for ahead in (0.95, 0.89, 0.83, 0.78, 0.73, 0.68, 0.65):
+        assert tr.update(t, odo, _sighting(ahead)) is None
+        t, odo = t + 0.05, odo + 0.02
+    c = tr.update(t + 0.2, 2.13, _sighting(0.64))
+    assert c is not None and c.odometer == pytest.approx(1.72 + 0.65, abs=0.01)
+    assert tr.update(t + 0.8, 2.30, None) is None          # the single sighting is no crossing
+    assert tr.recent(2.40, 3.0) is c
+
+
+def test_two_marks_seen_in_turn_do_not_reset_each_other():
+    tr = EntryLineTracker()
+    t, odo = 0.0, 0.0
+    for k in range(8):                          # entry line at 0.66, another mark at 1.30, in turn
+        ahead = (0.66 - odo) if k % 2 == 0 else (1.30 - odo)
+        tr.update(t, odo, _sighting(ahead))
+        t, odo = t + 0.1, odo + 0.02
+    assert tr.last is not None and tr.count >= 2
+    assert tr.last[1] + tr.last[2].ahead == pytest.approx(0.66, abs=0.01)
+
+
+def test_a_line_seen_in_one_frame_only_is_no_crossing():
+    tr = EntryLineTracker()
+    tr.update(0.0, 1.0, _sighting(0.6))
+    assert tr.update(0.5, 1.2, None) is None
+
+
 def test_far_line_is_not_a_crossing():
     tr = EntryLineTracker()
     tr.update(0.0, 0.0, find_entry_line(floor_image([band(0.8)]), CAM, WhiteParams()))

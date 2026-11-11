@@ -130,7 +130,8 @@ class EntryLineTracker:
     crosses it `ahead` metres (odometer) after the last sighting."""
 
     def __init__(self, max_last_ahead: float = 0.9, lost_after: float = 0.3, keep: float = 20.0,
-                 max_slant: float = math.radians(40.0)):
+                 max_slant: float = math.radians(40.0), same_line: float = 0.15, min_sightings: int = 2,
+                 view_min: float = 0.45):
         self.max_last_ahead = max_last_ahead   # the last sighting must be this close (not a far wall)
         # the entry line looked slanted by +6..+31 deg in the 11-05 / 11-08 bags (the car leaves the
         # corner before it; the slant is NOT the car's heading to the lane, the lidar frame matched
@@ -138,18 +139,42 @@ class EntryLineTracker:
         self.max_slant = max_slant
         self.lost_after = lost_after           # s without a sighting = passed
         self.keep = keep                       # m of odometer to remember crossings
+        # one line = sightings whose crossing estimates (odometer + ahead) agree within same_line; a
+        # sighting that does not is another mark (1108 run 6: one frame of a mark 0.38 m further on,
+        # when the entry line was already below the camera's view, replaced the crossing). A line
+        # needs min_sightings frames: a single one is not trusted (2: right after the corner the line
+        # is in view for ~0.15 m only, 2~3 frames on the 6 Hz image of a dark venue)
+        self.same_line = same_line
+        self.min_sightings = min_sightings
+        # m: closer than this the camera cannot see the floor; until the tracked line is that close,
+        # a sighting of another mark is ignored (two marks seen in turn must not reset each other)
+        self.view_min = view_min
         self.last: Optional[Tuple[float, float, EntryLine]] = None   # (t, odometer, line)
+        self.count = 0                         # sightings of the line in self.last
         self.crossings: List[Crossing] = []
 
     def update(self, t: float, odometer: float, line: Optional[EntryLine]) -> Optional[Crossing]:
         if line is not None:
+            if self.last is not None:
+                t0, odo0, ln0 = self.last
+                tracked = odo0 + ln0.ahead
+                if abs((odometer + line.ahead) - tracked) > self.same_line:
+                    if tracked - odometer > self.view_min:
+                        return None                     # another mark while the line is in view
+                    c = self._finish(odometer)          # the line is below the view: it is done
+                    self.last, self.count = (t, odometer, line), 1
+                    return c
             self.last = (t, odometer, line)
+            self.count += 1
             return None
         if self.last is None or t - self.last[0] < self.lost_after:
             return None
+        return self._finish(odometer)
+
+    def _finish(self, odometer: float) -> Optional[Crossing]:
         t0, odo0, ln = self.last
-        self.last = None
-        if ln.ahead > self.max_last_ahead or abs(ln.heading) > self.max_slant:
+        count, self.last, self.count = self.count, None, 0
+        if ln.ahead > self.max_last_ahead or abs(ln.heading) > self.max_slant or count < self.min_sightings:
             return None
         c = Crossing(odometer=odo0 + ln.ahead, heading=ln.heading, t=t0)
         self.crossings.append(c)
