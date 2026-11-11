@@ -139,9 +139,13 @@ mux는 출력 타이머가 없다. 입력 메시지가 올 때만 내보내고, 
 | 4 | 대회장에서만: NTP 시계 점프. twist_mux 타임아웃은 노드 시계(`now()`)로 잰다 | `timedatectl`, 대회장 Wi-Fi 연결 전후 비교 | 주행 중 NTP 끄기 검토 |
 | 5 | arm lock: `require_arm:=true`에서 `/estop false` 발행 없이 다시 실행하면 정상적으로 침묵한다 | `ros2 topic hz /estop` | 대회는 `require_arm:=false` |
 
-- 제안(설계 승인 뒤): `scripts/preflight.sh`. 1~4를 확인하고 `--clean`이면 남은 프로세스와 공유메모리를 정리한다. 런치를 다시 켜기 전에 매번 돌린다.
-- launch의 노드에 `sigterm_timeout`을 짧게 준다.
-- FIELD_TEST에 "런치 10회 껐다 켜기 + 매번 `/cmd_vel` 확인" 시험을 넣는다. 연습장에서도 대회장처럼 Wi-Fi에 붙여서 해 본다.
+- [x] **런치 전에 매번 `scripts/preflight.sh`** (세션 C, PR #14). 위 1~4와 DDS 프로파일, 깨진 build symlink, repo 루트 `install/`을 점검하고 문제가 있으면 exit 1.
+  - `--clean`: `fastdds shm clean`. 살아 있는 노드가 쥔 세그먼트는 건너뛰므로 노드가 떠 있어도 안전하다.
+  - `--kill`: 남은 ROS 프로세스를 SIGINT, 5초 뒤 SIGKILL. 모든 launch를 끈 뒤에만 쓴다.
+  - 재실행 순서: launch Ctrl+C → `scripts/preflight.sh` → WARN이면 `scripts/preflight.sh --kill --clean` → 다시 `scripts/preflight.sh`가 통과하면 launch.
+  - limo2(2026-11-11): `/dev/shm`에 이전 실행 세그먼트가 수십 개 쌓였고, 새 `ros2 run`에서 `Failed init_port fastrtps_port7417: open_and_lock_file failed`가 났다. 2번 원인 후보가 실제로 생긴다.
+- [ ] launch의 노드에 `sigterm_timeout`을 짧게 준다.
+- [x] FIELD_TEST 7절에 "런치 10회 껐다 켜기 + 매번 `/cmd_vel` 확인" 시험을 넣었다. 연습장에서도 대회장처럼 Wi-Fi에 붙여서 해 본다.
 
 ### 10-2. merge하면서 할 일 (주영, 2026-11-09)
 - [ ] `namgyu/parking`을 합칠 때 `twist_mux.yaml`의 `finish` 우선순위를 90이 아니라 **105**로 한다(parking 110 > finish 105 > state 100). 90이면 state보다 낮다. `decision_viz.py`의 `MUX_INPUTS`에도 finish를 넣는다.

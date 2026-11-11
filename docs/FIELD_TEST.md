@@ -13,6 +13,7 @@
 - 본체 전원과 **모터 배터리 연결**(없으면 본체가 응답하지 않는다).
 - 애커만 모드: `ros2 topic echo /limo_status --once`에서 `motion_mode: 1`. 0이면 4륜 차동이라 같은 `angular.z`가 요레이트로 해석된다(앞쪽 핀 전환).
 - 디스크: `df -h`(bag 용량은 아래 2절).
+- 런치를 띄우기 전에 매번 `scripts/preflight.sh`(남은 프로세스, `/dev/shm` 잔여물, DDS 프로파일). WARN이면 7절 순서로 정리한다.
 
 ## 1. RC 조작
 
@@ -92,12 +93,29 @@ ros2 bag record -o ~/bags/run1 /camera/color/image_raw /camera/color/camera_info
 - 바닥 마크 색(서행 구간), 정지선, 차선이 실제 트랙에서 잡히는지, `/lane/debug_image`로 확인한다.
 - 조명이 어두우면 프레임 간격이 최대 0.16 s까지 늘어 `twist_mux`의 lane 타임아웃(0.3 s)에 가까워진다.
 
+## 7. 런치 껐다 켜기 (재실행 멈춤, `INTEGRATION_TASKS.md` 10절)
+
+작년 대회장에서 런치만 껐다 켜다가 mux가 멈춰 재부팅으로만 풀렸다. 같은 조작을 반복해서 재현되는지 본다.
+바퀴를 띄우고 `mux_output:=/cmd_vel_dry`로 한다.
+
+1. `scripts/preflight.sh`가 통과하는지 확인한다(WARN이면 `--kill --clean` 뒤 다시).
+2. 다음을 10회 반복한다.
+   ```bash
+   ros2 launch clothoid_bringup full.launch.py mux_output:=/cmd_vel_dry   # 20초 뒤 Ctrl+C
+   ```
+   - 매번 다른 터미널에서 `timeout 5 ros2 topic hz /cmd_vel_lane`과 `timeout 5 ros2 topic hz /cmd_vel_dry`: 입력이 나오는데 출력이 없으면 mux가 멈춘 것이다.
+     차선이 안 보이는 곳이면 `ros2 topic pub -r 10 /cmd_vel_teleop geometry_msgs/msg/Twist '{}'`를 입력 삼아 본다. `ros2 node list | sort | uniq -d`(중복 노드 없음)도 본다.
+   - 매번 끈 뒤 `scripts/preflight.sh`의 결과(WARN 항목)를 적는다. **정리하지 않고** 다음 회차로 간다.
+3. 멈추는 회차가 나오면 그 상태에서 `ls /dev/shm | wc -l`, `ps -ef | grep -E 'twist_mux|limo_base'`, `lsof /dev/ttylimo`를 남기고, `preflight.sh --kill --clean`으로 풀리는지 본다(재부팅 없이 풀리면 원인 후보 1·2).
+4. 연습장 Wi-Fi(인터넷 연결)에 붙인 상태로 한 번 더 한다(원인 후보 4, NTP). `timedatectl`을 전후로 적는다.
+
 ## 결과 기록
 
 | 항목 | 값 | 날짜 / 차 / 비고 |
 |---|---|---|
 | 호차 / limo 번호 | | |
 | RC 우선순위(1절 4단계) | | |
+| 런치 10회 껐다 켜기(7절): 멈춘 회차, preflight WARN | | |
 | `control_mode` 값과 스위치 | | |
 | 최대 조향 원 반경(어느 점) | | |
 | `steering_scale` 확정값 | | |
