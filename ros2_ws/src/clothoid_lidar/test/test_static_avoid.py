@@ -753,3 +753,14 @@ def test_odometer_goes_back_when_reversing():
     tr.odom(0.0, -0.2, (0.0, 0.0))
     tr.odom(0.5, -0.2, (-0.1, 0.0))
     assert tr.distance == pytest.approx(-0.1) and tr.x == pytest.approx(-0.1)
+
+
+def test_odometer_at_an_image_stamp():
+    """A frame processed late is placed where the car was when it was taken."""
+    tr = PoseTracker()
+    tr.imu(0.0, 0.0)
+    for k in range(51):
+        tr.odom(0.02 * k, 0.5, (0.01 * k, 0.0))
+    assert tr.distance == pytest.approx(0.5)
+    assert tr.distance_at(0.6) == pytest.approx(0.3, abs=1e-6)
+    assert tr.distance_at(5.0) == pytest.approx(0.5)            # after the history: the latest

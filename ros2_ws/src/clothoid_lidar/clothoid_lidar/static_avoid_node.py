@@ -5,7 +5,9 @@ docs/STATIC_AVOID.md.
 In:  limos_topic (PoseArray, base_link, from the `limo_extractor` instance), scan_topic, odom_topic
      (speed only), imu_topic (yaw), /cone/mission_active, /camera/red_ratio, parking_topic,
      /cmd_vel_state (mission stop commands), direction_topic,
-     image_topic (raw or .../compressed; every `image_every`-th frame) for the white entry line,
+     image_10hz_topic (default: the camera at 10 Hz from bringup use_image_10hz:=true, every frame) or,
+     with image_source 'raw', image_topic (raw or .../compressed; every `image_every`-th frame), for the
+     white entry line and the lane lines,
      island_topic (optional PointStamped in base_link: the island front from the lane tracker),
      /parameter_events (follows lane_main's white_s_max / white_v_min / hsv_lower / hsv_upper so
      venue tuning applies).
@@ -28,6 +30,7 @@ from rcl_interfaces.msg import ParameterEvent
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from clothoid_common.qos import IMAGE_QOS
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CompressedImage, Image, Imu, LaserScan
@@ -67,6 +70,11 @@ class StaticAvoidNode(Node):
         self.declare_parameter('load_log_period', 5.0)     # s, callback time log; 0 = off
         # camera cues
         self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('image_10hz_topic', '/camera/color/image_10hz')
+        # '10hz': image_10hz_topic, every frame (the 30 Hz raw image costs a Python node 30~40 % of an
+        # Orin core just to receive, docs/PIPELINE_LOAD_PLAN.md 0.1); 'raw': image_topic, every
+        # image_every-th frame (bags, a car without the throttle)
+        self.declare_parameter('image_source', '10hz')
         self.declare_parameter('image_every', 3)
         self.declare_parameter('ignore_cone', False)      # test track only: its cone wall is beside the section
         self.declare_parameter('island_topic', '')        # '' = no island signal from the lane side
@@ -132,13 +140,16 @@ class StaticAvoidNode(Node):
         self.create_subscription(Bool, g('parking_topic'), self.on_parking, 1)
         self.create_subscription(Twist, g('state_cmd_topic'), self.on_state_cmd, 5)
         self.create_subscription(Int32, g('direction_topic'), self.on_direction, 1)
-        image_topic = g('image_topic')
+        tenhz = g('image_source') == '10hz'
+        image_topic = g('image_10hz_topic') if tenhz else g('image_topic')
+        self.image_every = 1 if tenhz else max(1, int(g('image_every')))
+        self.image_topic = image_topic
+        self.last_image = None
         if image_topic.endswith('/compressed'):
             self.create_subscription(CompressedImage, image_topic, self.timed('image', self.on_image),
-                                     qos_profile_sensor_data)
+                                     IMAGE_QOS)
         elif image_topic:
-            self.create_subscription(Image, image_topic, self.timed('image', self.on_image),
-                                     qos_profile_sensor_data)
+            self.create_subscription(Image, image_topic, self.timed('image', self.on_image), IMAGE_QOS)
         if g('island_topic'):
             self.create_subscription(PointStamped, g('island_topic'), self.on_island, 1)
         self.create_subscription(ParameterEvent, '/parameter_events', self.on_param_event, 10)
@@ -146,6 +157,7 @@ class StaticAvoidNode(Node):
         self.odom_gap, self.last_odom_stamp = 0.0, None
         self.create_timer(0.05, self.timed('timer', self.on_timer))
         self.create_timer(0.5, self.timed('slow_debug', self.publish_costmap))
+        self.create_timer(1.0, self.check_images)
         period = float(self.get_parameter('load_log_period').value)
         if period > 0.0:
             self.create_timer(period, self.log_load)
@@ -171,6 +183,14 @@ class StaticAvoidNode(Node):
                 c[1] += dt
                 c[2] = max(c[2], dt)
         return run
+
+    def check_images(self):
+        """No camera means no entry line and no lane fit: say so instead of failing silently."""
+        t = self.now()
+        if self.tracker.ready and (self.last_image is None or t - self.last_image > 3.0):
+            self.get_logger().warn(f'no images on {self.image_topic} for 3 s (the 10 Hz topic needs '
+                                   'bringup use_image_10hz:=true; else avoid.launch image:=raw)',
+                                   throttle_duration_sec=10.0)
 
     def log_load(self):
         """One line per period: per callback count, mean and max run time, and the longest gap
@@ -256,7 +276,8 @@ class StaticAvoidNode(Node):
 
     def on_image(self, msg):
         self.image_count += 1
-        if (self.image_count - 1) % max(1, int(self.get_parameter('image_every').value)):
+        self.last_image = self.now()
+        if (self.image_count - 1) % self.image_every:
             return
         if not self.tracker.ready:
             return
@@ -269,12 +290,15 @@ class StaticAvoidNode(Node):
         except Exception as exc:   # an odd encoding must not stop the mission
             self.get_logger().warn(f'image skipped: {exc}', throttle_duration_sec=5.0)
             return
+        # where the car was when the frame was taken: a frame processed late (a busy node) must not be
+        # placed at the present odometer (the entry line would look further on)
+        t_img = self.stamp(msg)
         line = find_entry_line(bgr, self.cam, self.white)
-        crossing = self.entry.update(self.now(), self.tracker.distance, line)
+        crossing = self.entry.update(t_img, self.tracker.distance_at(t_img), line)
         if crossing is not None:
             self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m')
         had_event = self.avoid.event
-        self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry)
+        self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry, t_img)
         if self.avoid.event != had_event and 'fit' in self.avoid.event:
             self.get_logger().info(f'{self.avoid.event}: island {self.avoid.island[0]:.2f} m')
 

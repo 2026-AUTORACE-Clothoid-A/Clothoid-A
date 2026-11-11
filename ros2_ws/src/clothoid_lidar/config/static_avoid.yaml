@@ -9,8 +9,8 @@ static_avoid:
     use_red_ratio: false
     red_ratio_max: 0.10          # 1105 bags: obstacle zone <= 0.06, cone course >= 0.20
     debug: true                  # /avoid/path, /avoid/cues
-    debug_heavy: false           # + /avoid/candidates, /avoid/costmap: slow on the Jetson, rviz only
-    recovery_reverse: false      # every path blocked for 1.5 s: back up 0.2 m (launch argument reverse)
+    # debug_heavy: false           # + /avoid/candidates, /avoid/costmap: slow on the Jetson, rviz only   (launch argument; a value here would override it)
+    # recovery_reverse: false      # every path blocked for 1.5 s: back up 0.2 m (launch argument reverse)   (launch argument; a value here would override it)
     load_log_period: 5.0         # s, a log line with each callback's run time; 0 = off
 
     lane_width: 0.50             # line centre to centre on our track; rules 0.55, check at the venue
@@ -38,7 +38,8 @@ static_avoid:
     entry_max_back: 3.0
     island_handover: 1.0         # m before the island front: hand over, lane_main enters A / B
     island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
-    image_every: 3               # entry line: every 3rd camera frame
+    # image_source: 10hz           # 10hz: image_10hz_topic, every frame; raw: image_topic, every image_every-th   (launch argument; a value here would override it)
+    image_every: 3               # raw only: every 3rd camera frame
     # camera geometry and the paint colours are NOT set here: avoid.launch.py passes the lane
     # package's camera_<car>.yaml and lane.yaml lane_main white_s_max / white_v_min / hsv_*
     # control

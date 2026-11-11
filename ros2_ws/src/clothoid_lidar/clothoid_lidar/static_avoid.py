@@ -212,6 +212,7 @@ class PoseTracker:
         self.distance = 0.0           # odometer, m
         self.last_pos: Optional[Tuple[float, float]] = None   # /odom position of the last message
         self.trace: List[Tuple[float, float, float, float]] = []
+        self.dtrace: List[Tuple[float, float]] = []      # (t, odometer)
 
     def imu(self, t: float, yaw: float) -> None:
         # unwrap so interpolation never jumps by 2 pi
@@ -241,8 +242,11 @@ class PoseTracker:
             self.distance += step
         self.last_t = t
         self.trace.append((t, self.x, self.y, self.yaw))
+        self.dtrace.append((t, self.distance))
         while self.trace and self.trace[0][0] < t - self.history:
             self.trace.pop(0)
+        while self.dtrace and self.dtrace[0][0] < t - self.history:
+            self.dtrace.pop(0)
         if not self.by_distance or self.distance - self.by_distance[-1][0] >= 0.01:
             self.by_distance.append((self.distance, self.x, self.y, self.yaw))
             while self.by_distance and self.by_distance[0][0] < self.distance - self.distance_history:
@@ -262,6 +266,14 @@ class PoseTracker:
 
     def latest(self) -> Tuple[float, float, float]:
         return self.trace[-1][1:]
+
+    def distance_at(self, t: float) -> float:
+        """Odometer at time t (an image's stamp), interpolated, clamped to the history."""
+        dt = self.dtrace
+        if not dt:
+            return self.distance
+        ts = [x[0] for x in dt]
+        return float(np.interp(t, ts, [x[1] for x in dt]))
 
     def at(self, t: float) -> Tuple[float, float, float]:
         """Pose at time t, interpolated, clamped to the history."""
@@ -1182,10 +1194,14 @@ class LaneFitter:
         self.start_odometer = 0.0
         self.start_open = False
 
-    def on_frame(self, bgr: np.ndarray, avoid: StaticAvoid, tracker: PoseTracker, entry) -> None:
+    def on_frame(self, bgr: np.ndarray, avoid: StaticAvoid, tracker: PoseTracker, entry,
+                 t: Optional[float] = None) -> None:
+        """t: the image's stamp; its pose and odometer are used (a frame processed late must not
+        be placed where the car is now). None: the latest."""
         p = self.p
-        pose = tracker.latest()
-        c = entry.recent(tracker.distance, p.lane_fit_give_up, 0.0)
+        pose = tracker.latest() if t is None else tracker.at(t)
+        odometer = tracker.distance if t is None else tracker.distance_at(t)
+        c = entry.recent(odometer, p.lane_fit_give_up, 0.0)
         if c is not None and c.odometer != self.closed:
             entry_pose = tracker.at_distance(c.odometer)
             if entry_pose is not None:
@@ -1195,9 +1211,9 @@ class LaneFitter:
                                       math.radians(p.lane_fit_search_deg))
                 if obs is not None and len(obs.lines) >= p.lane_fit_lines:
                     self.samples.append((pose, obs))
-                self._try_fit(entry_pose, tracker.distance - c.odometer)
+                self._try_fit(entry_pose, odometer - c.odometer)
         if avoid.state == ACTIVE:
-            self._start_fit(bgr, avoid, tracker, pose)
+            self._start_fit(bgr, avoid, odometer, pose)
             if self.fit is not None:
                 avoid.on_lane_fit(self.fit)
             if avoid.lane_frame is not None:
@@ -1205,14 +1221,14 @@ class LaneFitter:
                                       math.radians(p.lane_track_search_deg))
                 avoid.update_lane(pose, obs)
 
-    def _start_fit(self, bgr, avoid: StaticAvoid, tracker: PoseTracker, pose) -> None:
+    def _start_fit(self, bgr, avoid: StaticAvoid, odometer: float, pose) -> None:
         """The white dashes ahead give the lane direction right after the start, the car may still be
         coming out of the corner. If they do not, the tracking still runs (from the start heading)."""
         p = self.p
         frame = avoid.frame
         if frame is not self.start_frame:
             self.start_frame, self.start_samples = frame, []
-            self.start_odometer, self.start_open = tracker.distance, True
+            self.start_odometer, self.start_open = odometer, True
         if not self.start_open:
             return
         if avoid.lane_frame is not None:
@@ -1226,7 +1242,7 @@ class LaneFitter:
         fit = self._fit(origin, self.start_samples, p.lane_start_frames)
         if fit is not None and avoid.on_start_fit(fit):
             self.start_open = False
-        elif tracker.distance - self.start_odometer >= p.lane_start_give_up:
+        elif odometer - self.start_odometer >= p.lane_start_give_up:
             self.start_open = False
             avoid.track_from_start_heading()
 

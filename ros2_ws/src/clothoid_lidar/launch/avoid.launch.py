@@ -51,6 +51,7 @@ def _nodes(context):
     flags['recovery_reverse'] = LaunchConfiguration('reverse').perform(context).lower() == 'true'
     cam_file, white = _lane_files(camera)
     extra = LaunchConfiguration('params').perform(context)
+    flags['image_source'] = LaunchConfiguration('image').perform(context)
     avoid_params = ([topics, avoid_yaml] + ([cam_file] if cam_file else []) + [white, sim, flags]
                     + ([extra] if extra else []))
     note = (f'static_avoid: camera file {cam_file}' if cam_file else
@@ -73,6 +74,9 @@ def generate_launch_description():
                               description='test track only: its cone wall beside the section ends the avoidance'),
         DeclareLaunchArgument('debug_heavy', default_value='false',
                               description='also publish /avoid/candidates and /avoid/costmap (slow on the car)'),
+        DeclareLaunchArgument('image', default_value='10hz', choices=['10hz', 'raw'],
+                              description='10hz: /camera/color/image_10hz (bringup use_image_10hz:=true), '
+                                          'every frame; raw: /camera/color/image_raw, every 3rd frame'),
         DeclareLaunchArgument('params', default_value='',
                               description='extra static_avoid parameter file, last (e.g. the simulator)'),
         DeclareLaunchArgument('reverse', default_value='false',
