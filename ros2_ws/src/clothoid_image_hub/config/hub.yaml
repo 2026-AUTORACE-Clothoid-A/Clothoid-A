@@ -1,0 +1,19 @@
+# clothoid_image_hub: which small topics to offer. An output costs nothing while nobody subscribes.
+# Receive cost per format (PC, car's Fast DDS profile): raw 30 Hz 5.3 % of a core, 10 Hz 1.9 %,
+# 320x240 2.1 % (docs/PIPELINE_LOAD_PLAN.md 4.2). The BEV warp comes from camera_<car>.yaml.
+image_hub:
+  ros__parameters:
+    input_topic: /camera/color/image_raw
+    # raw every third frame on the same topic as bringup use_image_10hz (topic_tools throttle, PR #13):
+    # keep this off while use_image_10hz is on, or the topic gets two publishers
+    enable_10hz: false
+    topic_10hz: /camera/color/image_10hz
+    rate_10hz: 10.0
+    enable_small: true           # bgr8 320x240
+    topic_small: /camera/color/image_small
+    small_width: 320
+    small_height: 240
+    small_rate_hz: 0.0           # 0 = every camera frame
+    enable_bev: false            # lane / stopline BEV: no consumer yet (blur order differs, bag check first)
+    topic_bev: /camera/color/image_bev
+    bev_rate_hz: 0.0
