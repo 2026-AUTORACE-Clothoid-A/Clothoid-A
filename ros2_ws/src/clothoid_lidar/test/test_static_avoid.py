@@ -886,3 +886,33 @@ def test_beside_the_island_hand_over_at_the_latest_overshoot():
     assert a.control((f + 0.01, -0.5, math.radians(30.0)), Inhibit()) is None
     assert 'heading 30 deg' in a.event and 'no sign' in a.event
 
+
+def test_hits_beyond_the_yellow_lines_are_dropped_once_the_lanes_are_measured():
+    a = _active_at_origin()
+    beside = np.array([[2.0, 0.95]])                    # a cone 0.2 m outside the left yellow line
+    on_road = np.array([[2.0, 0.60]])
+    a.on_scan(np.vstack((beside, on_road)), np.zeros(2), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), None)
+    assert a.costmap.count[a.costmap.cells(beside)[0], a.costmap.cells(beside)[1]].item() > 0  # no fit yet
+    b = _active_at_origin()
+    b.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    b.on_scan(np.vstack((beside, on_road)), np.zeros(2), (0.0, 0.0, 0.0), (0.0, 0.0, 0.0), None)
+    i, j, _ = b.costmap.cells(np.vstack((beside, on_road)))
+    assert b.costmap.count[i[0], j[0]] == 0 and b.costmap.count[i[1], j[1]] > 0
+
+
+def test_beams_to_far_points_clear_what_they_pass():
+    """1112 auto 05, 24 s: cells marked from further back (the unseen body behind a hit) stayed for
+    20 s, the beams through them ended on walls beyond scan_range_max and were dropped whole."""
+    p = AvoidParams()
+    cm = Costmap(p)
+    origin = np.array([0.0, 0.0])
+    cell = np.array([[1.0, 0.4]])
+    for _ in range(5):
+        cm.update(cell, origin)
+    i, j, _ = cm.cells(cell)
+    assert cm.count[i[0], j[0]] >= p.occupied_count
+    far = np.array([[4.0, 1.6]])                          # same bearing, 4.4 m: beyond the range
+    for _ in range(10):
+        cm.update(far, origin)
+    assert cm.count[i[0], j[0]] == 0
+    assert not cm.occupied_at(far).any()                  # the far point itself is not marked

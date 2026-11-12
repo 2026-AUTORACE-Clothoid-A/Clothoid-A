@@ -62,6 +62,9 @@ class AvoidParams:
     handover_past: float = 0.6        # m past the island front (the island is 1.75 m long)
     handover_heading_deg: float = 15.0
     handover_overshoot: float = 0.6   # m further: hand over even if not straight
+    # lidar hits this far beyond the yellow outer lines are dropped once the camera measured the
+    # lanes (1112 auto 05: a cone beside the road at 4 m was in the costmap)
+    outside_margin: float = 0.10
     # painted island in lane 2. Measured from the white entry line when the camera saw it
     # (rule book p.4 drawing at scale), else guessed from the activation point (~1.5 m before the
     # first LIMO; the 11-05 bags put the true island at 3.6~5.5 m from activation)
@@ -423,11 +426,33 @@ class Costmap:
         return i, j, ok
 
     def update(self, hits: np.ndarray, origin: np.ndarray,
-               free_dirs: Optional[np.ndarray] = None) -> None:
+               free_dirs: Optional[np.ndarray] = None,
+               clear_only: Optional[np.ndarray] = None) -> None:
         """hits: (N, 2) beam end points, origin: (2,) lidar position, both in the section frame.
         free_dirs: (M, 2) unit directions of beams with no return; they clear up to
-        free_range_no_return, so an obstacle that left is forgotten even with nothing behind it."""
+        free_range_no_return, so an obstacle that left is forgotten even with nothing behind it.
+        clear_only: end points that are no obstacle of the section (beyond the yellow lines): their
+        beams clear, nothing is marked. Hits beyond scan_range_max clear up to it as well: dropped
+        whole, the cells marked from further back (the unseen body behind a hit) were never cleared
+        and closed the gap the driver took (1112 auto 05, 24 s, 20 s stopped)."""
         p = self.p
+        if len(hits):
+            dist = np.linalg.norm(hits - origin, axis=1)
+            far = dist > p.scan_range_max
+            if far.any():
+                clear_only = hits[far] if clear_only is None else np.vstack((clear_only, hits[far]))
+                hits = hits[~far]
+        if clear_only is not None and len(clear_only):
+            vec = clear_only - origin
+            dist = np.linalg.norm(vec, axis=1)
+            ok = dist > 1e-3
+            unit, reach = vec[ok] / dist[ok, None], np.minimum(dist[ok] - 1.5 * p.resolution,
+                                                              p.scan_range_max)
+            if len(unit):
+                steps = np.arange(0.0, reach.max(), p.resolution)
+                fp = (origin + unit[:, None, :] * steps[None, :, None])[steps[None, :] < reach[:, None]]
+                i, j, inside = self.cells(fp)
+                self.count.reshape(-1)[np.unique(i[inside] * self.nd + j[inside])] -= 1
         if free_dirs is not None and len(free_dirs):
             steps = np.arange(0.0, p.free_range_no_return, p.resolution)
             fp = (origin + free_dirs[:, None, :] * steps[None, :, None]).reshape(-1, 2)
@@ -457,18 +482,6 @@ class Costmap:
             flat = np.unique(i[ok] * self.nd + j[ok])
             self.count.reshape(-1)[flat] += p.hit_add
         np.clip(self.count, 0, p.hit_max, out=self.count)
-        self._inflate()
-
-    def resample(self, old: 'SectionFrame', new: 'SectionFrame') -> None:
-        """Carry the hit / clear counts over to a turned section frame (same world points)."""
-        p = self.p
-        i, j = np.meshgrid(np.arange(self.ns), np.arange(self.nd), indexing='ij')
-        centres = np.column_stack(((i.ravel() + 0.5) * p.resolution + p.grid_s_min,
-                                   (j.ravel() + 0.5) * p.resolution - self.d_max))
-        oi, oj, ok = self.cells(old.points_to(new.points_from(centres)))
-        count = np.zeros_like(self.count)
-        count.reshape(-1)[ok] = self.count[oi[ok], oj[ok]]
-        self.count = count
         self._inflate()
 
     def resample(self, old: 'SectionFrame', new: 'SectionFrame') -> None:
@@ -1120,11 +1133,19 @@ class StaticAvoid:
         at_scan = self.section_pose(pose_world)
         hits = base_to_section(hits_base, at_scan) if len(hits_base) else np.zeros((0, 2))
         origin = base_to_section(lidar_base.reshape(1, 2), at_scan)[0]
+        outside = None
+        if len(hits) and self.lane_source is not None:
+            # lanes measured by the camera: what lies beyond the yellow outer lines (cones put
+            # beside the road, people, walls) is no obstacle of the section; its beams still clear
+            rel = self.lane_in_costmap()
+            d = (hits if rel is None else rel.points_to(hits))[:, 1]
+            off = np.abs(d) > 1.5 * self.p.lane_width + self.p.outside_margin
+            hits, outside = hits[~off], hits[off]
         free = None
         if free_dirs_base is not None and len(free_dirs_base):
             c, s = math.cos(at_scan[2]), math.sin(at_scan[2])
             free = free_dirs_base @ np.array([[c, s], [-s, c]])
-        self.costmap.update(hits, origin, free)
+        self.costmap.update(hits, origin, free, outside)
         now = self.lane_pose(pose_now_world)
         self.plan = plan_paths(now, now[0], self.costmap, self.direction, self.last_end,
                                self.p, keep_candidates, self.island, self.lane_in_costmap(),
