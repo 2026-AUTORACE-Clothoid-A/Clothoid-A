@@ -755,6 +755,41 @@ def test_odometer_goes_back_when_reversing():
     assert tr.distance == pytest.approx(-0.1) and tr.x == pytest.approx(-0.1)
 
 
+def test_poses_by_distance_after_backing_up():
+    """1112 run 01: pushed back by hand below where the odometer started, then an entry line there
+    (the node died on at_distance -> None)."""
+    tr = PoseTracker()
+    tr.imu(0.0, 0.0)
+    t = 0.0
+    for k in range(51):                     # forward 0.5 m
+        tr.odom(t, 0.3, (0.01 * k, 0.0))
+        t += 0.02
+    tr.imu(t, 0.3)                          # backs up at another heading: the latest pass is used
+    for k in range(1, 81):                  # back 0.8 m, to -0.3 m
+        tr.odom(t, -0.3, (0.5 - 0.01 * k, 0.0))
+        t += 0.02
+    assert tr.distance == pytest.approx(-0.3)
+    pose = tr.at_distance(-0.2)
+    assert pose is not None and pose[2] == pytest.approx(0.3)
+    assert tr.at_distance(0.2)[2] == pytest.approx(0.3)
+    tr.imu(t, 0.0)
+    for k in range(1, 31):                  # forward again
+        tr.odom(t, 0.3, (-0.3 + 0.01 * k, 0.0))
+        t += 0.02
+    assert tr.at_distance(-0.1)[2] == pytest.approx(0.0)
+    assert tr.at_distance(0.2)[2] == pytest.approx(0.3)
+    keys = [e[0] for e in tr.by_distance]
+    assert keys == sorted(keys) and min(np.diff(keys)) > 0.005
+
+
+def test_entry_crossing_without_a_pose_is_ignored():
+    sa = StaticAvoid(AvoidParams())
+    sa.activate((0.0, 0.0, 0.0))
+    island = sa.island
+    sa.on_entry_crossing(None)
+    assert sa.island == island and sa.island_source == 'estimate'
+
+
 def test_odometer_at_an_image_stamp():
     """A frame processed late is placed where the car was when it was taken."""
     tr = PoseTracker()

@@ -132,9 +132,12 @@ class StaticAvoidNode(Node):
         self.create_subscription(PoseArray, g('limos_topic'), self.timed('limos', self.on_limos), 1)
         self.create_subscription(LaserScan, g('scan_topic'), self.timed('scan', self.on_scan),
                                  qos_profile_sensor_data)
-        # depth 1: a late message is dropped, the odometer uses the driver's accumulated position
-        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 1)
-        self.create_subscription(Imu, g('imu_topic'), self.on_imu, 1)
+        # depth 10: while an image callback holds the executor, /odom and /imu pile up; depth 1 kept
+        # only the last one (gaps of 0.2 s on the PC, 1 s on the car, so the pose at an image's time
+        # was interpolated over the gap). Their callbacks only store (< 0.1 ms) and the commands come
+        # from the timer, so a burst adds no delay. Keep it so: no control from these callbacks.
+        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 10)
+        self.create_subscription(Imu, g('imu_topic'), self.on_imu, 10)
         self.create_subscription(Bool, g('cone_active_topic'), self.on_cone, 1)
         self.create_subscription(Float32, g('red_ratio_topic'), self.on_red, 5)
         self.create_subscription(Bool, g('parking_topic'), self.on_parking, 1)

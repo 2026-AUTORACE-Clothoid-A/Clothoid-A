@@ -14,6 +14,7 @@ Design: docs/STATIC_AVOID.md. In short
   * hand-over to lane_main once the car is centred and straight in the target lane with that lane
     clear ahead; Twist(0) once, then silence.
 """
+import bisect
 import math
 from dataclasses import dataclass, field, replace
 from typing import List, Optional, Tuple
@@ -205,6 +206,7 @@ class PoseTracker:
         self.history = history
         self.distance_history = distance_history     # m of odometer kept for poses by distance
         self.by_distance: List[Tuple[float, float, float, float]] = []   # (odometer, x, y, yaw)
+        self.last_by_distance: Optional[float] = None
         self.yaw: Optional[float] = None
         self.last_t: Optional[float] = None
         self.x = self.y = 0.0
@@ -247,10 +249,26 @@ class PoseTracker:
             self.trace.pop(0)
         while self.dtrace and self.dtrace[0][0] < t - self.history:
             self.dtrace.pop(0)
-        if not self.by_distance or self.distance - self.by_distance[-1][0] >= 0.01:
-            self.by_distance.append((self.distance, self.x, self.y, self.yaw))
-            while self.by_distance and self.by_distance[0][0] < self.distance - self.distance_history:
-                self.by_distance.pop(0)
+        last = self.last_by_distance
+        if last is None or abs(self.distance - last) >= 0.01:
+            # sorted by odometer. Backing up (pushed back by hand before a run, the recovery reverse)
+            # passes readings again: the latest pass counts, readings below the first are added
+            bd = self.by_distance
+            keys = [e[0] for e in bd]
+            if last is not None:      # the readings passed again since the last entry (kept)
+                lo, hi = sorted((last, self.distance))
+                if self.distance < last:
+                    i, j = bisect.bisect_left(keys, lo - 0.005), bisect.bisect_left(keys, hi - 0.005)
+                else:
+                    i, j = bisect.bisect_right(keys, lo + 0.005), bisect.bisect_right(keys, hi + 0.005)
+                del bd[i:j]
+                keys = keys[:i] + keys[j:]
+            bd.insert(bisect.bisect_left(keys, self.distance), (self.distance, self.x, self.y, self.yaw))
+            self.last_by_distance = self.distance
+            while bd and bd[0][0] < self.distance - self.distance_history:
+                bd.pop(0)
+            while bd and bd[-1][0] > self.distance + self.distance_history:
+                bd.pop()
 
     def at_distance(self, odometer: float) -> Optional[Tuple[float, float, float]]:
         """Pose where the odometer read `odometer` (1 cm steps), None outside the kept range."""
@@ -894,8 +912,8 @@ class StaticAvoid:
     def on_entry_crossing(self, pose_world, ahead: float = 0.0) -> None:
         """The base crosses the white entry line `ahead` metres from pose_world while the mission
         runs (the first LIMO was close to the entry): place the island from it."""
-        if self.frame is None or self.island_source != 'estimate':
-            return
+        if self.frame is None or self.island_source != 'estimate' or pose_world is None:
+            return              # None: that odometer reading is no longer kept (1112 run 01 crash)
         s, d, _ = self.frame.to_section(*pose_world)
         s += ahead
         # the entry line is before the LIMOs: a white line far past the start (e.g. on the A / B
