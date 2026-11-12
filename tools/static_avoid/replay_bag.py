@@ -74,6 +74,9 @@ def stalls_like_live(bag, legacy):
 
 
 def image_bgr(msg):
+    if hasattr(msg, 'format'):              # CompressedImage (full-course bags record only that)
+        import cv2
+        return cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_COLOR)
     arr = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.width, -1)
     return arr[:, :, ::-1] if msg.encoding == 'rgb8' else arr
 
@@ -95,7 +98,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
     fitter = LaneFitter(p, cam, ColourParams())
     cone = ConeMission(ConeSorter(SorterParams()))
     rec = dict(events=[], plans=[], trail=[], limos=[], cost_max=None, p=p, avoid=avoid,
-               crossings=[], yaw=[], starts=[])
+               crossings=[], yaw=[], starts=[], mission=[], blocked=[])
     t0 = None
     on_since, on_total = None, 0.0
     s = 0.0
@@ -103,7 +106,9 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
     if stall:
         drop, gaps = stalls_like_live(bag, legacy_odom)
         rec['stalls'] = (len(gaps), len(drop))
-    for topic, t, msg in messages(bag, ['/scan', '/odom', '/imu', '/camera/color/image_raw']):
+    topics = ['/scan', '/odom', '/imu', '/camera/color/image_raw', '/camera/color/image_raw/compressed',
+              '/mission/state']
+    for topic, t, msg in messages(bag, topics):
         if drop and (topic, int(round(t * 1e6))) in drop:      # microseconds: float seconds
             continue
         t0 = t if t0 is None else t0
@@ -113,7 +118,11 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             tracker.imu(s, yaw_from_quaternion(q.x, q.y, q.z, q.w))
             rec['yaw'].append((s, tracker.yaw))
             continue
-        if topic == '/camera/color/image_raw':
+        if topic == '/mission/state':
+            if not rec['mission'] or rec['mission'][-1][1] != msg.data:
+                rec['mission'].append((s, msg.data))
+            continue
+        if topic.startswith('/camera/color/image_raw'):
             frames += 1
             if (frames - 1) % image_every or not tracker.ready or not (t_from - 8.0 <= s <= t_to):
                 continue
@@ -157,6 +166,16 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         entry_back = tracker.distance - c.odometer if c is not None else None
         entry_pose = tracker.at_distance(c.odometer) if c is not None else None
         was_done = avoid.done
+        if avoid.state != ACTIVE and avoid.blocked(limos, entry_back):
+            # shadow: something LIMO-sized in our lane ahead, started or not (and why not)
+            rec['blocked'].append(dict(t=s, odometer=tracker.distance, entry_back=entry_back,
+                                       why=inh.reason(p) or ('locked' if avoid.locked else '')
+                                       or ('not armed' if not avoid.armed else '')
+                                       or ('slow' if tracker.speed < p.min_speed else '')
+                                       or ('past island' if pose is not None and avoid.past_island(pose)
+                                           else ''),
+                                       ahead=float(np.min(np.hypot(*limos.T))) if len(limos) else None,
+                                       mission=rec['mission'][-1][1] if rec['mission'] else ''))
         started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose)
         if avoid.done and not was_done:
             rec['events'].append((s, 'DONE: ' + avoid.event))
@@ -312,6 +331,25 @@ def heading_report(rec):
               f'| truth {where} the section')
 
 
+def shadow_report(rec):
+    """Stretches (gaps < 0.5 s) of scans with a LIMO-sized cluster in our lane ahead while idle."""
+    print('  mission states: ' + ', '.join(f'{t:.1f} {m}' for t, m in rec['mission']))
+    runs = []
+    for b in rec['blocked']:
+        if runs and b['t'] - runs[-1][-1]['t'] < 0.5:
+            runs[-1].append(b)
+        else:
+            runs.append([b])
+    print(f'  blocked ahead while idle: {len(runs)} stretches')
+    for r in runs:
+        a, z = r[0], r[-1]
+        whys = sorted({b['why'] or 'START' for b in r})
+        eb = a['entry_back']
+        print(f'    {a["t"]:7.1f}-{z["t"]:7.1f} s  odometer {a["odometer"]:6.2f} m  scans {len(r):3d}  '
+              f'nearest {a["ahead"]:.2f} m  line back {"-" if eb is None else f"{eb:.2f} m"}  '
+              f'[{a["mission"]}]  {", ".join(whys)}')
+
+
 def wrap_angle(a):
     return (a + math.pi) % (2.0 * math.pi) - math.pi
 
@@ -330,10 +368,14 @@ def main():
     ap.add_argument('--truth', default='', help='tape-measured objects to draw, lane:distance from '
                     'the entry line to the rear [m], c prefix = cone, e.g. 2:3.00,3:2.50,c1:1.80')
     ap.add_argument('--snaps', type=int, default=6)
+    ap.add_argument('--snap-at', default='', help='snapshots at these bag times, e.g. 17,49,70')
     ap.add_argument('--stall-like-live', action='store_true',
                     help='drop what the car\'s node missed while busy (from the bag\'s /avoid/active gaps)')
     ap.add_argument('--image-every', type=int, default=3,
                     help='camera frames per processed one: 3 = the 10 Hz topic, 5 = 6 Hz (dark venue)')
+    ap.add_argument('--shadow', action='store_true',
+                    help='whole-course bags: mission states, entry lines, and every stretch where '
+                         'our lane looked blocked (started or why not)')
     ap.add_argument('--heading-report', action='store_true',
                     help='per start: section / lane frame against the lane (IMU while following it)')
     ap.add_argument('--old-reference', action='store_true',
@@ -382,9 +424,12 @@ def main():
                   f'p90 {100 * np.percentile(e, 90):.0f} cm (n {len(e)})')
     if a.heading_report:
         heading_report(rec)
+    if a.shadow:
+        shadow_report(rec)
     rec['truth'] = [x.split(':') for x in a.truth.split(',') if x]
     if a.plot and rec['plans']:
-        plot(a.plot, rec, a.bag, direction, a.snaps)
+        plot(a.plot, rec, a.bag, direction, a.snaps,
+             [float(x) for x in a.snap_at.split(',') if x] or None)
 
 
 def lane_lines(ax, p):
@@ -441,7 +486,7 @@ def cost_rgba(cost):
     return img
 
 
-def plot(path, rec, bag, direction, n_snaps):
+def plot(path, rec, bag, direction, n_snaps, snap_at=None):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -450,6 +495,10 @@ def plot(path, rec, bag, direction, n_snaps):
     plans = rec['plans']
     tr = np.array([(t, s, d) for t, s, d, _ in rec['trail']])
     idx = np.linspace(0, len(plans) - 1, n_snaps).round().astype(int) if n_snaps else []
+    if snap_at:             # the plans nearest to these bag times instead
+        ts = np.array([x['t'] for x in plans])
+        idx = np.array([int(np.argmin(np.abs(ts - t))) for t in snap_at])
+        n_snaps = len(idx)
     fig = plt.figure(figsize=(3.3 * (n_snaps + 2), 10.5))
     gs = fig.add_gridspec(1, n_snaps + 2)
 
