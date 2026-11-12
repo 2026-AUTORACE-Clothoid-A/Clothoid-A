@@ -149,6 +149,21 @@ class AvoidParams:
     reverse_distance: float = 0.20    # m per back-up, straight back along the way the car came
     reverse_max: float = 0.40         # m in all, per mission
     reverse_speed: float = 0.15
+    # stuck for stuck_time: search once (again every escape_retry s) curvature-limited paths of three
+    # arcs (escape_curvatures x 1 / escape_radius, escape_lengths each) for one that is free and ends
+    # about straight, and drive it slowly with a short look-ahead. 1113 auto 05 stopped 14 s where
+    # only such a quick swerve (right at full lock, then left) went through; the lane-centre
+    # S-curves never contain it
+    escape: bool = True
+    escape_radius: float = 0.47       # m, car 7 at full lock
+    escape_curvatures: Tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)
+    escape_lengths: Tuple[float, ...] = (0.2, 0.4, 0.6)
+    escape_end_heading_deg: float = 35.0
+    escape_lookahead: float = 0.30
+    escape_speed: float = 0.15
+    escape_margin: float = 0.03       # m of clearance more than safety: full-lock arcs are cut a little
+    escape_w_near: float = 0.02       # per obstacle cost point (0..100), against m of progress
+    escape_retry: float = 1.0         # s
     # the first metres of every path start where the car is now: if the car is already inside the
     # safety margin (an obstacle seen late, or passed close), lethal cells there only cost, so the
     # car can still pick the way out instead of freezing
@@ -808,6 +823,80 @@ def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
                 feasible=feasible)
 
 
+def path_blocker(s0: float, costmap: 'Costmap', lane_rel: Optional['SectionFrame'],
+                 island: Tuple[float, float], p: AvoidParams, margin: float = 0.0):
+    """blocked(s, d, heading) per sample, lane coordinates: a footprint circle on a lethal cell (past
+    lethal_free_start), a corner over the yellow outer line, or on the island (its pointed tip
+    allowed), as the lane-sequence planner checks. margin: m of clearance more than safety."""
+    w = p.lane_width
+    off = np.asarray(p.footprint_offsets)
+    limit = LETHAL if margin <= 0.0 else 100.0 * math.exp(-p.inflation_decay * margin) - 1e-6
+
+    def blocked(s, d, h):
+        fs = s[:, None] + off * np.cos(h)[:, None]
+        fd = d[:, None] + off * np.sin(h)[:, None]
+        q = np.column_stack((fs.ravel(), fd.ravel()))
+        if lane_rel is not None:
+            q = lane_rel.points_from(q)
+        c = costmap.lookup(q).reshape(fs.shape)
+        lethal = (c >= limit).any(axis=1) & (s - s0 > p.lethal_free_start)
+        corner = np.abs(d) + p.car_half_length * np.abs(np.sin(h)) + p.car_half_width * np.cos(h)
+        out = corner > 1.5 * w - p.line_margin + 1e-6
+        tip = np.clip(np.minimum(s - island[0], island[1] - s) / p.island_tip, 0.0, 1.0)
+        on = ((s >= island[0] + p.island_tip) & (s <= island[1])
+              & (np.abs(d) < tip * w / 2.0 + p.car_half_width))
+        return lethal | out | on
+    return blocked
+
+
+def escape_path(pose: Tuple[float, float, float], costmap: 'Costmap', lane_rel, island,
+                direction: Optional[int], p: AvoidParams) -> Optional[Plan]:
+    """Every curvature-limited path of three arcs (p.escape_*) from the car, with a straight
+    0.4 m after: the free ones ending within escape_end_heading_deg of the lanes; the one going
+    furthest along s, nearest to the target lane (any lane centre without a direction), with the
+    least obstacle cost. None if none is free."""
+    s0, d0, psi = pose
+    ks = np.asarray(p.escape_curvatures) / p.escape_radius
+    ls = np.asarray(p.escape_lengths)
+    K = np.array(np.meshgrid(ks, ks, ks, indexing='ij')).reshape(3, -1).T          # (A, 3)
+    L = np.array(np.meshgrid(ls, ls, ls, indexing='ij')).reshape(3, -1).T          # (B, 3)
+    K = np.repeat(K, len(L), axis=0)
+    L = np.tile(L, (len(ks) ** 3, 1))
+    ds = 0.04
+    n = int(math.ceil(L.sum(axis=1).max() / ds)) + int(0.4 / ds)
+    u = (np.arange(n) + 1) * ds                                                     # (S,)
+    edges = np.cumsum(L, axis=1)                                                    # (P, 3)
+    seg = (u[None, :] > edges[:, 0:1]).astype(int) + (u[None, :] > edges[:, 1:2])
+    kappa = np.where(u[None, :] > edges[:, 2:3], 0.0, np.take_along_axis(K, seg, axis=1))
+    h = psi + np.cumsum(kappa * ds, axis=1)
+    keep = np.abs(h[:, -1]) <= math.radians(p.escape_end_heading_deg)
+    if not keep.any():
+        return None
+    h = h[keep]
+    s = s0 + np.cumsum(np.cos(h) * ds, axis=1)
+    d = d0 + np.cumsum(np.sin(h) * ds, axis=1)
+    blocked = path_blocker(s0, costmap, lane_rel, island, p, p.escape_margin)
+    bad = blocked(s.ravel(), d.ravel(), h.ravel()).reshape(s.shape).any(axis=1)
+    if bad.all():
+        return None
+    s, d, h = s[~bad], d[~bad], h[~bad]
+    tc = target_centre(direction, p)
+    centres = lane_centres(p)
+    end_off = (np.abs(d[:, -1] - tc) if tc is not None
+               else np.min(np.abs(d[:, -1:] - centres[None, :]), axis=1))
+    off = np.asarray(p.footprint_offsets)
+    q = np.column_stack(((s[:, :, None] + off * np.cos(h)[:, :, None]).ravel(),
+                         (d[:, :, None] + off * np.sin(h)[:, :, None]).ravel()))
+    if lane_rel is not None:
+        q = lane_rel.points_from(q)
+    near = np.minimum(costmap.lookup(q), 100.0).reshape(len(s), -1).mean(axis=1)
+    score = -(s[:, -1] - s0) + 2.0 * end_off + p.escape_w_near * near
+    k = int(np.argmin(score))
+    path = np.column_stack((np.concatenate(([s0], s[k])), np.concatenate(([d0], d[k]))))
+    return Plan(path=path, end_offset=float(d[k, -1]), cost=float(score[k]),
+                obstacle_cost=float(near[k]))
+
+
 def pure_pursuit(path: np.ndarray, pose: Tuple[float, float, float], p: AvoidParams) -> float:
     """Central steering angle (rad, + left) towards the path point `lookahead` from the rear axle."""
     s0, d0, psi = pose
@@ -879,18 +968,21 @@ class StaticAvoid:
         self.done = False                    # the section is behind us, avoided or not
 
     # ---- trigger --------------------------------------------------------------------------
-    def blocked(self, limos: np.ndarray, since_entry: Optional[float] = None) -> bool:
-        """A LIMO-sized cluster in our lane ahead. With the entry line behind us (since_entry m),
-        clusters at the island front or beyond are the sign stand / island, not a LIMO."""
+    def blocking(self, limos: np.ndarray, since_entry: Optional[float] = None) -> np.ndarray:
+        """Mask of the LIMO-sized clusters in our lane ahead. With the entry line behind us
+        (since_entry m), clusters at the island front or beyond are the sign stand / island."""
         p = self.p
         if len(limos) == 0:
-            return False
+            return np.zeros(0, bool)
         ahead = ((limos[:, 0] > 0.0) & (limos[:, 0] < p.activate_range)
                  & (np.abs(limos[:, 1]) < p.block_half_width))
         if since_entry is not None and -0.3 <= since_entry <= p.island_from_entry_max:
             at_island = since_entry + limos[:, 0] >= p.island_from_entry_min - p.island_object_margin
             ahead &= ~at_island
-        return bool(ahead.any())
+        return ahead
+
+    def blocked(self, limos: np.ndarray, since_entry: Optional[float] = None) -> bool:
+        return bool(self.blocking(limos, since_entry).any())
 
     def on_limos(self, t: float, limos: np.ndarray, inhibit: Inhibit, speed: float,
                  pose_world: Optional[Tuple[float, float, float]],
@@ -1163,7 +1255,45 @@ class StaticAvoid:
         if self.plan.feasible:
             self.last_end = self.plan.end_offset
 
+    def _escape(self, t: Optional[float], pose) -> Optional[Plan]:
+        """The escape path while stuck (see AvoidParams.escape): kept while the rest of it stays
+        free, searched again at most every escape_retry s."""
+        p = self.p
+        if not p.escape or t is None or self.costmap is None:
+            return None
+        if self.stuck_since is None:
+            self.stuck_since = t
+        if t - self.stuck_since < p.stuck_time:
+            return None
+        esc = self._escape_free(pose)
+        if esc is None and (self.escape_tried is None or t - self.escape_tried >= p.escape_retry):
+            self.escape_tried = t
+            esc = escape_path(pose, self.costmap, self.lane_in_costmap(), self.island,
+                              self.direction, p)
+            if esc is not None:
+                self.event = 'stuck: escape path to s %.2f d %+.2f' % (esc.path[-1, 0], esc.end_offset)
+        self.escape_plan = esc
+        return esc
+
+    def _escape_free(self, pose) -> Optional[Plan]:
+        """The escape path being driven, while the rest of it (to 0.3 m before its end) is free."""
+        esc = self.escape_plan
+        if esc is None:
+            return None
+        ahead = esc.path[esc.path[:, 0] > pose[0] + 0.05]
+        if len(ahead) < 3 or ahead[-1, 0] - pose[0] < 0.3:
+            self.escape_plan = None
+            return None
+        h = np.arctan2(np.gradient(ahead[:, 1]), np.gradient(ahead[:, 0]))
+        if path_blocker(pose[0], self.costmap, self.lane_in_costmap(), self.island,
+                        self.p)(ahead[:, 0], ahead[:, 1], h).any():
+            self.escape_plan = None
+            return None
+        return esc
+
     def reset_recovery(self) -> None:
+        self.escape_plan: Optional[Plan] = None
+        self.escape_tried: Optional[float] = None
         self.sequence: Optional[Sequence] = None
         self.stuck_since: Optional[float] = None
         self.recovering = False
@@ -1231,8 +1361,16 @@ class StaticAvoid:
         if pose[0] > p.max_travel:
             self.stop('hand over: max travel', True)
             return None
-        if self.plan is None or not self.plan.feasible:
-            return self._stuck(t, pose[0])
+        # an escape path is driven to its end while it stays free: a plan found half way out starts
+        # inside the safety margin (lethal_free_start) and took the car too close
+        esc = self._escape_free(pose)
+        if esc is None and (self.plan is None or not self.plan.feasible):
+            esc = self._escape(t, pose)
+            if esc is None:
+                return self._stuck(t, pose[0])
+        if esc is not None:
+            delta = pure_pursuit(esc.path, pose, replace(p, lookahead=p.escape_lookahead))
+            return p.escape_speed, p.escape_speed * math.tan(delta) / p.wheelbase
         if self.backing_from is not None:                  # a plan again while backing up
             self.reversed += max(self.backing_from - pose[0], 0.0)
             self.backing_from = None
