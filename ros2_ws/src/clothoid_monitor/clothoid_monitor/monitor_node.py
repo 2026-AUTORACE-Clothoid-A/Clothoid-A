@@ -226,6 +226,7 @@ class MonitorNode(Node):
         self.auto_debug_nodes = list(self.get_parameter('auto_debug_nodes').value)
         self._auto_enabled_nodes = set()
         self._auto_debug_pending = set()
+        self._auto_debug_miss_count = {name: 0 for name in self.auto_debug_nodes}
         self._auto_debug_timer = None
 
         self.header_logo_path = resolve_resource_path('Telechips-CI-White.png')
@@ -317,7 +318,7 @@ class MonitorNode(Node):
         self.server_thread.start()
 
         if self.auto_enable_debug and self.auto_debug_nodes:
-            self._auto_debug_timer = self.create_timer(1.0, self._check_and_enable_debug_params)
+            self._auto_debug_timer = self.create_timer(0.2, self._check_and_enable_debug_params)
             self._check_and_enable_debug_params()
 
         display_host = detect_lan_ip() if self.web_host in ('0.0.0.0', '') else self.web_host
@@ -534,9 +535,15 @@ class MonitorNode(Node):
             ready = set_client.service_is_ready()
 
             if not ready:
-                self._auto_enabled_nodes.discard(node_name)
                 self._auto_debug_pending.discard(node_name)
+                misses = self._auto_debug_miss_count.get(node_name, 0) + 1
+                self._auto_debug_miss_count[node_name] = misses
+                # Reset enabled status only after 5 consecutive misses (~1.0s offline)
+                if misses >= 5:
+                    self._auto_enabled_nodes.discard(node_name)
                 continue
+
+            self._auto_debug_miss_count[node_name] = 0
 
             if node_name in self._auto_enabled_nodes or node_name in self._auto_debug_pending:
                 continue

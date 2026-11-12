@@ -16,6 +16,20 @@ def test_default_target_nodes_and_topics():
 def test_auto_enable_debug_tick_when_ready(monkeypatch):
     if not rclpy.ok():
         rclpy.init()
+
+    # Mock Flask server thread to prevent port 5000 conflicts during tests
+    class MockServerThread:
+        def __init__(self, *args, **kwargs):
+            pass
+        def start(self):
+            pass
+        def shutdown(self):
+            pass
+        def join(self, timeout=None):
+            pass
+
+    monkeypatch.setattr('clothoid_monitor.monitor_node.FlaskServerThread', MockServerThread)
+
     try:
         node = MonitorNode()
 
