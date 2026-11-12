@@ -54,6 +54,14 @@ class AvoidParams:
     release_tol: float = 0.10         # m from the target lane centre
     release_heading_deg: float = 10.0
     release_clear: float = 2.0        # m ahead, every lane: no obstacle left there to hand over
+    # hand over beside the island, in the A / B lane (1 / 3), handover_past m past its front: lane_main
+    # then starts on a road with yellow lines on both sides. Before, on the three-lane road, it
+    # steered for lane 2 and hit the island's sign right after a hand-over in lane 1 (1112 auto 05).
+    # Off: the hand-overs before the island (target lane, island close, a clear road) as before
+    handover_after_island: bool = True
+    handover_past: float = 0.6        # m past the island front (the island is 1.75 m long)
+    handover_heading_deg: float = 15.0
+    handover_overshoot: float = 0.6   # m further: hand over even if not straight
     # painted island in lane 2. Measured from the white entry line when the camera saw it
     # (rule book p.4 drawing at scale), else guessed from the activation point (~1.5 m before the
     # first LIMO; the 11-05 bags put the true island at 3.6~5.5 m from activation)
@@ -463,6 +471,18 @@ class Costmap:
         self.count = count
         self._inflate()
 
+    def resample(self, old: 'SectionFrame', new: 'SectionFrame') -> None:
+        """Carry the hit / clear counts over to a turned section frame (same world points)."""
+        p = self.p
+        i, j = np.meshgrid(np.arange(self.ns), np.arange(self.nd), indexing='ij')
+        centres = np.column_stack(((i.ravel() + 0.5) * p.resolution + p.grid_s_min,
+                                   (j.ravel() + 0.5) * p.resolution - self.d_max))
+        oi, oj, ok = self.cells(old.points_to(new.points_from(centres)))
+        count = np.zeros_like(self.count)
+        count.reshape(-1)[ok] = self.count[oi[ok], oj[ok]]
+        self.count = count
+        self._inflate()
+
     def _inflate(self) -> None:
         p = self.p
         occupied = self.count >= p.occupied_count
@@ -675,7 +695,10 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
     tc = target_centre(direction, p)
     args = (costmap, travelled, direction, last_end, p, island, lane_in_costmap, forbid_island)
 
-    if p.sequence and tc is not None and forbid_island and island[0] - s0 > 0.3:
+    # with the hand-over beside the island the lane centre is followed there too (the one-stage
+    # candidates drifted to the yellow line, away from the island)
+    seq_until = island[0] + (p.handover_past + p.handover_overshoot if p.handover_after_island else 0.0)
+    if p.sequence and tc is not None and forbid_island and seq_until - s0 > 0.3:
         plan = _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep)
         if plan is not None:
             return plan
@@ -739,7 +762,10 @@ def _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep) -
                 return Plan(path=ahead, end_offset=e1, cost=keep.cost,
                             obstacle_cost=float(c[ahead[:, 0] <= s0 + p.horizon].mean()),
                             sequence=keep)
-    end = max(island[0] + p.island_tip + p.route_after, s0 + p.horizon)
+    after = p.island_tip + p.route_after
+    if p.handover_after_island:                 # on beside the island, to the hand-over and more
+        after = max(after, p.handover_past + 0.4)
+    end = max(island[0] + after, s0 + p.horizon)
     seq = plan_sequence(s0, d0, psi, target, island[0] - p.route_margin, island[0] + p.island_tip,
                         end, p, blocked, closeness, keep)
     if seq is None:
@@ -1153,22 +1179,26 @@ class StaticAvoid:
             self.stop('abort: ' + reason)
             return None
         pose = self.lane_pose(pose_now_world)
-        if self.target_ready(pose):
+        if p.handover_after_island:
+            if self.past_island_ready(pose):
+                return None
+        elif self.target_ready(pose):
             self.stop('hand over in target lane %d, %.2f m before the island (%s)'
                       % (lane_of(pose[1], p), self.island[0] - pose[0], self.island_source), True)
             return None
-        if self.island_ready(pose):
+        elif self.island_ready(pose):
             self.stop('hand over %.2f m before the island (%s), lane %d'
                       % (self.island[0] - pose[0], self.island_source, lane_of(pose[1], p)), True)
             return None
-        if self.release_ready(pose):
+        elif self.release_ready(pose):
             self.stop('hand over in lane %d' % lane_of(pose[1], p))
             return None
-        margin = p.island_past_estimate if self.island_source == 'estimate' else 0.0
-        if pose[0] >= self.island[0] + margin:
-            self.stop('hand over past the island front (%s), lane %d'
-                      % (self.island_source, lane_of(pose[1], p)), True)
-            return None
+        else:
+            margin = p.island_past_estimate if self.island_source == 'estimate' else 0.0
+            if pose[0] >= self.island[0] + margin:
+                self.stop('hand over past the island front (%s), lane %d'
+                          % (self.island_source, lane_of(pose[1], p)), True)
+                return None
         if pose[0] > p.max_travel:
             self.stop('hand over: max travel', True)
             return None
@@ -1239,6 +1269,28 @@ class StaticAvoid:
         if gap > self.p.island_align_until and not self.aligned(d, psi, self.release_target(d)):
             return False
         return self.road_clear(s + 0.2, self.island[0])
+
+    def past_island_ready(self, pose) -> bool:
+        """handover_after_island: hand over (and lock) handover_past m beside the island in lane 1 / 3
+        and about straight; handover_overshoot further on whatever the heading. Logs the sign's lane
+        with it (whether lane_main's /direction_flag side matches is seen there)."""
+        p = self.p
+        s, d, psi = pose
+        margin = p.island_past_estimate if self.island_source == 'estimate' else 0.0
+        past = s - (self.island[0] + margin)
+        if past < p.handover_past:
+            return False
+        lane = lane_of(d, p)
+        sign = {0: 'sign lane 1', 1: 'sign lane 3'}.get(self.direction, 'no sign')
+        if lane in (1, 3) and abs(psi) <= math.radians(p.handover_heading_deg):
+            self.stop('hand over beside the island, lane %d, %.2f m past its front (%s, %s)'
+                      % (lane, past, self.island_source, sign), True)
+            return True
+        if past >= p.handover_past + p.handover_overshoot:
+            self.stop('hand over beside the island, lane %d, %.2f m past its front, heading %.0f deg '
+                      '(%s, %s)' % (lane, past, math.degrees(psi), self.island_source, sign), True)
+            return True
+        return False
 
     def release_ready(self, pose) -> bool:
         p = self.p

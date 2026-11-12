@@ -344,12 +344,23 @@ def test_fork_sign_seen_late(flag, lane):
     check(out, 0.50, lane)
 
 
-def test_hands_over_before_the_island():
+def test_hands_over_before_the_island_when_asked():
     for limos in ([(1.2, 0.0)], [(1.0, 0.0), (2.6, 0.5), (2.6, 0.0), (4.2, 0.5)]):
-        out = run(limos, direction=1)
+        out = run(limos, direction=1, params=AvoidParams(handover_after_island=False))
         check(out, 0.50, 3)
         assert out['island_source_end'] == 'entry line'    # crossed after the start
         assert out['handover_x'] < ISLAND[0], out
+
+
+def test_hands_over_beside_the_island_in_the_sign_lane():
+    """1112 auto 05: handed over in lane 1 before the island, lane_main turned for lane 2 into the
+    island's sign. Now the avoidance drives on beside the island and hands over there."""
+    for direction, lane, limos in ((0, 1, [(1.2, 0.0)]), (1, 3, [(1.2, 0.0)]),
+                                   (1, 3, [(1.0, 0.0), (2.6, 0.5), (2.6, 0.0), (4.2, 0.5)])):
+        out = run(limos, direction=direction)
+        check(out, 0.50, lane)
+        assert ISLAND[0] + 0.55 <= out['handover_x'] <= ISLAND[0] + 1.3, out
+        assert 'beside the island, lane %d' % lane in out['events'][-1][1], out
 
 
 def test_limo_close_to_the_island_is_still_avoided():
@@ -416,7 +427,7 @@ def test_handover_mid_section_does_not_lock():
 
 
 def test_alignment_is_not_waited_for_right_at_the_island():
-    a = StaticAvoid(AvoidParams())
+    a = StaticAvoid(AvoidParams(handover_after_island=False))
     a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
     a.plan = plan_paths((3.6, 0.25, 0.0), 3.6, a.costmap, None, None, a.p, island=a.island)
     assert a.control((4.0, 0.25, 0.0), Inhibit()) is not None    # 0.4 m before it: still waits
@@ -592,7 +603,7 @@ def test_line_residuals_match_nearest_expected_line():
 
 
 def test_known_direction_hands_over_only_in_the_target_lane():
-    a = StaticAvoid(AvoidParams())
+    a = StaticAvoid(AvoidParams(handover_after_island=False))
     a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
     a.direction = 0
     a.plan = plan_paths((3.5, 0.0, 0.0), 3.5, a.costmap, 0, None, a.p, island=a.island)
@@ -603,7 +614,7 @@ def test_known_direction_hands_over_only_in_the_target_lane():
 
 
 def test_unknown_direction_waits_for_the_car_to_be_aligned():
-    a = StaticAvoid(AvoidParams())
+    a = StaticAvoid(AvoidParams(handover_after_island=False))
     a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
     a.plan = plan_paths((3.6, 0.25, 0.0), 3.6, a.costmap, None, None, a.p, island=a.island)
     assert a.control((3.6, 0.25, 0.0), Inhibit()) is not None    # on the line between two lanes
@@ -677,7 +688,7 @@ def test_tracking_runs_without_a_start_fit():
 
 @pytest.mark.parametrize('direction', [None, 0, 1])
 def test_past_the_island_front_always_hands_over_and_locks(direction):
-    a = _active_at_origin()
+    a = _active_at_origin(AvoidParams(handover_after_island=False))
     a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
     a.direction = direction
     a.plan = None
@@ -686,7 +697,7 @@ def test_past_the_island_front_always_hands_over_and_locks(direction):
 
 
 def test_estimated_island_gets_a_margin():
-    a = _active_at_origin()
+    a = _active_at_origin(AvoidParams(handover_after_island=False))
     a.direction = 1
     a.plan = None
     s = a.island[0] + 0.2
@@ -718,7 +729,7 @@ def test_a_line_followed_by_a_corner_is_not_the_entry():
 
 
 def test_a_hand_over_at_the_island_is_done():
-    a = _active_at_origin()
+    a = _active_at_origin(AvoidParams(handover_after_island=False))
     a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
     a.plan = None
     a.control((a.island[0] + 0.01, 0.0, 0.0), Inhibit())
@@ -853,3 +864,25 @@ def test_a_line_before_the_corner_does_not_anchor_the_section():
     b = StaticAvoid(AvoidParams())
     b.activate((0.0, 0.0, math.radians(-10.0)), entry_back=0.4, entry_pose=(-0.4, 0.0, 0.0))
     assert b.island_source == 'entry line' and b.frame.yaw0 == pytest.approx(0.0)
+
+
+def test_beside_the_island_hand_over_waits_for_lane_1_or_3():
+    a = _active_at_origin()
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    a.direction, a.plan = 0, None
+    f = a.island[0]
+    assert a.control((f + 0.01, 0.5, 0.0), Inhibit()) is not None      # at the front: drives on
+    assert a.control((f + 0.65, 0.5, math.radians(25.0)), Inhibit()) is not None   # not straight yet
+    assert a.state == ACTIVE
+    assert a.control((f + 0.65, 0.5, math.radians(10.0)), Inhibit()) is None
+    assert a.locked and a.done and 'lane 1' in a.event and 'sign lane 1' in a.event
+
+
+def test_beside_the_island_hand_over_at_the_latest_overshoot():
+    a = _active_at_origin()
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    a.plan = None
+    f = a.island[0] + a.p.handover_past + a.p.handover_overshoot
+    assert a.control((f + 0.01, -0.5, math.radians(30.0)), Inhibit()) is None
+    assert 'heading 30 deg' in a.event and 'no sign' in a.event
+
