@@ -82,14 +82,14 @@ def image_bgr(msg):
 
 
 def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stall=False, image_every=3,
-           legacy_odom=False, old_reference=False):
+           legacy_odom=False, old_reference=False, overrides=None):
     """Same pieces as static_avoid_node: LIMO trigger, costmap, plans, entry line (camera every
     3rd frame), island from the entry line, hand-over."""
     cam = cam or CameraModel()          # limo2 = car 7, the 11-05 bags
     white = WhiteParams()
     entry = EntryLineTracker()
     frames = 0
-    p = AvoidParams(lane_width=lane_width)
+    p = AvoidParams(lane_width=lane_width, **(overrides or {}))
     if old_reference:       # before 11-12: start heading kept, 15 deg limit, fits taken while turning
         p = AvoidParams(lane_width=lane_width, reframe=False, lane_fit_search_deg=20.0,
                         lane_fit_give_up=1.0, lane_ref_rate_max_deg=1e9)
@@ -373,6 +373,8 @@ def main():
                     help='drop what the car\'s node missed while busy (from the bag\'s /avoid/active gaps)')
     ap.add_argument('--image-every', type=int, default=3,
                     help='camera frames per processed one: 3 = the 10 Hz topic, 5 = 6 Hz (dark venue)')
+    ap.add_argument('--param', action='append', default=[], metavar='NAME=JSON',
+                    help='AvoidParams override, e.g. --param static_only=false --param safety=0.03')
     ap.add_argument('--shadow', action='store_true',
                     help='whole-course bags: mission states, entry lines, and every stretch where '
                          'our lane looked blocked (started or why not)')
@@ -383,18 +385,20 @@ def main():
     ap.add_argument('--legacy-odom', action='store_true',
                     help='the 11-10 odometer: v * dt with gaps capped at 0.1 s, queue depths 20 / 50')
     a = ap.parse_args()
+    import json
+    overrides = {k: json.loads(v) for k, v in (x.split('=', 1) for x in a.param)}
 
     direction = None if a.direction == 'none' else (None if a.direction == 'auto' else int(a.direction))
     rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
                  stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
-                 old_reference=a.old_reference)
+                 old_reference=a.old_reference, overrides=overrides)
     if a.direction == 'auto' and rec['trail']:
         driven = [d for t, s, d, _ in rec['trail'] if s > 0.5 and t <= a.t_to]
         end_lane = lane_of(driven[-1], rec['p']) if driven else 2
         direction = {1: 0, 3: 1}.get(end_lane)
         rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
                      stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
-                 old_reference=a.old_reference)
+                 old_reference=a.old_reference, overrides=overrides)
     if rec.get('stalls'):
         print(f'emulated busy node: {rec["stalls"][0]} stalls, {rec["stalls"][1]} messages dropped'
               f'{" (11-10 odometer)" if a.legacy_odom else ""}')
