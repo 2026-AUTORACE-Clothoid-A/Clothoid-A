@@ -36,7 +36,7 @@ import numpy as np
 import yaml
 
 DOMAIN = os.environ.setdefault('ROS_DOMAIN_ID', '77')
-os.environ.setdefault('ROS_LOCALHOST_ONLY', '1')
+os.environ['ROS_LOCALHOST_ONLY'] = '1'    # as the simulator and the nodes it starts (a shell's 0 cut them off)
 
 import rclpy  # noqa: E402
 from geometry_msgs.msg import Twist  # noqa: E402
@@ -55,6 +55,26 @@ ROW = {1: 'lower', 2: 'middle', 3: 'upper'}
 X_MIN, COL_W, LIMO_L, LIMO_W = 4.268, (8.030 - 4.268) / 8, 0.322, 0.220
 CAR_L, CAR_W, WHEELBASE = 0.322, 0.220, 0.2
 SPAWN = (9.3, 0.94, math.pi)          # 0.66 m before the entry line (corner exit), lane 2
+# --corner: from before the crosswalk on the right-hand road (x 9.58, driving -y), through the 90 deg
+# right turn into lane 2 (1112 car runs: the avoidance started in the turn, 25~30 deg before its end,
+# and the turn ended after the entry line: lane_main turns late and wide). The road's centre line
+# (between the yellow arcs of track_geometry.json, outer r 0.80 about (9.08, 1.44), inner r 0.60
+# about (8.73, 1.79)) is r 0.70 about (8.88, 1.64) and ends 0.24 m before the entry line; the driver
+# takes r 1.08 about (8.50, 2.02) instead, still on the road, ending 0.14 m after it
+CORNER_SPAWN = (9.58, 3.0, -math.pi / 2)
+CORNER_C, CORNER_R = (8.50, 2.02), 1.08
+
+
+def corner_path(step=0.02):
+    """Lane 2 centre line from CORNER_SPAWN through the turn and on along lane 2, (N, 2)."""
+    x0, y0 = CORNER_SPAWN[0], CORNER_SPAWN[1]
+    cx, cy = CORNER_C
+    down = np.column_stack((np.full(int((y0 - cy) / step), x0), np.arange(y0, cy, -step)))
+    a = np.arange(0.0, -math.pi / 2, -step / CORNER_R)
+    arc = np.column_stack((cx + CORNER_R * np.cos(a), cy + CORNER_R * np.sin(a)))
+    xs = np.arange(cx, 0.0, -step)
+    along = np.column_stack((xs, np.full_like(xs, LANE_Y[2])))
+    return np.vstack((down, arc, along))
 END_X = 3.3                           # past the island tip by ~1 m: judged here
 
 
@@ -73,6 +93,15 @@ def layouts(kind, count, seed):
                 ('1108 run3 (L2 c7, L1 c6)', {2: [7], 1: [6]}),
                 ('1108 run6-9 (L2 c3, L3 c4)', {2: [3], 3: [4]}),
                 ('sim 7 cars', {3: [3, 8], 2: [4, 5, 7], 1: [2, 6]})]
+    if kind == 'corner':
+        # with --corner: a lane 2 LIMO in column 8 (rear 0.69 m after the entry line) or 7 (1.16 m)
+        # is 1.5 m ahead while the car is still in the turn
+        return [('corner L2 c8, L3 c7', {2: [8], 3: [7]}),
+                ('corner L2 c8, L1 c7', {2: [8], 1: [7]}),
+                ('corner L2 c8, L3 c5', {2: [8], 3: [5]}),
+                ('corner L2 c8, L1 c5', {2: [8], 1: [5]}),
+                ('corner L2 c7, L3 c6', {2: [7], 3: [6]}),
+                ('corner L2 c7, L1 c5, L3 c4', {2: [7], 1: [5], 3: [4]})]
     rng = np.random.default_rng(seed)
     seen, out = set(), []
     while len(out) < count:
@@ -89,7 +118,11 @@ def layouts(kind, count, seed):
 def write_map(tmp, cells):
     with open(os.path.join(SIM, 'src/limo_parking_sim/config/parking_map.yaml'), encoding='utf-8') as f:
         world = yaml.safe_load(f)
-    world['avoidance_layout']['occupied'] = {ROW[lane]: cols for lane, cols in cells.items()}
+    lay = world['avoidance_layout']
+    lay['occupied'] = {ROW[lane]: cols for lane, cols in cells.items()}
+    top = max(c for cols in cells.values() for c in cols)
+    if top > lay['columns']:         # column 9: one more 0.470 m column towards the entry line
+        lay['columns'], lay['x_max'] = top, X_MIN + top * COL_W
     path = os.path.join(tmp, 'map.yaml')
     with open(path, 'w', encoding='utf-8') as f:
         yaml.safe_dump(world, f)
@@ -132,9 +165,10 @@ def on_island(car):
 
 
 class Driver(Node):
-    def __init__(self, direction, sign_at, speed=0.3):
+    def __init__(self, direction, sign_at, speed=0.3, corner=False):
         super().__init__('simul_batch_driver', parameter_overrides=[Parameter('use_sim_time', value=True)])
         self.direction, self.sign_at, self.speed = direction, sign_at, speed
+        self.path = corner_path() if corner else None
         self.pose = None
         self.active = False
         self.was_active = False
@@ -201,6 +235,9 @@ class Driver(Node):
         else:
             yt, ld = self.lane_target(), 0.45
             px, py = x - ld, yt                           # look-ahead on the lane, driving to -x
+            if self.path is not None and not self.was_active:      # the corner, then lane 2
+                k = int(np.argmin(np.hypot(self.path[:, 0] - x, self.path[:, 1] - y)))
+                px, py = self.path[min(k + int(ld / 0.02), len(self.path) - 1)]
             dx, dy = px - x, py - y
             lx = math.cos(yaw) * dx + math.sin(yaw) * dy
             ly = -math.sin(yaw) * dx + math.cos(yaw) * dy
@@ -228,7 +265,7 @@ def stop(proc):
 
 
 def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN, image_every=0,
-            record=False):
+            record=False, corner=False):
     tmp = tempfile.mkdtemp(prefix='simul_batch_')
     env = dict(os.environ, ROS_DOMAIN_ID=DOMAIN, ROS_LOCALHOST_ONLY='1')
     map_path = write_map(tmp, cells)
@@ -255,7 +292,7 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN,
         # the driver's single thread it passed ~1 frame/s of the 30 Hz raw image
         relay = start(f'source /opt/ros/humble/setup.bash && python3 {RELAY} {image_every}',
                       open(os.path.join(tmp, 'relay.log'), 'w'), env)
-    drv = Driver(direction, sign_at)
+    drv = Driver(direction, sign_at, corner=corner)
     limos = [(cell_x(c), LANE_Y[lane]) for lane, cols in cells.items() for c in cols]
     track, min_gap, island, ok_start, arrived = [], math.inf, None, False, False
     t_wall = time.time()
@@ -307,7 +344,9 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN,
     elif want is not None and lane != want:
         why.append('lane')
     lanes = []
-    for _, _, ty, _, act in track:
+    for _, tx, ty, _, act in track:
+        if tx > ENTRY_X:                                  # the corner (--corner) is no lane
+            continue
         k = min(LANE_Y, key=lambda j: abs(LANE_Y[j] - ty))
         if not lanes or lanes[-1] != k:
             lanes.append(k)
@@ -324,7 +363,7 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--set', choices=('fixed', 'random'), default='fixed')
+    ap.add_argument('--set', choices=('fixed', 'random', 'corner'), default='fixed')
     ap.add_argument('--count', type=int, default=20, help='random layouts')
     ap.add_argument('--seed', type=int, default=7)
     ap.add_argument('--conf', action='append', default=[], help='name={static_avoid params as JSON}')
@@ -339,6 +378,9 @@ def main():
                          '(3 = the car\'s 10 Hz throttle, 5 = 6 Hz); 0 = avoid reads the raw image')
     ap.add_argument('--spawn', type=float, nargs=3, default=list(SPAWN), metavar=('X', 'Y', 'YAW'),
                     help='start pose in map coordinates (default: corner exit, lane 2)')
+    ap.add_argument('--corner', action='store_true',
+                    help='start before the crosswalk and drive the 90 deg right turn into lane 2 (the '
+                         'avoidance may start in the turn, as on the 1112 car runs); overrides --spawn')
     ap.add_argument('--json', default=None, help='write every result here')
     a = ap.parse_args()
     confs = {}
@@ -355,8 +397,9 @@ def main():
             for name, cells in lays:
                 for sign in a.sign:
                     d = {'L': 0, 'R': 1}[sign]
-                    r = run_one(name, cells, d, conf, a.sign_at, a.t_max, a.keep, tuple(a.spawn),
-                                a.image_every, a.record)
+                    r = run_one(name, cells, d, conf, a.sign_at, a.t_max, a.keep,
+                                CORNER_SPAWN if a.corner else tuple(a.spawn), a.image_every, a.record,
+                                a.corner)
                     r['conf'] = cname
                     results.append(r)
                     print(f'[{cname}] {name} sign {sign}: {"ok" if not r["why"] else " ".join(r["why"])}'

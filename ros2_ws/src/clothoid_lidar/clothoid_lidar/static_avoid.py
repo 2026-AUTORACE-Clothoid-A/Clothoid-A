@@ -60,6 +60,9 @@ class AvoidParams:
     island_from_entry_min: float = 4.40
     island_from_entry_max: float = 6.15
     entry_max_back: float = 3.0       # m, an entry-line crossing this recent anchors the section
+    # ... unless the car turned more than this since: that line was before the corner (the crosswalk;
+    # the simulator's --corner runs anchored on it, 90 deg off the lanes, and stuck)
+    entry_max_turn_deg: float = 45.0
     island_s_min: float = 4.65       # m from the start, entry line not seen; 1108 run 1 2 3 10 11: 4.61~4.74
     island_s_max: float = 6.40       # front + the island length of the rule drawing (1.75)
     island_tip: float = 0.25          # m, the painted island narrows to a point at both ends
@@ -166,11 +169,18 @@ class AvoidParams:
     lane_yaw_max_deg: float = 15.0    # largest turn of the lane frame against the section frame
     lane_offset_max: float = 0.10     # m, largest sideways correction
     lane_fit_window: float = 0.5      # m past the entry line whose frames set the lane frame
-    lane_fit_give_up: float = 1.0     # m past the entry line
+    lane_fit_give_up: float = 1.8     # m past the entry line (the car may still be turning there)
     lane_fit_frames: int = 5
     lane_fit_lines: int = 2           # lines per frame
     lane_fit_spread_deg: float = 3.0  # median absolute deviation of the direction
-    lane_fit_search_deg: float = 20.0
+    lane_fit_search_deg: float = 40.0  # around the heading at the line; a fit on the edge is dropped
+    # the start can come while the car still turns out of the corner (1112 runs: 25~30 deg off the
+    # lane): frames taken while turning faster than this are not used for the direction, and a
+    # direction more than lane_yaw_max_deg off the section frame turns the section frame (costmap
+    # carried over) up to lane_ref_max_deg
+    lane_ref_rate_max_deg: float = 25.0   # deg/s
+    lane_ref_max_deg: float = 40.0
+    reframe: bool = True
     # direction from the white dashes ahead, as soon as the mission starts (entry line not needed)
     lane_start_frames: int = 3
     lane_start_give_up: float = 1.0   # m from the start: go on with the start heading, tracked
@@ -215,10 +225,38 @@ class PoseTracker:
         self.last_pos: Optional[Tuple[float, float]] = None   # /odom position of the last message
         self.trace: List[Tuple[float, float, float, float]] = []
         self.dtrace: List[Tuple[float, float]] = []      # (t, odometer)
+        self.ytrace: List[Tuple[float, float]] = []      # (t, IMU yaw unwrapped)
 
     def imu(self, t: float, yaw: float) -> None:
         # unwrap so interpolation never jumps by 2 pi
         self.yaw = yaw if self.yaw is None else self.yaw + wrap(yaw - self.yaw)
+        # the heading at an image's time comes from here, not from `trace` (stored with /odom): a
+        # gap in /odom (a busy node) must not turn the heading in a straight line through a corner
+        if self.ytrace and t <= self.ytrace[-1][0]:
+            return
+        self.ytrace.append((t, self.yaw))
+        while self.ytrace and self.ytrace[0][0] < t - self.history:
+            self.ytrace.pop(0)
+
+    def yaw_at(self, t: float) -> Optional[float]:
+        """IMU heading at time t (unwrapped), interpolated, clamped to the history."""
+        yt = self.ytrace
+        if not yt:
+            return None
+        i = bisect.bisect_left(yt, (t,))
+        if i <= 0:
+            return yt[0][1]
+        if i >= len(yt):
+            return yt[-1][1]
+        (ta, ya), (tb, yb) = yt[i - 1], yt[i]
+        return ya + (t - ta) / max(tb - ta, 1e-9) * (yb - ya)
+
+    def yaw_rate(self, t: float, window: float = 0.2) -> Optional[float]:
+        """rad/s over the `window` before t; None without that much IMU history."""
+        yt = self.ytrace
+        if not yt or yt[0][0] > t - window + 1e-3:
+            return None
+        return (self.yaw_at(t) - self.yaw_at(t - window)) / window
 
     def odom(self, t: float, v: float, pos: Optional[Tuple[float, float]] = None,
              max_jump: float = 0.5, max_gap: float = 2.0) -> None:
@@ -297,9 +335,9 @@ class PoseTracker:
         """Pose at time t, interpolated, clamped to the history."""
         tr = self.trace
         if t <= tr[0][0]:
-            return tr[0][1:]
+            return (*tr[0][1:3], self._imu_yaw(t, tr[0][3]))
         if t >= tr[-1][0]:
-            return tr[-1][1:]
+            return (*tr[-1][1:3], self._imu_yaw(t, tr[-1][3]))
         lo, hi = 0, len(tr) - 1
         while hi - lo > 1:
             mid = (lo + hi) // 2
@@ -309,7 +347,12 @@ class PoseTracker:
                 hi = mid
         a, b = tr[lo], tr[hi]
         f = (t - a[0]) / max(b[0] - a[0], 1e-9)
-        return tuple(a[k] + f * (b[k] - a[k]) for k in (1, 2, 3))
+        x, y, yaw = (a[k] + f * (b[k] - a[k]) for k in (1, 2, 3))
+        return x, y, self._imu_yaw(t, yaw)
+
+    def _imu_yaw(self, t: float, fallback: float) -> float:
+        yaw = self.yaw_at(t)
+        return fallback if yaw is None else yaw
 
 
 @dataclass
@@ -406,6 +449,18 @@ class Costmap:
             flat = np.unique(i[ok] * self.nd + j[ok])
             self.count.reshape(-1)[flat] += p.hit_add
         np.clip(self.count, 0, p.hit_max, out=self.count)
+        self._inflate()
+
+    def resample(self, old: 'SectionFrame', new: 'SectionFrame') -> None:
+        """Carry the hit / clear counts over to a turned section frame (same world points)."""
+        p = self.p
+        i, j = np.meshgrid(np.arange(self.ns), np.arange(self.nd), indexing='ij')
+        centres = np.column_stack(((i.ravel() + 0.5) * p.resolution + p.grid_s_min,
+                                   (j.ravel() + 0.5) * p.resolution - self.d_max))
+        oi, oj, ok = self.cells(old.points_to(new.points_from(centres)))
+        count = np.zeros_like(self.count)
+        count.reshape(-1)[ok] = self.count[oi[ok], oj[ok]]
+        self.count = count
         self._inflate()
 
     def _inflate(self) -> None:
@@ -866,7 +921,9 @@ class StaticAvoid:
         self.costmap = Costmap(self.p)
         self.lane_frame, self.lane_source, self.lane_shift = None, None, 0.0
         # a line still ahead (entry_back < 0) is handled by reanchor() when the base reaches it
-        anchored = entry_back is not None and 0.0 <= entry_back <= p.entry_max_back
+        anchored = (entry_back is not None and 0.0 <= entry_back <= p.entry_max_back
+                    and (entry_pose is None or abs(wrap(pose_world[2] - entry_pose[2]))
+                         <= math.radians(p.entry_max_turn_deg)))
         if anchored and entry_pose is not None:
             # the section frame starts on the entry line, along the car's heading there: the car may
             # still be turning out of the corner before the section when it starts (1108 bags), and a
@@ -948,16 +1005,17 @@ class StaticAvoid:
         self.lane_source = fit                       # judged once
         if not -1.0 <= s <= p.entry_late_max or abs(d) >= 1.5 * p.lane_width:
             return False
-        if abs(yaw) > math.radians(p.lane_yaw_max_deg):
+        if abs(yaw) > math.radians(self.yaw_limit_deg()):
             self.event = 'lane fit rejected: %.1f deg' % math.degrees(yaw)
             return False
+        turned = self.reframe_if_needed(fit.yaw0, yaw)
         self.lane_frame, self.lane_shift = fit, 0.0
         self.entry_s = 0.0
         self.last_end = None
         if self.island_source != 'lane tracker':
             self.island = (p.island_from_entry_min, p.island_from_entry_max)
             self.island_source = 'entry line'
-        self.event = 'lane fit %+.1f deg' % math.degrees(yaw)
+        self.event = 'lane fit %+.1f deg%s' % (math.degrees(yaw), turned)
         return True
 
     def on_start_fit(self, fit: SectionFrame) -> bool:
@@ -966,13 +1024,31 @@ class StaticAvoid:
         if self.state != ACTIVE or self.lane_frame is not None:
             return False
         yaw = self.frame.to_section(fit.x0, fit.y0, fit.yaw0)[2]
-        if abs(yaw) > math.radians(self.p.lane_yaw_max_deg):
+        if abs(yaw) > math.radians(self.yaw_limit_deg()):
             self.event = 'start fit rejected: %.1f deg' % math.degrees(yaw)
             return False
+        turned = self.reframe_if_needed(fit.yaw0, yaw)
         self.lane_frame, self.lane_shift = fit, 0.0
         self.last_end = None
-        self.event = 'start fit %+.1f deg' % math.degrees(yaw)
+        self.event = 'start fit %+.1f deg%s' % (math.degrees(yaw), turned)
         return True
+
+    def yaw_limit_deg(self) -> float:
+        return self.p.lane_ref_max_deg if self.p.reframe else self.p.lane_yaw_max_deg
+
+    def reframe_if_needed(self, lane_yaw: float, off: float) -> str:
+        """A lane direction `off` rad from the section frame: beyond lane_yaw_max_deg the section
+        frame (and its costmap, the lanes' grid) turns to it, about the same origin. The start came
+        in the corner, along a heading that was not the lane's. Returns a note for the log."""
+        if abs(off) <= math.radians(self.p.lane_yaw_max_deg):
+            return ''
+        old = self.frame
+        new = SectionFrame(old.x0, old.y0, lane_yaw)
+        if self.costmap is not None:
+            self.costmap.resample(old, new)
+        self.frame = new
+        self.plan, self.sequence, self.last_end = None, None, None
+        return ', section frame turned'
 
     def track_from_start_heading(self) -> None:
         """No start fit: track the lane lines from the start heading all the same."""
@@ -1219,19 +1295,24 @@ class LaneFitter:
         p = self.p
         pose = tracker.latest() if t is None else tracker.at(t)
         odometer = tracker.distance if t is None else tracker.distance_at(t)
+        t_rate = t if t is not None else (tracker.ytrace[-1][0] if tracker.ytrace else None)
+        rate = tracker.yaw_rate(t_rate) if t_rate is not None else None
+        # turning hard (still in the corner): the lines' angle and the heading at that instant do not
+        # go together well enough for the direction (1112 run 02: -37.8 deg)
+        steady = rate is None or abs(rate) <= math.radians(p.lane_ref_rate_max_deg)
         c = entry.recent(odometer, p.lane_fit_give_up, 0.0)
         if c is not None and c.odometer != self.closed:
             entry_pose = tracker.at_distance(c.odometer)
             if entry_pose is not None:
                 if c.odometer != self.crossing:
                     self.crossing, self.samples = c.odometer, []
-                obs = find_lane_lines(bgr, self.cam, self.colours, wrap(entry_pose[2] - pose[2]),
-                                      math.radians(p.lane_fit_search_deg))
-                if obs is not None and len(obs.lines) >= p.lane_fit_lines:
-                    self.samples.append((pose, obs))
+                if steady:
+                    obs = self._lines(bgr, wrap(entry_pose[2] - pose[2]))
+                    if obs is not None:
+                        self.samples.append((pose, obs))
                 self._try_fit(entry_pose, odometer - c.odometer)
         if avoid.state == ACTIVE:
-            self._start_fit(bgr, avoid, odometer, pose)
+            self._start_fit(bgr, avoid, odometer, pose, steady)
             if self.fit is not None:
                 avoid.on_lane_fit(self.fit)
             if avoid.lane_frame is not None:
@@ -1239,7 +1320,19 @@ class LaneFitter:
                                       math.radians(p.lane_track_search_deg))
                 avoid.update_lane(pose, obs)
 
-    def _start_fit(self, bgr, avoid: StaticAvoid, odometer: float, pose) -> None:
+    def _lines(self, bgr, centre: float, white_only: bool = False) -> Optional[LaneObservation]:
+        """Lane lines for a fit: enough of them, and not on the edge of the search (the lines'
+        direction is then further off, 1112: -20.0 deg with a 20 deg search)."""
+        p = self.p
+        half = math.radians(p.lane_fit_search_deg)
+        obs = find_lane_lines(bgr, self.cam, self.colours, centre, half, white_only=white_only)
+        if obs is None or len(obs.lines) < p.lane_fit_lines:
+            return None
+        if abs(wrap(obs.angle - centre)) >= half - math.radians(0.5):
+            return None
+        return obs
+
+    def _start_fit(self, bgr, avoid: StaticAvoid, odometer: float, pose, steady: bool = True) -> None:
         """The white dashes ahead give the lane direction right after the start, the car may still be
         coming out of the corner. If they do not, the tracking still runs (from the start heading)."""
         p = self.p
@@ -1252,9 +1345,8 @@ class LaneFitter:
         if avoid.lane_frame is not None:
             self.start_open = False
             return
-        obs = find_lane_lines(bgr, self.cam, self.colours, wrap(frame.yaw0 - pose[2]),
-                              math.radians(p.lane_fit_search_deg), white_only=True)
-        if obs is not None and len(obs.lines) >= p.lane_fit_lines:
+        obs = self._lines(bgr, wrap(frame.yaw0 - pose[2]), white_only=True) if steady else None
+        if obs is not None:
             self.start_samples.append((pose, obs))
         origin = (frame.x0, frame.y0, frame.yaw0)
         fit = self._fit(origin, self.start_samples, p.lane_start_frames)

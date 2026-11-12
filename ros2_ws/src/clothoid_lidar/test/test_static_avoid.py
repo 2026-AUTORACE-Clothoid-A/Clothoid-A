@@ -563,8 +563,11 @@ def test_lane_fit_ignores_other_lines_and_big_turns():
     a.activate((0.0, 0.0, 0.0))
     assert not a.on_lane_fit(SectionFrame(-1.7, 0.0, 0.0))        # stop line before the corner
     assert not a.on_lane_fit(SectionFrame(4.0, 0.0, 0.0))         # a line on the A / B road
-    assert not a.on_lane_fit(SectionFrame(0.1, 0.0, math.radians(25.0)))
+    assert not a.on_lane_fit(SectionFrame(0.1, 0.0, math.radians(45.0)))
     assert a.lane_frame is None
+    off = StaticAvoid(AvoidParams(reframe=False))       # the old limit: 15 deg
+    off.activate((0.0, 0.0, 0.0))
+    assert not off.on_lane_fit(SectionFrame(0.1, 0.0, math.radians(25.0)))
 
 
 def test_slow_update_pulls_towards_the_lines_and_is_limited():
@@ -637,8 +640,26 @@ def test_start_fit_turns_the_lanes_and_keeps_the_island():
 
 def test_start_fit_refuses_a_big_turn():
     a = _active_at_origin()
-    assert not a.on_start_fit(SectionFrame(0.0, 0.0, math.radians(25.0)))
+    assert not a.on_start_fit(SectionFrame(0.0, 0.0, math.radians(45.0)))
     assert a.lane_frame is None
+
+
+def test_a_start_in_the_corner_turns_the_section_frame():
+    """1112 runs: started 25 deg before the end of the corner. The entry fit says so: the section
+    frame turns to the lane, the LIMO seen before stays where it is in the world, and the car
+    driving along lane 1 is in lane 1 (it read lane 3 all the way)."""
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, math.radians(25.0)))          # heading 25 deg left of the lane
+    limo = np.array([[1.5, 0.0]])                       # world, lane 2 ahead
+    origin = np.array([0.1, 0.0])
+    a.costmap.update(a.frame.points_to(limo), a.frame.points_to(origin[None])[0])
+    a.costmap.update(a.frame.points_to(limo), a.frame.points_to(origin[None])[0])
+    old_hit = a.costmap.occupied_at(a.frame.points_to(limo)).item()
+    assert a.on_lane_fit(SectionFrame(0.2, 0.0, 0.0))
+    assert 'turned' in a.event and a.frame.yaw0 == pytest.approx(0.0)
+    assert old_hit and a.costmap.occupied_at(a.frame.points_to(limo)).item()
+    assert lane_of(a.lane_pose((3.0, 0.5, 0.0))[1], a.p) == 1
+    assert a.plan is None and a.sequence is None
 
 
 def test_entry_line_fit_replaces_the_start_fit():
@@ -782,6 +803,27 @@ def test_poses_by_distance_after_backing_up():
     assert keys == sorted(keys) and min(np.diff(keys)) > 0.005
 
 
+def test_heading_at_an_image_time_follows_the_imu_through_an_odom_gap():
+    """/odom silent for 1 s in a turn (1112 car: depth 1 behind the images): the heading at an
+    image's time is the IMU's, not a straight line between the two /odom messages."""
+    tr = PoseTracker()
+    for k in range(101):                    # IMU 100 Hz, turning 40 deg/s
+        t = 0.01 * k
+        tr.imu(t, math.radians(-40.0 * t))
+        if k in (0, 100):
+            tr.odom(t, 0.3, (0.3 * t, 0.0))
+    assert math.degrees(tr.at(0.5)[2]) == pytest.approx(-20.0, abs=0.1)
+    tr2 = PoseTracker()
+    for k in range(101):                    # turned at the start of the gap, straight after
+        t = 0.01 * k
+        tr2.imu(t, math.radians(-40.0 * min(t, 0.5)))
+        if k in (0, 100):
+            tr2.odom(t, 0.3, (0.3 * t, 0.0))
+    assert math.degrees(tr2.at(0.75)[2]) == pytest.approx(-20.0, abs=0.1)   # the trace says -15
+    assert math.degrees(tr2.yaw_rate(0.4)) == pytest.approx(-40.0, abs=0.5)
+    assert math.degrees(tr2.yaw_rate(0.9)) == pytest.approx(0.0, abs=0.5)
+
+
 def test_entry_crossing_without_a_pose_is_ignored():
     sa = StaticAvoid(AvoidParams())
     sa.activate((0.0, 0.0, 0.0))
@@ -799,3 +841,15 @@ def test_odometer_at_an_image_stamp():
     assert tr.distance == pytest.approx(0.5)
     assert tr.distance_at(0.6) == pytest.approx(0.3, abs=1e-6)
     assert tr.distance_at(5.0) == pytest.approx(0.5)            # after the history: the latest
+
+
+def test_a_line_before_the_corner_does_not_anchor_the_section():
+    """The crosswalk before the 90 deg corner, 1.2 m back: started in the turn, the section frame
+    must not take that line's heading (simulator --corner: 90 deg off, stuck)."""
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, math.radians(-60.0)), entry_back=1.2,
+               entry_pose=(0.5, 1.0, math.radians(-90.0 + 90.0)))
+    assert a.island_source == 'estimate' and a.frame.yaw0 == pytest.approx(math.radians(-60.0))
+    b = StaticAvoid(AvoidParams())
+    b.activate((0.0, 0.0, math.radians(-10.0)), entry_back=0.4, entry_pose=(-0.4, 0.0, 0.0))
+    assert b.island_source == 'entry line' and b.frame.yaw0 == pytest.approx(0.0)

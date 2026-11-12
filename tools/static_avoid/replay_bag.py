@@ -79,7 +79,7 @@ def image_bgr(msg):
 
 
 def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stall=False, image_every=3,
-           legacy_odom=False):
+           legacy_odom=False, old_reference=False):
     """Same pieces as static_avoid_node: LIMO trigger, costmap, plans, entry line (camera every
     3rd frame), island from the entry line, hand-over."""
     cam = cam or CameraModel()          # limo2 = car 7, the 11-05 bags
@@ -87,12 +87,15 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
     entry = EntryLineTracker()
     frames = 0
     p = AvoidParams(lane_width=lane_width)
+    if old_reference:       # before 11-12: start heading kept, 15 deg limit, fits taken while turning
+        p = AvoidParams(lane_width=lane_width, reframe=False, lane_fit_search_deg=20.0,
+                        lane_fit_give_up=1.0, lane_ref_rate_max_deg=1e9)
     avoid = StaticAvoid(p)
     tracker = PoseTracker()
     fitter = LaneFitter(p, cam, ColourParams())
     cone = ConeMission(ConeSorter(SorterParams()))
     rec = dict(events=[], plans=[], trail=[], limos=[], cost_max=None, p=p, avoid=avoid,
-               crossings=[])
+               crossings=[], yaw=[], starts=[])
     t0 = None
     on_since, on_total = None, 0.0
     s = 0.0
@@ -108,6 +111,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         if topic == '/imu':
             q = msg.orientation
             tracker.imu(s, yaw_from_quaternion(q.x, q.y, q.z, q.w))
+            rec['yaw'].append((s, tracker.yaw))
             continue
         if topic == '/camera/color/image_raw':
             frames += 1
@@ -121,6 +125,10 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             fitter.on_frame(bgr, avoid, tracker, entry)
             if avoid.event != had and 'fit' in avoid.event:
                 rec['events'].append((s, avoid.event))
+                st = rec['starts'][-1] if rec['starts'] else None
+                if st is not None and 'rejected' not in avoid.event and 'first_fit' not in st:
+                    st['first_fit'] = (s - st['t'], tracker.distance - st['odometer'],
+                                       avoid.event.split(' fit')[0])
             continue
         if topic == '/odom':
             q = msg.pose.pose.position
@@ -155,6 +163,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         if started:
             rec['events'].append((s, avoid.event.upper() + f' (odometer {tracker.distance:.2f} m)'))
             on_since = s
+            rec['starts'].append(dict(t=s, odometer=tracker.distance, yaw=avoid.frame.yaw0))
         if avoid.state != ACTIVE:
             continue
         ok = np.isfinite(r) & (r > msg.range_min) & (r < msg.range_max)
@@ -178,6 +187,9 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             sec = avoid.lane_pose(tracker.latest())
             rec['handover'] = dict(t=s, s=sec[0], d=sec[1], island=avoid.island,
                                    source=avoid.island_source)
+            if rec['starts']:
+                rec['starts'][-1].update(end=s, frame=avoid.frame.yaw0,
+                                         lane=(avoid.lane_frame or avoid.frame).yaw0)
             on_total += s - on_since
     if avoid.state == ACTIVE and on_since is not None:
         rec['events'].append((s, 'still active at the end of the window'))
@@ -253,6 +265,57 @@ def compare(rec, ahead):
     return np.array(out)
 
 
+def steady_yaw(yaw, t0, t1, rate_max=math.radians(5.0), hold=1.0):
+    """Median IMU heading between t0 and t1 over the stretches turning slower than rate_max for at
+    least `hold` s: the car following a lane, i.e. the lane's direction. None without any."""
+    a = np.array([q for q in yaw if t0 <= q[0] <= t1])
+    if len(a) < 10:
+        return None
+    rate = np.abs(np.gradient(a[:, 1], a[:, 0]))
+    k = max(1, int(round(0.2 / max(np.median(np.diff(a[:, 0])), 1e-3))))
+    calm = np.convolve(rate < rate_max, np.ones(k) / k, mode='same') > 0.99
+    keep, run = np.zeros(len(a), bool), 0
+    for i in range(len(a) + 1):
+        if i < len(a) and calm[i]:
+            run += 1
+            continue
+        if run and a[i - 1, 0] - a[i - run, 0] >= hold:
+            keep[i - run:i] = True
+        run = 0
+    return float(np.median(a[keep, 1])) if keep.any() else None
+
+
+def heading_report(rec):
+    """Per start: how far the section / lane frame was from the lane (the IMU heading while the
+    car later follows it), and what a corner-based guess (heading before the corner - 90 deg)
+    would have given. Degrees; '-' = not available."""
+    deg = math.degrees
+    t_last = rec['yaw'][-1][0] if rec['yaw'] else 0.0
+    for k, st in enumerate(rec['starts']):
+        end = st.get('end')
+        truth, where = None, ''
+        if end is not None:
+            truth, where = steady_yaw(rec['yaw'], end, min(t_last, end + 8.0)), 'after'
+        if truth is None:
+            truth, where = steady_yaw(rec['yaw'], st['t'], end or t_last), 'during'
+        pre = steady_yaw(rec['yaw'], st['t'] - 6.0, st['t'] - 1.0, hold=0.8)
+        turn = None if pre is None else deg(wrap_angle(st['yaw'] - pre))
+
+        def err(x):
+            return '-' if x is None or truth is None else f'{deg(wrap_angle(x - truth)):+6.1f}'
+        a1 = pre - math.pi / 2 if pre is not None and turn is not None and turn < -20.0 else None
+        ff = st.get('first_fit')
+        fit = '-' if ff is None else f'{ff[2]} {ff[0]:.1f} s / {ff[1]:.2f} m'
+        print(f'  heading #{k + 1}: start {err(st["yaw"])}  frame {err(st.get("frame"))}  '
+              f'lane {err(st.get("lane"))}  | turn before start '
+              f'{"-" if turn is None else f"{turn:+.0f}"}  A1 {err(a1)}  | first fit {fit}  '
+              f'| truth {where} the section')
+
+
+def wrap_angle(a):
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('bag')
@@ -271,19 +334,25 @@ def main():
                     help='drop what the car\'s node missed while busy (from the bag\'s /avoid/active gaps)')
     ap.add_argument('--image-every', type=int, default=3,
                     help='camera frames per processed one: 3 = the 10 Hz topic, 5 = 6 Hz (dark venue)')
+    ap.add_argument('--heading-report', action='store_true',
+                    help='per start: section / lane frame against the lane (IMU while following it)')
+    ap.add_argument('--old-reference', action='store_true',
+                    help='before 11-12: the start heading kept, 15 deg limit, fits taken while turning')
     ap.add_argument('--legacy-odom', action='store_true',
                     help='the 11-10 odometer: v * dt with gaps capped at 0.1 s, queue depths 20 / 50')
     a = ap.parse_args()
 
     direction = None if a.direction == 'none' else (None if a.direction == 'auto' else int(a.direction))
     rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
-                 stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every)
+                 stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
+                 old_reference=a.old_reference)
     if a.direction == 'auto' and rec['trail']:
         driven = [d for t, s, d, _ in rec['trail'] if s > 0.5 and t <= a.t_to]
         end_lane = lane_of(driven[-1], rec['p']) if driven else 2
         direction = {1: 0, 3: 1}.get(end_lane)
         rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
-                     stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every)
+                     stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
+                 old_reference=a.old_reference)
     if rec.get('stalls'):
         print(f'emulated busy node: {rec["stalls"][0]} stalls, {rec["stalls"][1]} messages dropped'
               f'{" (11-10 odometer)" if a.legacy_odom else ""}')
@@ -311,6 +380,8 @@ def main():
         if len(e):
             print(f'  planned vs driven, {ahead:.1f} m ahead: median {100 * np.median(e):.0f} cm, '
                   f'p90 {100 * np.percentile(e, 90):.0f} cm (n {len(e)})')
+    if a.heading_report:
+        heading_report(rec)
     rec['truth'] = [x.split(':') for x in a.truth.split(',') if x]
     if a.plot and rec['plans']:
         plot(a.plot, rec, a.bag, direction, a.snaps)
