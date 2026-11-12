@@ -153,3 +153,20 @@ def test_search_without_a_line_expires():
     logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
     run(logic, 0.0, 'sign_pedestrian')
     assert not run(logic, 9.0, phase='search').stop_arm
+
+
+def test_registered_exploration_outlives_sign_but_skip_does_not_block_other_missions():
+    logic = MissionLogic(flag_params(arm_timeout_sec=1.))
+    assert logic.step(Inputs(now=0., seen={'sign_parking'})).parking_prepare
+    assert logic.step(Inputs(now=2., parking_observing=True)).parking_prepare
+    out = logic.step(Inputs(now=3., parking_observing=True, parking_skipped=True,
+                            seen={'sign_parking', 'sign_slow'}))
+    assert not out.parking_prepare and not out.parking_flag
+    assert out.speed_limit == logic.p.slow_speed
+    assert not out.stop
+
+
+def test_exploration_heartbeat_without_sign_cannot_arm_parking():
+    out = MissionLogic(flag_params()).step(Inputs(now=2., parking_observing=True,
+                                                 parking_line=True, parking_scene=True))
+    assert not out.parking_flag and not out.parking_prepare

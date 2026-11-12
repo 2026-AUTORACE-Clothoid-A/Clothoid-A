@@ -135,3 +135,18 @@ def test_old_level_imu_cannot_label_a_new_tilted_camera_frame(lane):
     node.on_steering_lock(Bool(data=True))
     frame(node)
     assert node.last_steer == level_angle
+
+
+def test_parking_limit_is_independent_allows_zero_and_expires(lane):
+    node, _ = lane
+    node.on_speed_limit(Float32(data=.1))
+    node.on_parking_limit(Float32(data=.2))
+    assert node.current_speed() == pytest.approx(.1)
+    node.on_speed_limit(Float32(data=.5))
+    assert node.current_speed() == pytest.approx(.2)
+    node.on_parking_limit(Float32(data=0.))
+    frame(node)
+    assert node.last_cmd.linear.x == 0.
+    assert node.last_cmd.angular.z == 0.
+    node.parking_limit_stamp = node.get_clock().now()-Duration(seconds=1.)
+    assert node.current_speed() == pytest.approx(.5)

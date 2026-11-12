@@ -122,6 +122,8 @@ class Inputs:
     line_phase: Optional[str] = None    # line stop phase (search/commit/arrived/abort)
     line_speed: Optional[float] = None  # speed limit from the line stop, if any
     parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
+    parking_observing: bool = False # fresh exploration heartbeat after visual registration
+    parking_skipped: bool = False   # search finished without a verified reachable bay
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
     parking_scene: bool = False    # fresh, repeated lidar bay observations
@@ -170,8 +172,8 @@ class MissionLogic:
         if 'sign_parking' in seen and p.parking_enabled:
             self.parking_seen_at = now
         self.parking_armed = (p.parking_enabled and self.parking_seen_at is not None and
-                              now - self.parking_seen_at <= p.arm_timeout_sec and
-                              not self.parking_flag and not inputs.parking_done)
+                              (now - self.parking_seen_at <= p.arm_timeout_sec or inputs.parking_observing) and
+                              not self.parking_flag and not inputs.parking_done and not inputs.parking_skipped)
         parking_entry = (inputs.parking_line and inputs.parking_scene if p.require_scene_confirmation
                          else inputs.parking_line or not p.parking_at_stopline)
         if self.parking_armed and parking_entry and self.state == DRIVE:

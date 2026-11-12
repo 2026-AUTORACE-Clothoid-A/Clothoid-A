@@ -13,6 +13,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('six_bays', default_value='false',
+                             description='Use verified grid targets, including outside bays'),
+        DeclareLaunchArgument('target_bay', default_value='0',
+                             description='0: automatic, 1..3: lane-side, 4..6: inner row'),
         Node(
             package='clothoid_parking',
             executable='parking',
@@ -22,6 +26,8 @@ def generate_launch_description():
                 os.path.join(bringup_share, 'config', 'topics.yaml'),
                 os.path.join(parking_share, 'config', 'parking.yaml'),
                 {'debug': LaunchConfiguration('debug')},
+                {'layout.control_enabled': LaunchConfiguration('six_bays'),
+                 'layout.target_bay': LaunchConfiguration('target_bay')},
             ],
         ),
     ])

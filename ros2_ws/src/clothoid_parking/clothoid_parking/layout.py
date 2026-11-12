@@ -22,6 +22,7 @@ def unique_cells(points, resolution):
 class LayoutParams:
     enabled: bool = True
     control_enabled: bool = False  # observe until bag + closed-loop validation is sufficient
+    target_bay: int = 0  # 0: automatic, 1..6: requested bay (never bypasses clearance checks)
     columns: int = 3
     rows: int = 2
     bay_width: float = .50
@@ -48,6 +49,8 @@ class ParkingLayout:
         self.p = params or LayoutParams()
         if self.p.grid <= 0 or self.p.scan_hz <= 0 or self.p.side not in (-1, 1):
             raise ValueError('invalid layout geometry/rate')
+        if not 0 <= self.p.target_bay <= self.p.rows*self.p.columns:
+            raise ValueError('target_bay must be 0 (auto) or a valid one-based bay number')
         self.reset()
 
     def reset(self):
@@ -167,6 +170,33 @@ class ParkingLayout:
         c, s = math.cos(yaw), math.sin(yaw)
         return np.column_stack((x+c*u.ravel()-s*v.ravel(), y+s*u.ravel()+c*v.ravel()))
 
+    def swept_coverage(self, points, now, pose):
+        """Veto every hit, require free evidence for newly swept cells.
+
+        The current envelope may extend into the rear lidar blind sector. It is
+        not labelled free: only its unchanged cells are omitted from the unknown
+        check. Any occupied cell, including inside that envelope, still vetoes.
+        Goal footprints use coverage(), without this exception.
+        """
+        keys = unique_cells(points, self.p.grid)
+        current = set(map(tuple, unique_cells(self.footprint(pose.x, pose.y, pose.yaw), self.p.grid)))
+        unknown = False
+        for key in map(tuple, keys):
+            value = self.cells.get(key)
+            fresh = value is not None and 0 <= now-value[0] <= self.p.evidence_age
+            if fresh and value[1]:
+                return 'occupied'
+            if not fresh and key not in current:
+                unknown = True
+        return 'unknown' if unknown else 'free'
+
+    @staticmethod
+    def turn_remaining(bay, pose, plan):
+        rx = pose.x-plan.rear_offset*math.cos(pose.yaw)
+        ry = pose.y-plan.rear_offset*math.sin(pose.yaw)
+        return ((bay.face_x-rx)*math.cos(bay.row_yaw)
+                +(bay.face_y-ry)*math.sin(bay.row_yaw)-plan.turn_radius-plan.turn_lead)
+
     def path(self, bay, pose, plan):
         """Swept envelope of the existing forward arc + straight entry, in world coordinates."""
         n = np.array([math.cos(bay.row_yaw), math.sin(bay.row_yaw)])
@@ -218,11 +248,19 @@ class ParkingLayout:
 
     def choose(self, now, pose, plan):
         if self.origin is None or now-self.last_observation > self.p.max_pose_age:
+            if now-self.last_observation > self.p.max_pose_age:
+                self.origin = None
+                self.samples.clear()
             self.selected = None
             self.support_count = 0
             self.counts = [0]*len(self.counts)
             self.states = ['unknown']*len(self.states)
             self.reason = 'no recent consistent visual registration'
+            return None
+        if not 0 <= now-self.last_scan <= .5:
+            self.selected = None
+            self.counts = [0]*len(self.counts)
+            self.reason = 'no recent lidar observation'
             return None
         if self.last_choice_scan == self.last_scan:
             bays = self.bays()
@@ -237,27 +275,36 @@ class ParkingLayout:
         bays = self.bays()
         candidates = []
         for i, bay in enumerate(bays):
+            if self.turn_remaining(bay, pose, plan) < -.02:
+                self.states[i], self.counts[i] = 'passed', 0
+                continue
             space = self.coverage(self.footprint(bay.x, bay.y, bay.entry_yaw), now)
             # Expensive swept area only for an observed empty target.
             path = self.path(bay, pose, plan) if space == 'free' else None
-            route = 'unreachable' if path is None else self.coverage(path, now)
+            route = 'unreachable' if path is None else self.swept_coverage(path, now, pose)
             self.states[i] = space if space != 'free' else ('free' if route == 'free' else 'path_'+route)
             self.counts[i] = self.counts[i]+1 if self.states[i] == 'free' else 0
             if self.counts[i] >= self.p.confirm_scans:
                 candidates.append(i)
+        if self.p.target_bay:
+            candidates = [i for i in candidates if i == self.p.target_bay-1]
+        elif candidates:
+            # Prefer the lane-side row, retaining a stable target within that row.
+            row = min(i//self.p.columns for i in candidates)
+            candidates = [i for i in candidates if i//self.p.columns == row]
         if self.selected not in candidates:
             self.selected = candidates[0] if candidates else None
         self.reason = 'no observed clear bay and approach' if self.selected is None else f'bay {self.selected+1} clear'
         return None if self.selected is None else bays[self.selected]
 
-    def motion_clear(self, now, pose, speed, steer, wheelbase):
+    def motion_clear(self, now, pose, speed, steer, wheelbase, distance=.20):
         if not speed:
             return True
         direction = 1 if speed > 0 else -1
         curvature = math.tan(steer)/wheelbase
         envelope = []
         # Includes a braking/lookahead margin in both forward and reverse motion.
-        for d in np.linspace(0, direction*.20, 8):
+        for d in np.linspace(0, direction*distance, max(8, math.ceil(distance/.03)+1)):
             if abs(curvature) < 1e-6:
                 dx, dy, yaw = d, 0., pose.yaw
             else:
@@ -265,4 +312,4 @@ class ParkingLayout:
                 yaw = pose.yaw+curvature*d
             c, s = math.cos(pose.yaw), math.sin(pose.yaw)
             envelope.append(self.footprint(pose.x+c*dx-s*dy, pose.y+s*dx+c*dy, yaw))
-        return self.coverage(np.concatenate(envelope), now) == 'free'
+        return self.swept_coverage(np.concatenate(envelope), now, pose) == 'free'

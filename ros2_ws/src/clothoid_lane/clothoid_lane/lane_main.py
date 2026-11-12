@@ -142,6 +142,8 @@ class LaneMainNode(Node):
         self.parking_width = False   # set by the parking flag, kept afterwards (2025 behaviour)
         self.lane_width = self._lane_width_px(lambda name: self.get_parameter(name).value)
 
+        self.parking_limit = None
+        self.parking_limit_stamp = None
         self.speed_limit = None
         self.speed_limit_stamp = None
         self.steering_locked = False
@@ -175,6 +177,7 @@ class LaneMainNode(Node):
             Int32, self.get_parameter('direction_topic').value, self.on_direction, 1)
         self.create_subscription(
             Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
+        self.create_subscription(Float32, '/parking/exploration_speed_limit', self.on_parking_limit, 1)
         self.create_subscription(
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
         self.create_subscription(
@@ -236,6 +239,11 @@ class LaneMainNode(Node):
             self.parking_width = True
             self.lane_width = self._lane_width_px(lambda name: self.get_parameter(name).value)
             self.get_logger().info('parking lane change')
+
+    def on_parking_limit(self, msg: Float32):
+        if math.isfinite(msg.data) and msg.data >= 0.:
+            self.parking_limit = msg.data
+            self.parking_limit_stamp = self.get_clock().now()
 
     def on_speed_limit(self, msg: Float32):
         # <= 0 or NaN releases the limit
@@ -324,6 +332,10 @@ class LaneMainNode(Node):
             age = (self.get_clock().now() - self.speed_limit_stamp).nanoseconds * 1e-9
             if age <= self.get_parameter('speed_limit_timeout').value:
                 speed = min(speed, self.speed_limit)
+        if self.parking_limit_stamp is not None:
+            age = (self.get_clock().now()-self.parking_limit_stamp).nanoseconds * 1e-9
+            if 0 <= age <= self.get_parameter('speed_limit_timeout').value:
+                speed = min(speed, self.parking_limit)
         return speed
 
     def _publish_debug_points(self, result, header):

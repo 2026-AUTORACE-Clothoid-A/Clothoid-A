@@ -11,7 +11,7 @@ parking:
     laser_x: 0.103             # laser_link ahead of base_link (URDF)
     lazy_sensors: true         # imu/odom/scan only from /parking_flag until DONE (false: always)
     arm_wait_sec: 1.0          # after the flag, wait this long for all three before refusing
-    # Preparation subscribes only scan and never commands the vehicle.
+    # Registered preparation uses imu/odom/scan; six_bays also caps lane speed.
     probe.rate_hz: 5.0
     probe.confirm_scans: 3
     probe.max_gap: 0.75
@@ -19,7 +19,12 @@ parking:
 
     # Experimental registered six-bay search. False selects the legacy lidar gap finder.
     layout.enabled: true
-    layout.control_enabled: false  # bag replay still shows unobserved swept areas; publish candidates only
+    layout.control_enabled: false  # experimental: rear visibility still prevents verified exit
+    layout.target_bay: 0          # auto; 1..3 lane-side, 4..6 inner (same clearance checks)
+    explore.speed: 0.20
+    explore.deceleration: 0.5       # m/s^2; validate braking on the vehicle
+    explore.reaction_sec: 0.3
+    explore.observation_sec: 1.0
     layout.scan_hz: 5.0
     layout.columns: 3
     layout.rows: 2

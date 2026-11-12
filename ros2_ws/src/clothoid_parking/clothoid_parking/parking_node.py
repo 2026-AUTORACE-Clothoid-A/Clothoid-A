@@ -6,12 +6,12 @@ lane) through SEARCH -> TURN -> ENTER -> DONE (see planner.py). In DONE it keeps
 speed so lane cannot take the car back, and repeats `/parking_done` true once a second.
 Phase changes go to the log and to `state_topic`. With `debug:=true` it also publishes RViz
 markers on `marker_topic` (see viz.py, `ros2 launch clothoid_parking rviz.launch.py`).
-Before that flag, /parking_prepare enables only a passive /scan subscription. It confirms a bay
-at at most probe.rate_hz and publishes /parking/bay_candidate without sending a command.
-With lazy_sensors, high-rate /imu and /odom still start only at the actual parking flag.
+Before that flag, /parking_prepare enables scene observation. Registered six-bay mode
+publishes an independent lane speed cap; lane retains steering. Legacy mode stays passive.
+Registration uses imu/odom/scan during preparation, then releases them when preparation ends.
 """
 import math
-from dataclasses import fields
+from dataclasses import fields, replace
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist, PoseWithCovarianceStamped, PoseArray, Pose
@@ -19,12 +19,13 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Float32
 from visualization_msgs.msg import MarkerArray
 
 from clothoid_parking.bay_finder import BayParams
 from clothoid_parking.core import ParkingCore
 from clothoid_parking.layout import LayoutParams
+from clothoid_parking.exploration import ExploreParams
 from clothoid_parking.preview import ParkingPreview
 from clothoid_parking.planner import Phase, PlanParams
 from clothoid_parking.scene_probe import ParkingSceneProbe, ProbeParams
@@ -57,11 +58,12 @@ class ParkingNode(Node):
         bay = self._declare_dataclass(BayParams(), 'bay.')
         probe = self._declare_dataclass(ProbeParams(), 'probe.')
         layout = self._declare_dataclass(LayoutParams(), 'layout.')
+        exploration = self._declare_dataclass(ExploreParams(), 'explore.')
         if self.inspection_only:
             layout.enabled, layout.control_enabled = True, False
         get = lambda n: self.get_parameter(n).value  # noqa: E731
 
-        self.core = ParkingCore(plan, bay, laser_x=get('laser_x'), layout=layout)
+        self.core = ParkingCore(plan, bay, laser_x=get('laser_x'), layout=layout, exploration=exploration)
         self.preview = ParkingPreview(plan, bay, get('laser_x')) if self.inspection_only else None
         self.probe = ParkingSceneProbe(bay, probe, laser_x=get('laser_x'))
         self.probe_sub = None
@@ -76,6 +78,9 @@ class ParkingNode(Node):
         self.sensor_subs = []
 
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
+        self.explore_pub = self.create_publisher(Float32, '/parking/exploration_speed_limit', 1)
+        self.exploring_pub = self.create_publisher(Bool, '/parking/exploring', 1)
+        self.skipped_pub = self.create_publisher(Bool, '/parking/skipped', 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
         if self.preview is not None:
@@ -178,7 +183,8 @@ class ParkingNode(Node):
             self.observation_pub.publish(observation_markers(self.core, msg.header.stamp, self.now()))
         mode = 'control' if layout.p.control_enabled else 'observe'
         self.layout_status_pub.publish(String(data=mode+': '+layout.reason+'; '+', '.join(
-            f'{i+1}:{state}' for i, state in enumerate(layout.states))))
+            f'{i+1}:{state}' for i, state in enumerate(layout.states))
+            + '; exploration: '+self.core.exploration.reason))
 
     def on_prepare(self, msg: Bool):
         on = (msg.data or self.inspection_only) and self.core.phase == Phase.IDLE and self.t_armed is None
@@ -204,13 +210,26 @@ class ParkingNode(Node):
         now, stamp = self.now(), self.stamp(msg)
         if not -.05 <= now - stamp <= STALE_SEC:
             return
-        _, bay = self.probe.scan(stamp, msg.ranges, msg.angle_min, msg.angle_increment,
-                                 msg.range_min, msg.range_max)
+        if self.core.layout is not None and self.core.layout.p.control_enabled:
+            # The legacy two-flank probe cannot start parking at an outside bay.
+            # Use the same verified grid target here and after handover.
+            pose = self.core.tracker.pose
+            bay = self.core.layout.choose(now, pose, self.core.planner.p)
+            if bay is not None:
+                c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+                dx, dy = bay.face_x-pose.x, bay.face_y-pose.y
+                bay = replace(bay, face_x=c*dx+s*dy, face_y=-s*dx+c*dy,
+                              row_yaw=bay.row_yaw-pose.yaw)
+        else:
+            _, bay = self.probe.scan(stamp, msg.ranges, msg.angle_min, msg.angle_increment,
+                                     msg.range_min, msg.range_max)
         if bay is None:
             return
         # Do not invite a handover after the full-lock turn point has passed.
         along = bay.face_x * math.cos(bay.row_yaw) + bay.face_y * math.sin(bay.row_yaw)
-        if along < self.core.planner.p.turn_radius + self.core.planner.p.turn_lead:
+        rear_offset = (self.core.planner.p.rear_offset
+                       if self.core.layout is not None and self.core.layout.p.control_enabled else 0.)
+        if along < self.core.planner.p.turn_radius + self.core.planner.p.turn_lead - rear_offset:
             return
         candidate = PoseStamped()
         candidate.header.stamp = msg.header.stamp
@@ -287,6 +306,15 @@ class ParkingNode(Node):
             if not self.stale():
                 self.preview.step(now)
             return  # inspection never sends commands or mission-completion flags
+        limit = self.core.exploration_limit(now)
+        if self.core.layout is not None and self.core.layout.p.control_enabled:
+            self.exploring_pub.publish(Bool(data=limit is not None))
+        if limit is not None:
+            if self.stale():
+                limit = 0.
+            self.explore_pub.publish(Float32(data=float(limit)))
+        if self.core.exploration.skipped:
+            self.skipped_pub.publish(Bool(data=True))
         if self.t_armed is not None:
             self.check_armed(now)
         out = self.core.command(now)

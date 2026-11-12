@@ -172,6 +172,8 @@ class MissionNode(Node):
         self.stopline, self.stopline_time = False, None
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
+        self.parking_skipped = False
+        self.parking_exploring_time = None
         self.sign_time = None            # last /parking_sign true
         self.line, self.line_time = False, None
         self.parking_log = (False, False)
@@ -191,6 +193,8 @@ class MissionNode(Node):
         # pedestrian stop is the line stop below. `stopline` stays False.
         # self.create_subscription(Bool, get('stopline_topic'), self.on_stopline, 1)
         self.create_subscription(Bool, get('parking_done_topic'), self.on_parking_done, 1)
+        self.create_subscription(Bool, '/parking/skipped', self.on_parking_skipped, 1)
+        self.create_subscription(Bool, '/parking/exploring', self.on_parking_exploring, 1)
         self.mission_state_pub = self.create_publisher(String, get('state_topic'), 1)
         self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
         self.create_subscription(Bool, get('parking_line_topic'), self.on_parking_line, 1)
@@ -399,6 +403,12 @@ class MissionNode(Node):
             return None
         return float(cmd[0])                     # speed only: lane_main steers
 
+    def on_parking_exploring(self, msg: Bool):
+        self.parking_exploring_time = self.now_sec() if msg.data else None
+
+    def on_parking_skipped(self, msg: Bool):
+        self.parking_skipped = self.parking_skipped or msg.data
+
     def on_parking_done(self, msg: Bool):
         self.parking_done = msg.data
 
@@ -433,6 +443,8 @@ class MissionNode(Node):
             line_phase=line_phase,
             line_speed=self.line_speed,
             parking_done=self.parking_done,
+            parking_skipped=self.parking_skipped,
+            parking_observing=self._fresh(self.parking_exploring_time),
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None))
         self.line_speed = self.line_stop_step(now, out.stop_arm)
         self._image_on(out.stop_arm or out.parking_prepare)
@@ -455,6 +467,8 @@ class MissionNode(Node):
                        for t in self.confirmed_tracks] if self._fresh(self.seen_time) else [],
             'light_track': self.light_target_id,
             'parking_prepare': out.parking_prepare,
+            'parking_skipped': self.parking_skipped,
+            'parking_observing': self._fresh(self.parking_exploring_time),
             'parking_scene': self._fresh(self.parking_scene_time),
             'parking_entry': self.entry_evidence.entry_at,
             'line_phase': None if core is None else LINE_PHASE[core.phase],

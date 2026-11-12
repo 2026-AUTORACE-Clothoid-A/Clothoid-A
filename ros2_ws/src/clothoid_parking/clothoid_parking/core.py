@@ -10,12 +10,13 @@ from clothoid_parking.bay_finder import BayParams, find_bay, row_slope_angle
 from clothoid_parking.planner import Phase, PlanParams, Planner
 from clothoid_parking.tracker import Tracker, Pose2D
 from clothoid_parking.layout import ParkingLayout
+from clothoid_parking.exploration import Exploration
 
 
 class ParkingCore:
     def __init__(self, plan: PlanParams = PlanParams(), bay: BayParams = BayParams(),
                  laser_x: float = 0.103, grid: float = 0.02, max_cells: int = 20000,
-                 front_half_deg: float = 10.0, min_hits: int = 2, layout=None):
+                 front_half_deg: float = 10.0, min_hits: int = 2, layout=None, exploration=None):
         self.tracker = Tracker(rear_offset=plan.rear_offset, odom_scale=plan.odom_scale)
         self.planner = Planner(replace(plan, strict_completion=True) if layout is not None and layout.enabled and layout.control_enabled else plan)
         self.bay_params = bay
@@ -30,6 +31,7 @@ class ParkingCore:
         self.front_range: Optional[float] = None
         self.flag = False
         self.layout = ParkingLayout(layout) if layout is not None and layout.enabled else None
+        self.exploration = Exploration(exploration)
         self.preparing = False
         self.pose_history = deque(maxlen=400)
 
@@ -50,6 +52,12 @@ class ParkingCore:
         if on and not self.preparing and self.phase == Phase.IDLE and self.layout:
             self.layout.reset()
         self.preparing = on
+
+    def exploration_limit(self, now):
+        if not (self.layout and self.layout.p.control_enabled and self.preparing) or self.flag:
+            return None
+        return self.exploration.update(now, self.layout, self.tracker.pose,
+                                       self.planner.p, self.tracker.speed)
 
     def pose_at(self, stamp):
         if not self.pose_history or stamp < self.pose_history[0][0] or stamp > self.pose_history[-1][0]+.10:
@@ -133,10 +141,20 @@ class ParkingCore:
         if self.layout is not None and self.layout.p.control_enabled and self.phase not in (Phase.IDLE, Phase.DONE, Phase.ABORT):
             if now-self.layout.last_scan > .5:
                 return 0., 0.
-            if self.phase == Phase.SEARCH and (self.layout.origin is None or self.layout.support_count < self.layout.p.confirm_scans):
-                return 0., 0.
+            if self.phase == Phase.SEARCH:
+                # Do not creep forward on a flag alone, or retain a revoked target
+                # between scans. Clearance must still apply at the current pose.
+                candidate = self.layout.choose(now, self.tracker.pose, self.planner.p)
+                self.planner.bay = candidate
+                if candidate is None:
+                    return 0., 0.
             out = self.planner.step(now, self.tracker.pose, self.front_range)
-            if out is not None and not self.layout.motion_clear(now, self.tracker.pose, *out, .2):
+            distance = .20
+            if self.phase == Phase.ENTER and self.planner.bay is not None:
+                b, pose = self.planner.bay, self.tracker.pose
+                distance = min(distance, abs((b.x-pose.x)*math.cos(b.entry_yaw)
+                                            +(b.y-pose.y)*math.sin(b.entry_yaw)))
+            if out is not None and not self.layout.motion_clear(now, self.tracker.pose, *out, .2, distance=distance):
                 self.layout.reason = 'holding: next swept footprint occupied or unobserved'
                 return 0., 0.
             return out

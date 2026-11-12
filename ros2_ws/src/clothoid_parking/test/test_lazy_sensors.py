@@ -93,6 +93,28 @@ def test_legacy_prepare_remains_scan_only():
         rclpy.shutdown()
 
 
+def test_observation_mode_keeps_legacy_gate_and_never_sends_exploration_commands(node, monkeypatch):
+    from clothoid_parking.bay_finder import Bay
+    from clothoid_parking.tracker import Pose2D
+    assert not node.core.layout.p.control_enabled
+    node.on_prepare(Bool(data=True))
+    for index in range(3):
+        node.core.layout.observe(node.now()+index*.01, (1., -.25), 0., Pose2D())
+    assert len(node.core.layout.bays()) == 6
+    sent = []
+    for publisher in (node.cmd_pub, node.explore_pub, node.exploring_pub, node.skipped_pub):
+        monkeypatch.setattr(publisher, 'publish', lambda msg: sent.append(msg))
+    node.on_timer()
+    assert not sent
+    # Observation-only deployment must preserve the original pre-handover threshold.
+    along = node.core.planner.p.turn_radius+node.core.planner.p.turn_lead-.01
+    bay = Bay(along, -.4, 0., -1.57, .8, along, -.25)
+    monkeypatch.setattr(node.probe, 'scan', lambda *args: (True, bay))
+    monkeypatch.setattr(node.candidate_pub, 'publish', lambda msg: sent.append(msg))
+    node.on_probe_scan(LaserScan())
+    assert not sent
+
+
 def test_inspection_previews_flag_without_sending_driving_commands(monkeypatch):
     rclpy.init(args=['--ros-args', '-p', 'inspection_only:=true'])
     n = ParkingNode()
