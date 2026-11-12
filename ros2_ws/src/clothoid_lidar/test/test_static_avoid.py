@@ -916,3 +916,23 @@ def test_beams_to_far_points_clear_what_they_pass():
         cm.update(far, origin)
     assert cm.count[i[0], j[0]] == 0
     assert not cm.occupied_at(far).any()                  # the far point itself is not marked
+
+
+def test_no_new_start_after_a_hand_over_beside_the_island():
+    """1113 auto 02 / 05: started again at the cone course's white line and cones past the fork."""
+    a = _active_at_origin()
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    a.plan = None
+    assert a.control((a.island[0] + 0.65, 0.5, 0.0), Inhibit()) is None
+    assert a.finished
+    limo = np.array([[1.0, 0.0]])
+    started = [a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0), entry_back=0.5,
+                          entry_pose=(11.5, 0.0, 0.0)) for k in range(6)]
+    assert not any(started)
+    b = _active_at_origin(AvoidParams(one_section_per_run=False))
+    b.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    b.plan = None
+    b.control((b.island[0] + 0.65, 0.5, 0.0), Inhibit())
+    started = [b.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0), entry_back=0.5,
+                          entry_pose=(11.5, 0.0, 0.0)) for k in range(6)]
+    assert any(started)                                   # the retry as before

@@ -62,6 +62,10 @@ class AvoidParams:
     handover_past: float = 0.6        # m past the island front (the island is 1.75 m long)
     handover_heading_deg: float = 15.0
     handover_overshoot: float = 0.6   # m further: hand over even if not straight
+    # after a hand-over beside the island the section is behind us for good: no new start (1113
+    # auto 02 / 05 started again at the cone course's white line and cones, 6 m past the fork, and
+    # drove there with the cone follower on the same mux input). Restart the node for another run
+    one_section_per_run: bool = True
     # lidar hits this far beyond the yellow outer lines are dropped once the camera measured the
     # lanes (1112 auto 05: a cone beside the road at 4 m was in the costmap)
     outside_margin: float = 0.10
@@ -858,6 +862,7 @@ class StaticAvoid:
         self.locked = False
         self.seen_entry: Optional[Tuple[float, float, float]] = None
         self.lock_entry: Optional[Tuple[float, float, float]] = None
+        self.finished = False                # handed over beside the island (one_section_per_run)
         self.frame: Optional[SectionFrame] = None
         self.lane_frame: Optional[SectionFrame] = None    # None = the section frame; else from the camera
         self.lane_source: Optional[SectionFrame] = None   # the fit it came from
@@ -901,6 +906,9 @@ class StaticAvoid:
         if self.state == ACTIVE:
             return False
         self._watch(pose_world, entry_back, entry_pose)
+        if self.finished and p.one_section_per_run:
+            self.blocked_scans = 0
+            return False
         retry = (self.locked and blocked and entry_pose is not None and entry_pose != self.lock_entry
                  and entry_back is not None and 0.0 <= entry_back <= p.entry_max_back)
         if self.locked and not retry:
@@ -1304,10 +1312,12 @@ class StaticAvoid:
         lane = lane_of(d, p)
         sign = {0: 'sign lane 1', 1: 'sign lane 3'}.get(self.direction, 'no sign')
         if lane in (1, 3) and abs(psi) <= math.radians(p.handover_heading_deg):
+            self.finished = True
             self.stop('hand over beside the island, lane %d, %.2f m past its front (%s, %s)'
                       % (lane, past, self.island_source, sign), True)
             return True
         if past >= p.handover_past + p.handover_overshoot:
+            self.finished = True
             self.stop('hand over beside the island, lane %d, %.2f m past its front, heading %.0f deg '
                       '(%s, %s)' % (lane, past, math.degrees(psi), self.island_source, sign), True)
             return True
