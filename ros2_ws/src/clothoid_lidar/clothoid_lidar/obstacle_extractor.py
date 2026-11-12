@@ -18,6 +18,7 @@ class ExtractorParams:
     cluster_gap: float = 0.08    # m, max distance between neighbouring beams of one object
     min_points: int = 2          # beams per object
     max_width: float = 0.15      # m, wider clusters (walls, cars) are not cones (retune)
+    min_width: float = 0.0       # m, narrower clusters are dropped (0 keeps all; LIMO search skips cones)
     cone_radius: float = 0.04    # m, centre = surface centroid pushed back by this (retune)
 
 
@@ -49,7 +50,8 @@ def extract_obstacles(ranges, angle_min: float, angle_increment: float,
         start = i
         if len(cluster) < params.min_points:
             continue
-        if np.linalg.norm(cluster[-1] - cluster[0]) > params.max_width:
+        width = np.linalg.norm(cluster[-1] - cluster[0])
+        if width > params.max_width or width < params.min_width:
             continue
         centroid = cluster.mean(axis=0)
         norm = np.linalg.norm(centroid)
