@@ -135,9 +135,35 @@ class ParkingCore:
                 return 0., 0.
             if self.phase == Phase.SEARCH and (self.layout.origin is None or self.layout.support_count < self.layout.p.confirm_scans):
                 return 0., 0.
-            out = self.planner.step(now, self.tracker.pose, self.front_range)
-            if out is not None and not self.layout.motion_clear(now, self.tracker.pose, *out, .2):
-                self.layout.reason = 'holding: next swept footprint occupied or unobserved'
+            if self.phase == Phase.SEARCH and self.planner.bay is None:
+                # Observe from a closer viewpoint, but never cross the turn
+                # commitment point without a confirmed target footprint.
+                target = self.layout.bays()[self.layout.p.target_bay-1]
+                pose, p = self.tracker.pose, self.planner.p
+                along = (target.face_x-pose.x)*math.cos(target.row_yaw)+(target.face_y-pose.y)*math.sin(target.row_yaw)
+                remaining = along-p.turn_radius-p.turn_lead-self.layout.p.observation_stop_margin
+                if now-self.layout.last_observation > self.layout.p.max_pose_age or remaining <= 0:
+                    self.layout.reason = 'holding: designated bay not confirmed before turn'
+                    return 0., 0.
+                self.layout.reason = 'observing designated bay before turn'
+                v = min(p.search_speed, max(p.min_speed, remaining))
+                out = v, self.planner._hold(pose, target.row_yaw, v)
+            else:
+                out = self.planner.step(now, self.tracker.pose, self.front_range)
+            if self.phase == Phase.PARKED and not self.layout.inside_bay(self.planner.bay, self.tracker.pose):
+                self.planner._go(Phase.ABORT, now, 'vehicle corners outside designated bay')
+                return 0., 0.
+            distance = .20
+            if out is not None and self.phase == Phase.ENTER and self.planner.bay is not None:
+                b, pose = self.planner.bay, self.tracker.pose
+                remaining = abs((b.x-pose.x)*math.cos(b.entry_yaw)+(b.y-pose.y)*math.sin(b.entry_yaw))
+                distance = min(distance, remaining)
+            # The actuator clips full_lock to max_steer. Check the actual arc,
+            # not an impossible tighter arc made from the unclipped command.
+            if out is not None and not self.layout.motion_clear(
+                    now, self.tracker.pose, out[0], max(-self.planner.p.max_steer,
+                    min(self.planner.p.max_steer, out[1])), .2, distance):
+                self.layout.reason = 'holding: '+self.layout.motion_reason
                 return 0., 0.
             return out
         return self.planner.step(now, self.tracker.pose, self.front_range)

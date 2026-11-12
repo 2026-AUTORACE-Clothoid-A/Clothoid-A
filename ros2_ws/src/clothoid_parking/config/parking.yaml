@@ -20,6 +20,8 @@ parking:
     # Experimental registered six-bay search. False selects the legacy lidar gap finder.
     layout.enabled: true
     layout.control_enabled: false  # bag replay still shows unobserved swept areas; publish candidates only
+    layout.target_bay: 2           # designated lane-side middle bay; control remains disabled
+    layout.observation_stop_margin: 0.08 # stop before turn if goal remains unobserved
     layout.scan_hz: 5.0
     layout.columns: 3
     layout.rows: 2

@@ -1,3 +1,68 @@
+Fixed-target / skewed parked-LIMO experiment (2026-11-13)
+
+  Implemented on namgyu/parking-robustness. Six-bay visual geometry now supplies
+  the designated target when registered control is explicitly enabled. Parked
+  cars corroborate the scene and veto occupied swept space; their front faces
+  no longer set the target centre or yaw. Two separated obstacle groups are
+  required, but nominal car-centre alignment is not. A continuous wall fails.
+
+  layout.target_bay must be explicitly set to 1..6 for registered control;
+  0 is observation only. There is no fallback to another bay. IDs 1..3 are
+  lane-side and 4..6 are the inner row. User confirmed the lane-side middle
+  target: YAML and launch default to bay 2; registered control stays disabled.
+  Node handover uses the registered target in this mode, not the legacy gap.
+  All six occupancy states remain visible; expensive route checks only run
+  for the designated target in control mode. Vehicle-envelope samples are cached.
+
+  Goal footprint must be observed free repeatedly. Known obstacles anywhere on
+  the nominal approach veto the target. Unknown distant route cells may be
+  approached only while the next swept envelope is observed free. Existing
+  envelope cells do not require new free evidence, but any recent hit still
+  vetoes motion there. No-return rays never certify new free space. Observation
+  can advance along the row, stopping 0.08 m before the turn commitment point
+  if the target remains unconfirmed. This braking/latency margin is configurable;
+  it is not a distance from a sign or a recorded-world coordinate.
+  Steering checks use the actuator-clipped steering angle; ENTER lookahead stops
+  at the goal. The target freezes on turn commitment, obstacle checks continue,
+  and all four tracked body corners must fit inside the bay before PARKED.
+
+  Validation: actual simulator physics and lidar, 20 Hz parking commands,
+  50 Hz odometry, 100 Hz gyro, 10 Hz scans (map updates at 5 Hz).
+  Camera registration is supplied from CAD; no end-to-end camera/MUX claim.
+  Test target 2 matches the user-designated lane-side middle bay.
+  Eight obstacle placements: aligned, both +10/+20/-20 degrees, opposite
+  +/-15 and +/-25 degrees, opposite depth offsets of 8 cm, one +10 cm.
+  Registered mode: 8/8 entered with all four corners inside, no collisions.
+  Legacy mode: 7/8 parked fully inside; the opposite 15-degree case did not
+  fit inside the bay on this closed-loop run. A previous static-view audit is not equivalent to a moving-view run.
+  No alternate-path planner was needed for these eight entry cases.
+
+  LIMITATIONS / DO NOT ENABLE AS THE DEFAULT VEHICLE CONTROLLER:
+  - Current simulated lidar masks the rear sector (-110..+110 degrees).
+    Registered mode holds during exit and times out: 0/8 complete departures.
+    In the separately labelled 360-degree visibility diagnostic, entry AND
+    exit complete. The production lidar configuration has NOT been changed.
+  - Configured lidar noise/spikes cause conservative holds and a turn timeout.
+    This failure is preserved in the results; noise robustness is not solved.
+  - Occupied goal, blocked aisle and invalid scans refuse unsafe entry.
+  - Existing fixed recorded-motion replay checks default-mode regressions only;
+    it cannot prove success under new control commands or validate localization.
+
+  Reproduce inside the existing Humble Docker container, repository root:
+    OPENBLAS_NUM_THREADS=1 python3 tools/parking_review/simulate_obstacle_poses.py \
+      --output ros2_ws/log/parking_pose_audit/verified_comparison.json
+  This runs headless and does not publish to ROS or actuate a car.
+  Results also contain trajectories, obstacle poses, phase transitions and cost.
+
+  Experimental node invocation (isolated test environment only):
+    ros2 launch clothoid_parking parking.launch.py \
+      registered_control:=true target_bay:=2
+  Default launch and full vehicle stack remain observe/legacy mode.
+  No remote deployment or changes to stopparkrun / .bashrc in this work.
+
+----------------------------------------------------------------------
+Earlier observation-only implementation notes (historical context):
+
 Registered parking layout experiment (namgyu/parking-robustness)
 
 Status

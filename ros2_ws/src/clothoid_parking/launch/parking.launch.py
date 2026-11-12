@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -13,6 +14,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('debug', default_value='false'),
+        DeclareLaunchArgument('registered_control', default_value='false'),
+        DeclareLaunchArgument('target_bay', default_value='2'),
         Node(
             package='clothoid_parking',
             executable='parking',
@@ -21,7 +24,9 @@ def generate_launch_description():
             parameters=[
                 os.path.join(bringup_share, 'config', 'topics.yaml'),
                 os.path.join(parking_share, 'config', 'parking.yaml'),
-                {'debug': LaunchConfiguration('debug')},
+                {'debug': LaunchConfiguration('debug'),
+                 'layout.control_enabled': ParameterValue(LaunchConfiguration('registered_control'), value_type=bool),
+                 'layout.target_bay': ParameterValue(LaunchConfiguration('target_bay'), value_type=int)},
             ],
         ),
     ])

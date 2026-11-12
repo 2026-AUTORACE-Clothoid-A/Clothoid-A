@@ -112,3 +112,28 @@ def test_inspection_previews_flag_without_sending_driving_commands(monkeypatch):
     finally:
         n.destroy_node()
         rclpy.shutdown()
+
+
+def test_registered_handover_uses_grid_not_parked_vehicle_gap(node, monkeypatch):
+    from types import SimpleNamespace
+    from clothoid_parking.layout import LayoutParams, ParkingLayout
+    from clothoid_parking.tracker import Pose2D
+    node.core.layout = ParkingLayout(LayoutParams(control_enabled=True, target_bay=2))
+    for t in (.1,.2,.3):
+        node.core.layout.observe(t,(1.,-.25),0.,Pose2D())
+    node.core.layout.selected = 1
+    sent=[]
+    node.candidate_pub = SimpleNamespace(publish=sent.append)
+    def forbidden(*args):
+        raise AssertionError('legacy gap finder must not gate registered handover')
+    monkeypatch.setattr(node.probe,'scan',forbidden)
+    scan=LaserScan()
+    scan.header.stamp=node.get_clock().now().to_msg()
+    node.on_probe_scan(scan)
+    assert len(sent)==1
+    bay=node.core.layout.bays()[1]
+    assert sent[0].pose.position.x == pytest.approx(bay.face_x)
+    assert sent[0].pose.position.y == pytest.approx(bay.face_y)
+    node.core.layout.selected=None
+    node.on_probe_scan(scan)
+    assert len(sent)==1

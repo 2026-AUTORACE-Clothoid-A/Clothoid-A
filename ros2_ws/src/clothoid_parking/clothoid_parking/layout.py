@@ -22,6 +22,7 @@ def unique_cells(points, resolution):
 class LayoutParams:
     enabled: bool = True
     control_enabled: bool = False  # observe until bag + closed-loop validation is sufficient
+    target_bay: int = 0  # 0: observe all; control requires an explicitly designated bay (1..6)
     columns: int = 3
     rows: int = 2
     bay_width: float = .50
@@ -41,6 +42,7 @@ class LayoutParams:
     body_length: float = .322
     body_width: float = .220
     clearance: float = .03
+    observation_stop_margin: float = .08  # braking + callback latency before the turn point
 
 
 class ParkingLayout:
@@ -48,6 +50,20 @@ class ParkingLayout:
         self.p = params or LayoutParams()
         if self.p.grid <= 0 or self.p.scan_hz <= 0 or self.p.side not in (-1, 1):
             raise ValueError('invalid layout geometry/rate')
+        if not isinstance(self.p.target_bay, int) or not 0 <= self.p.target_bay <= self.p.rows*self.p.columns:
+            raise ValueError('target_bay outside layout')
+        if not math.isfinite(self.p.observation_stop_margin) or self.p.observation_stop_margin < 0:
+            raise ValueError('invalid observation stop margin')
+        if self.p.control_enabled and not self.p.target_bay:
+            raise ValueError('registered control requires a designated target_bay')
+        p = self.p
+        margin = p.clearance+p.position_tolerance
+        u = np.linspace(-p.body_length/2-margin, p.body_length/2+margin,
+                        math.ceil((p.body_length+2*margin)/(p.grid/2))+1)
+        v = np.linspace(-p.body_width/2-margin, p.body_width/2+margin,
+                        math.ceil((p.body_width+2*margin)/(p.grid/2))+1)
+        u, v = np.meshgrid(u, v)
+        self._footprint_offsets = np.column_stack((u.ravel(), v.ravel()))
         self.reset()
 
     def reset(self):
@@ -63,6 +79,7 @@ class ParkingLayout:
         self.selected = None
         self.reason = 'waiting for lane/entry/grid registration'
         self.support_count = 0
+        self.motion_reason = ''
 
     def observe(self, stamp, origin, yaw, pose):
         if stamp <= self.last_observation:
@@ -156,16 +173,19 @@ class ParkingLayout:
         return 'free'
 
     def footprint(self, x, y, yaw):
-        p = self.p
         # Include registration tolerance in the envelope; uncertain poses cost usable clearance.
-        margin = p.clearance+p.position_tolerance
-        u = np.linspace(-p.body_length/2-margin, p.body_length/2+margin,
-                        math.ceil((p.body_length+2*margin)/(p.grid/2))+1)
-        v = np.linspace(-p.body_width/2-margin, p.body_width/2+margin,
-                        math.ceil((p.body_width+2*margin)/(p.grid/2))+1)
-        u, v = np.meshgrid(u, v)
         c, s = math.cos(yaw), math.sin(yaw)
-        return np.column_stack((x+c*u.ravel()-s*v.ravel(), y+s*u.ravel()+c*v.ravel()))
+        return self._footprint_offsets @ np.array([[c, s], [-s, c]]) + [x, y]
+
+    def inside_bay(self, bay, pose):
+        """All four physical corners, not merely the longitudinal goal error."""
+        c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+        corners = np.array([(u, v) for u in (-self.p.body_length/2, self.p.body_length/2)
+                            for v in (-self.p.body_width/2, self.p.body_width/2)])
+        world = corners @ np.array([[c, s], [-s, c]]) + [pose.x-bay.x, pose.y-bay.y]
+        n = np.array([math.cos(bay.row_yaw), math.sin(bay.row_yaw)])
+        return bool((np.abs(world@n) <= self.p.bay_width/2).all() and
+                    (np.abs(world@np.array([-n[1], n[0]])) <= self.p.bay_depth/2).all())
 
     def path(self, bay, pose, plan):
         """Swept envelope of the existing forward arc + straight entry, in world coordinates."""
@@ -192,10 +212,11 @@ class ParkingLayout:
         return np.concatenate([self.footprint(*q) for q in poses])
 
     def supported(self, now):
-        """Check obstacle row spacing against the visual grid, without assuming which bay is empty.
+        """Corroborate visual registration with separated obstacle groups.
 
-        Two distinct columns must support the layout. A continuous wall fails the
-        between-column test. Occluded/all-empty rows remain unconfirmed.
+        Cars need not be centred or parallel. A continuous wall is not two
+        groups; missing/occluded evidence cannot corroborate the registration.
+        This check never estimates the target pose from obstacle faces.
         """
         if self.origin is None:
             return False
@@ -212,9 +233,11 @@ class ParkingLayout:
         if len(u) < 4:
             return False
         index = np.floor(u/pitch).astype(int)
-        aligned = abs(u-(index+.5)*pitch) < self.p.body_width/2+self.p.position_tolerance
-        columns = {int(i) for i in index[aligned] if np.sum(index[aligned] == i) >= 2}
-        return len(columns) >= 2 and np.mean(aligned) >= .85
+        columns = {int(i) for i in index if np.sum(index == i) >= 2}
+        ordered = np.sort(u)
+        splits = np.flatnonzero(np.diff(ordered) > 2*self.p.grid)+1
+        groups = np.split(ordered, splits)
+        return len(columns) >= 2 and sum(len(g) >= 2 for g in groups) >= 2
 
     def choose(self, now, pose, plan):
         if self.origin is None or now-self.last_observation > self.p.max_pose_age:
@@ -238,26 +261,41 @@ class ParkingLayout:
         candidates = []
         for i, bay in enumerate(bays):
             space = self.coverage(self.footprint(bay.x, bay.y, bay.entry_yaw), now)
+            if self.p.control_enabled and i != self.p.target_bay-1:
+                self.states[i] = space
+                self.counts[i] = 0
+                continue
             # Expensive swept area only for an observed empty target.
             path = self.path(bay, pose, plan) if space == 'free' else None
             route = 'unreachable' if path is None else self.coverage(path, now)
             self.states[i] = space if space != 'free' else ('free' if route == 'free' else 'path_'+route)
-            self.counts[i] = self.counts[i]+1 if self.states[i] == 'free' else 0
+            # Unknown distant approach cells are not declared free. Observe them
+            # as we approach, checking the next swept envelope before every move.
+            # A known obstacle anywhere on the nominal route still vetoes it.
+            usable = space == 'free' and (route == 'free' or
+                                         (self.p.control_enabled and route == 'unknown'))
+            self.counts[i] = self.counts[i]+1 if usable else 0
             if self.counts[i] >= self.p.confirm_scans:
-                candidates.append(i)
+                if not self.p.target_bay or i == self.p.target_bay-1:
+                    candidates.append(i)
         if self.selected not in candidates:
             self.selected = candidates[0] if candidates else None
-        self.reason = 'no observed clear bay and approach' if self.selected is None else f'bay {self.selected+1} clear'
+        if self.selected is None:
+            self.reason = 'no clear designated bay and collision-free nominal route'
+        else:
+            self.reason = f'bay {self.selected+1}: target observed free; '+(
+                'approach checked incrementally' if self.p.control_enabled else 'nominal approach observed free')
         return None if self.selected is None else bays[self.selected]
 
-    def motion_clear(self, now, pose, speed, steer, wheelbase):
+    def motion_clear(self, now, pose, speed, steer, wheelbase, distance=.20):
+        self.motion_reason = ''
         if not speed:
             return True
         direction = 1 if speed > 0 else -1
         curvature = math.tan(steer)/wheelbase
         envelope = []
         # Includes a braking/lookahead margin in both forward and reverse motion.
-        for d in np.linspace(0, direction*.20, 8):
+        for d in np.linspace(0, direction*distance, 8):
             if abs(curvature) < 1e-6:
                 dx, dy, yaw = d, 0., pose.yaw
             else:
@@ -265,4 +303,18 @@ class ParkingLayout:
                 yaw = pose.yaw+curvature*d
             c, s = math.cos(pose.yaw), math.sin(pose.yaw)
             envelope.append(self.footprint(pose.x+c*dx-s*dy, pose.y+s*dx+c*dy, yaw))
-        return self.coverage(np.concatenate(envelope), now) == 'free'
+        points = np.concatenate(envelope)
+        keys = unique_cells(points, self.p.grid)
+        current = set(map(tuple, unique_cells(self.footprint(pose.x, pose.y, pose.yaw), self.p.grid)))
+        for key in map(tuple, keys):
+            value = self.cells.get(key)
+            recent = value is not None and now-value[0] <= self.p.evidence_age
+            if recent and value[1]:
+                self.motion_reason = 'occupied swept footprint'
+                return False
+            # Existing safety-envelope cells are not newly entered space. Never
+            # exempt a measured obstacle there, or certify a new unknown cell.
+            if key not in current and not (recent and not value[1]):
+                self.motion_reason = 'unobserved swept footprint'
+                return False
+        return True

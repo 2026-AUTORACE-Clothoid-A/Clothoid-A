@@ -204,20 +204,32 @@ class ParkingNode(Node):
         now, stamp = self.now(), self.stamp(msg)
         if not -.05 <= now - stamp <= STALE_SEC:
             return
-        _, bay = self.probe.scan(stamp, msg.ranges, msg.angle_min, msg.angle_increment,
-                                 msg.range_min, msg.range_max)
-        if bay is None:
-            return
+        layout = self.core.layout
+        if layout is not None and layout.p.control_enabled:
+            if layout.selected is None:
+                return
+            bay = layout.bays()[layout.selected]
+            pose = self.core.tracker.pose
+            c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+            dx, dy = bay.face_x-pose.x, bay.face_y-pose.y
+            face_x, face_y = c*dx+s*dy, -s*dx+c*dy
+            row_yaw = bay.row_yaw-pose.yaw
+        else:
+            _, bay = self.probe.scan(stamp, msg.ranges, msg.angle_min, msg.angle_increment,
+                                     msg.range_min, msg.range_max)
+            if bay is None:
+                return
+            face_x, face_y, row_yaw = bay.face_x, bay.face_y, bay.row_yaw
         # Do not invite a handover after the full-lock turn point has passed.
-        along = bay.face_x * math.cos(bay.row_yaw) + bay.face_y * math.sin(bay.row_yaw)
+        along = face_x * math.cos(row_yaw) + face_y * math.sin(row_yaw)
         if along < self.core.planner.p.turn_radius + self.core.planner.p.turn_lead:
             return
         candidate = PoseStamped()
         candidate.header.stamp = msg.header.stamp
         candidate.header.frame_id = 'base_link'
-        candidate.pose.position.x, candidate.pose.position.y = bay.face_x, bay.face_y
-        candidate.pose.orientation.z = math.sin(bay.row_yaw / 2)
-        candidate.pose.orientation.w = math.cos(bay.row_yaw / 2)
+        candidate.pose.position.x, candidate.pose.position.y = float(face_x), float(face_y)
+        candidate.pose.orientation.z = math.sin(row_yaw / 2)
+        candidate.pose.orientation.w = math.cos(row_yaw / 2)
         self.candidate_pub.publish(candidate)
 
     def _sensors_on(self, on: bool):
