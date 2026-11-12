@@ -176,3 +176,28 @@ def observation_markers(core, stamp, now) -> MarkerArray:
                    'BAYS: grey=candidate / orange=unconfirmed route / green=clear')
     out.markers.append(status)
     return out
+
+
+def preview_markers(preview, stamp) -> MarkerArray:
+    """Legacy reference path, explicitly separate from layout approval and vehicle control."""
+    core = preview.core
+    pose, planner = core.tracker.pose, core.planner
+    out = MarkerArray()
+    path = _marker(stamp, 'legacy_reference_path', 0, Marker.LINE_STRIP, (1., .45, .03, 1.), .025)
+    path.points = [_to_base(pose, x, y) for x, y in preview.path]
+    for point in path.points:
+        point.z = .06
+    out.markers.append(path)
+    if planner.bay is not None:
+        bay = planner.bay
+        target = _marker(stamp, 'legacy_target', 0, Marker.LINE_STRIP, (.35, .65, 1., 1.), .02)
+        target.points = _rect(pose, bay.x, bay.y, bay.entry_yaw, CAR_L, CAR_W)
+        for point in target.points:
+            point.z = .07
+        out.markers.append(target)
+    text = _marker(stamp, 'legacy_preview_state', 0, Marker.TEXT_VIEW_FACING, (1., .65, .2, 1.), .07)
+    text.pose.position.x, text.pose.position.y, text.pose.position.z = 1., .6, .12
+    reason = 'waiting for /parking_flag' if planner.phase == Phase.IDLE else planner.reason
+    text.text = f'LEGACY PREVIEW (no control): {planner.phase.value}\n{reason}'
+    out.markers.append(text)
+    return out

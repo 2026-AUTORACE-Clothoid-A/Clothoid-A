@@ -33,6 +33,14 @@ Visualization Manager:
       Reliability Policy: Reliable
       Durability Policy: Volatile
       Depth: 1
+  - Class: rviz_default_plugins/MarkerArray
+    Name: Legacy entry path (preview only)
+    Enabled: true
+    Topic:
+      Value: /parking/preview_markers
+      Reliability Policy: Reliable
+      Durability Policy: Volatile
+      Depth: 1
   - Class: rviz_default_plugins/Axes
     Name: base_link
     Enabled: true

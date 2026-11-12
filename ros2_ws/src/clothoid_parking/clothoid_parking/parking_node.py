@@ -25,9 +25,10 @@ from visualization_msgs.msg import MarkerArray
 from clothoid_parking.bay_finder import BayParams
 from clothoid_parking.core import ParkingCore
 from clothoid_parking.layout import LayoutParams
+from clothoid_parking.preview import ParkingPreview
 from clothoid_parking.planner import Phase, PlanParams
 from clothoid_parking.scene_probe import ParkingSceneProbe, ProbeParams
-from clothoid_parking.viz import markers, layout_markers, observation_markers
+from clothoid_parking.viz import markers, layout_markers, observation_markers, preview_markers
 
 STALE_SEC = 0.5
 
@@ -61,6 +62,7 @@ class ParkingNode(Node):
         get = lambda n: self.get_parameter(n).value  # noqa: E731
 
         self.core = ParkingCore(plan, bay, laser_x=get('laser_x'), layout=layout)
+        self.preview = ParkingPreview(plan, bay, get('laser_x')) if self.inspection_only else None
         self.probe = ParkingSceneProbe(bay, probe, laser_x=get('laser_x'))
         self.probe_sub = None
         self.wheelbase = get('wheelbase')
@@ -76,6 +78,9 @@ class ParkingNode(Node):
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
+        if self.preview is not None:
+            self.preview_pub = self.create_publisher(MarkerArray, '/parking/preview_markers', 1)
+            self.create_timer(.2, self.publish_preview)
         self.observation_pub = self.create_publisher(MarkerArray, '/parking/observation_markers', 1)
         self.layout_marker_pub = self.create_publisher(MarkerArray, '/parking/layout_markers', 1)
         self.layout_pub = self.create_publisher(PoseArray, '/parking/layout', 1)
@@ -117,15 +122,22 @@ class ParkingNode(Node):
     def on_imu(self, msg: Imu):
         self.last['imu'] = self.now()
         self.core.imu(self.stamp(msg), msg.angular_velocity.z)
+        if self.preview is not None:
+            self.preview.core.imu(self.stamp(msg), msg.angular_velocity.z)
 
     def on_odom(self, msg: Odometry):
         self.last['odom'] = self.now()
         self.core.odom(self.stamp(msg), msg.twist.twist.linear.x)
+        if self.preview is not None:
+            self.preview.core.odom(self.stamp(msg), msg.twist.twist.linear.x)
 
     def on_scan(self, msg: LaserScan):
         self.last['scan'] = self.now()
         self.core.scan(self.stamp(msg), msg.ranges, msg.angle_min, msg.angle_increment,
                        msg.range_min, msg.range_max)
+        if self.preview is not None:
+            self.preview.core.scan(self.stamp(msg), msg.ranges, msg.angle_min, msg.angle_increment,
+                                   msg.range_min, msg.range_max)
         if self.core.layout is not None and self.core.preparing:
             self.on_probe_scan(msg)
 
@@ -139,6 +151,10 @@ class ParkingNode(Node):
             return
         yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
         self.core.observe_entry(stamp, (msg.pose.pose.position.x, msg.pose.pose.position.y), yaw)
+
+    def publish_preview(self):
+        if self.preview is not None:
+            self.preview_pub.publish(preview_markers(self.preview, self.get_clock().now().to_msg()))
 
     def publish_layout(self):
         layout = self.core.layout
@@ -222,6 +238,7 @@ class ParkingNode(Node):
 
     def on_flag(self, msg: Bool):
         if self.inspection_only:
+            self.preview.core.set_flag(self.now(), msg.data)
             return
         if msg.data and not self.core.flag:
             if self.probe_sub is not None:
@@ -266,6 +283,10 @@ class ParkingNode(Node):
 
     def on_timer(self):
         now = self.now()
+        if self.preview is not None:
+            if not self.stale():
+                self.preview.step(now)
+            return  # inspection never sends commands or mission-completion flags
         if self.t_armed is not None:
             self.check_armed(now)
         out = self.core.command(now)

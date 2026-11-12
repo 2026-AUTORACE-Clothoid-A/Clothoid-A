@@ -74,10 +74,14 @@ Docker / ROS Humble execution (use the existing development container)
   Another container terminal:
     source /home/user/Clothoid-A/ros2_ws/install/setup.bash
     ros2 bag play /home/user/Clothoid-A/bag/bag_1111_065554 --clock \
-      --topics /scan /imu /odom /camera/color/camera_info /camera/color/image_raw/compressed
+      --topics /scan /imu /odom /parking_flag /camera/color/camera_info /camera/color/image_raw/compressed
   start_nodes:=false opens RViz only alongside existing processors.
-  The inspection launch starts observation automatically, ignores parking flags,
-  and routes lane command output to /parking_inspect/cmd_vel_lane.
+  The inspection launch starts observation automatically. Recorded /parking_flag
+  starts a separate legacy preview planner; its commands are discarded. Orange
+  is its nominal rear-axle entry path, blue is its target vehicle footprint. The
+  reference path is frozen at turn start and is not a recorded trajectory or
+  approval by the new layout checks. No parking command/done flags are sent.
+  Without /parking_flag the preview displays a waiting message. It routes lane command output to /parking_inspect/cmd_vel_lane.
   It requires sensor data; it does not start hardware drivers.
   Use use_sim_time:=false compressed:=false for a live raw camera stream.
   Do not run duplicate observation processors alongside the full driving stack.

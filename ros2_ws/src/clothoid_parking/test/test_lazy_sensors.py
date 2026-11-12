@@ -93,15 +93,20 @@ def test_legacy_prepare_remains_scan_only():
         rclpy.shutdown()
 
 
-def test_inspection_auto_observes_and_ignores_driving_flags():
+def test_inspection_previews_flag_without_sending_driving_commands(monkeypatch):
     rclpy.init(args=['--ros-args', '-p', 'inspection_only:=true'])
     n = ParkingNode()
     try:
         assert n.core.preparing and sensor_topics(n) == {'/imu', '/odom', '/scan'}
         assert not n.core.layout.p.control_enabled
+        sent = []
+        monkeypatch.setattr(n, 'send', lambda *args: sent.append(args))
         n.on_prepare(Bool(data=False))
+        feed(n)
         n.on_flag(Bool(data=True))
         n.on_timer()
+        assert n.preview.core.phase == Phase.SEARCH
+        assert not sent
         assert n.core.preparing and n.core.phase == Phase.IDLE
         assert n.core.command(n.now()) is None
     finally:
