@@ -28,6 +28,8 @@ mission:
     sign_min_height: 14
     light_min_height: 8
     detection_edge_margin: 2
+    # Candidate-only parking/pedestrian tracks; scene evidence still gates action.
+    scene_sign_candidates: true
     track_retention_sec: 2.0    # selected red light is retained through occlusion until release
     track_max_objects: 32      # bounded history and association work
     track_match_gate: 1.0      # centre displacement in object-size units

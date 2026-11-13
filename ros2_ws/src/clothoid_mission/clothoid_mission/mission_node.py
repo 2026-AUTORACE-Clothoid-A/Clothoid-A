@@ -99,6 +99,7 @@ class MissionNode(Node):
                             ('sign_min_height', 14), ('light_min_height', 8),
                             ('detection_edge_margin', 2)]:
             self.declare_parameter(name, value)
+        self.declare_parameter('scene_sign_candidates', False)
         self.declare_parameter('track_retention_sec', 2.0)
         self.declare_parameter('track_max_objects', 32)
         self.declare_parameter('track_match_gate', 1.0)
@@ -167,6 +168,8 @@ class MissionNode(Node):
         self.light_target_id = None
         self.confirmed_tracks = []
         self.parking_scene_time = None
+        self.parking_observing = self.parking_skipped = False
+        self.parking_observing_time = self.parking_skipped_time = None
         self.travel, self._odom_stamp = 0., None
         self._scene_stamp = None
         self.stopline, self.stopline_time = False, None
@@ -183,6 +186,7 @@ class MissionNode(Node):
         self.direction_pub = self.create_publisher(Int32, get('direction_topic'), 1)
         self.parking_pub = self.create_publisher(Bool, get('parking_topic'), 1)
         self.prepare_pub = self.create_publisher(Bool, get('parking_prepare_topic'), 1)
+        self.entry_distance_pub = self.create_publisher(Float32, '/parking/entry_distance', 1)
         self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
         self.bump_approach_pub = self.create_publisher(Bool, get('bump_approach_topic'), 1)
 
@@ -195,6 +199,8 @@ class MissionNode(Node):
         self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
         self.create_subscription(Bool, get('parking_line_topic'), self.on_parking_line, 1)
         self.create_subscription(PoseStamped, get('parking_scene_topic'), self.on_parking_scene, 1)
+        self.create_subscription(Bool, '/parking/observing', self.on_parking_observing, 1)
+        self.create_subscription(Bool, '/parking/skipped', self.on_parking_skipped, 1)
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
@@ -250,7 +256,15 @@ class MissionNode(Node):
                        for kind in ('bump', 'slow', 'parking', 'pedestrian')})
         # Apply proximity gates to each box before collecting confirmation hits.
         # A valid box of one class must not admit a second distant box of that class.
-        detections = [d for d in msg.detections if classes_seen((d,), **filters)]
+        # With scene confirmation, parking/pedestrian tracks are observation
+        # candidates, not immediate motion triggers. Keep their image quality
+        # and temporal gates, but do not discard roadside signs by box proximity.
+        scene_candidates = (get('scene_sign_candidates') and self.logic.p.require_scene_confirmation)
+        detections = [d for d in msg.detections if
+                      (scene_candidates and (d.class_name == 'sign_parking' or
+                       (d.class_name == 'sign_pedestrian' and self.logic.p.use_stop_line and
+                        get('line_require_crosswalk'))))
+                      or classes_seen((d,), **filters)]
         tracks = self.sign_tracker.update(stamp, detections, self.warp.width, self.warp.height)
         self.confirmed_tracks = tracks
         if self.light_target_id is None:
@@ -261,6 +275,12 @@ class MissionNode(Node):
         self.seen = {t.box.class_name for t in tracks if not t.box.class_name.startswith(
             'traffic_light_') or self.light_target_id is None or t.id == self.light_target_id}
         self.seen_time = stamp
+
+    def on_parking_observing(self, msg: Bool):
+        self.parking_observing, self.parking_observing_time = msg.data, self.now_sec()
+
+    def on_parking_skipped(self, msg: Bool):
+        self.parking_skipped, self.parking_skipped_time = msg.data, self.now_sec()
 
     def on_parking_scene(self, msg: PoseStamped):
         now = self.now_sec()
@@ -430,6 +450,8 @@ class MissionNode(Node):
                           if self.logic.p.require_scene_confirmation else
                           self.line if self._fresh(self.line_time) else False),
             parking_scene=self._fresh(self.parking_scene_time),
+            parking_observing=self.parking_observing and self._fresh(self.parking_observing_time),
+            parking_skipped=self.parking_skipped and self._fresh(self.parking_skipped_time),
             line_phase=line_phase,
             line_speed=self.line_speed,
             parking_done=self.parking_done,
@@ -438,6 +460,11 @@ class MissionNode(Node):
         self._image_on(out.stop_arm or out.parking_prepare)
         self._publish_changed('parking_prepare', out.parking_prepare,
                               lambda v: self.prepare_pub.publish(Bool(data=bool(v))))
+        entry = self.entry_evidence.entry_at
+        distance = entry-self.travel if entry is not None else None
+        entry_valid = (out.parking_prepare and distance is not None and
+                       self.travel+self.finish_params.front-entry <= self.entry_evidence.max_travel)
+        self.entry_distance_pub.publish(Float32(data=float(distance) if entry_valid else math.nan))
         if not out.parking_prepare:
             self.entry_evidence.clear()
             self.parking_scene_time = None
@@ -456,6 +483,8 @@ class MissionNode(Node):
             'light_track': self.light_target_id,
             'parking_prepare': out.parking_prepare,
             'parking_scene': self._fresh(self.parking_scene_time),
+            'parking_observing': self.parking_observing and self._fresh(self.parking_observing_time),
+            'parking_skipped': self.parking_skipped and self._fresh(self.parking_skipped_time),
             'parking_entry': self.entry_evidence.entry_at,
             'line_phase': None if core is None else LINE_PHASE[core.phase],
             'remaining': None if left is None else round(left, 4),

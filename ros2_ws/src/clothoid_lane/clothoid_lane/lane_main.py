@@ -144,6 +144,7 @@ class LaneMainNode(Node):
 
         self.speed_limit = None
         self.speed_limit_stamp = None
+        self.parking_approach_limit = self.parking_approach_stamp = None
         self.steering_locked = False
         self.steering_lock_stamp = None
         self.imu_pitch = self.imu_stamp = None
@@ -177,6 +178,7 @@ class LaneMainNode(Node):
             Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
         self.create_subscription(
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
+        self.create_subscription(Float32, '/parking/approach_speed_limit', self.on_parking_approach, 1)
         self.create_subscription(
             Bool, self.get_parameter('steering_lock_topic').value, self.on_steering_lock, 1)
         self.create_subscription(
@@ -244,6 +246,11 @@ class LaneMainNode(Node):
         else:
             self.speed_limit = msg.data
             self.speed_limit_stamp = self.get_clock().now()
+
+    def on_parking_approach(self, msg: Float32):
+        # Separate from /speed_limit: releases must not overwrite another mission.
+        self.parking_approach_limit = msg.data if math.isfinite(msg.data) and msg.data >= 0 else None
+        self.parking_approach_stamp = self.get_clock().now()
 
     def on_steering_lock(self, msg: Bool):
         now = self.get_clock().now()
@@ -324,6 +331,11 @@ class LaneMainNode(Node):
             age = (self.get_clock().now() - self.speed_limit_stamp).nanoseconds * 1e-9
             if age <= self.get_parameter('speed_limit_timeout').value:
                 speed = min(speed, self.speed_limit)
+        limit = getattr(self, 'parking_approach_limit', None)
+        if limit is not None:
+            age = (self.get_clock().now()-self.parking_approach_stamp).nanoseconds*1e-9
+            if 0 <= age <= self.get_parameter('speed_limit_timeout').value:
+                speed = min(speed, limit)  # zero is a valid hold; steering remains lane-controlled
         return speed
 
     def _publish_debug_points(self, result, header):

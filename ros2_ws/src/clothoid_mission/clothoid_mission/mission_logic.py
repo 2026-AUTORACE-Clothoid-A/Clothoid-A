@@ -125,6 +125,8 @@ class Inputs:
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
     parking_scene: bool = False    # fresh, repeated lidar bay observations
+    parking_observing: bool = False # bounded approach observation, not permission to turn
+    parking_skipped: bool = False   # observation failed; never means parking_done
 
 
 @dataclass
@@ -148,6 +150,7 @@ class MissionLogic:
         self.parking_flag = False
         self.parking_armed = False
         self.parking_seen_at = None
+        self.parking_skip_until = -math.inf
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
@@ -167,10 +170,14 @@ class MissionLogic:
         if 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
         self._update_fork(inputs)
-        if 'sign_parking' in seen and p.parking_enabled:
+        if inputs.parking_skipped and not self.parking_flag:
+            self.parking_seen_at = None
+            self.parking_skip_until = now+p.cooldown_sec
+        if 'sign_parking' in seen and p.parking_enabled and now >= self.parking_skip_until:
             self.parking_seen_at = now
         self.parking_armed = (p.parking_enabled and self.parking_seen_at is not None and
-                              now - self.parking_seen_at <= p.arm_timeout_sec and
+                              (now - self.parking_seen_at <= p.arm_timeout_sec or
+                               (self.parking_armed and inputs.parking_observing)) and
                               not self.parking_flag and not inputs.parking_done)
         parking_entry = (inputs.parking_line and inputs.parking_scene if p.require_scene_confirmation
                          else inputs.parking_line or not p.parking_at_stopline)

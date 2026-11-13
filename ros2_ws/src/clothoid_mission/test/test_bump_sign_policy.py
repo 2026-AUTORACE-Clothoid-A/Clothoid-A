@@ -89,6 +89,8 @@ def test_bump_height_can_be_tuned_without_restarting_the_node(mission):
                                           ('sign_pedestrian',27,28), ('sign_slow',30,50)])
 def test_other_signs_keep_their_own_size_gate(mission, name, small, large):
     node, _, _, _ = mission
+    from rclpy.parameter import Parameter
+    node.set_parameters([Parameter('scene_sign_candidates',value=False)])
     for _ in range(3):
         msg = detection(300,small)
         msg.class_name = name

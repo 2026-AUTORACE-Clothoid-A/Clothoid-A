@@ -19,11 +19,12 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, LaserScan
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, String, Float32
 from visualization_msgs.msg import MarkerArray
 
 from clothoid_parking.bay_finder import BayParams
 from clothoid_parking.core import ParkingCore
+from clothoid_parking.approach import ApproachParams, ParkingApproach
 from clothoid_parking.layout import LayoutParams
 from clothoid_parking.preview import ParkingPreview
 from clothoid_parking.planner import Phase, PlanParams
@@ -57,6 +58,7 @@ class ParkingNode(Node):
         bay = self._declare_dataclass(BayParams(), 'bay.')
         probe = self._declare_dataclass(ProbeParams(), 'probe.')
         layout = self._declare_dataclass(LayoutParams(), 'layout.')
+        self.approach = ParkingApproach(self._declare_dataclass(ApproachParams(), 'approach.'))
         if self.inspection_only:
             layout.enabled, layout.control_enabled = True, False
         get = lambda n: self.get_parameter(n).value  # noqa: E731
@@ -72,12 +74,18 @@ class ParkingNode(Node):
         self.sent_final_stop = False
         self.lazy = get('lazy_sensors')
         self.arm_wait = get('arm_wait_sec')
+        self.entry_distance = self.entry_distance_stamp = None
+        self.lane_steer, self.lane_command_stamp = 0., None
         self.t_armed = None           # flag seen, waiting for the sensors (lazy_sensors)
         self.sensor_subs = []
 
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
+        self.approach_pub = self.create_publisher(Float32, '/parking/approach_speed_limit', 1)
+        self.observing_pub = self.create_publisher(Bool, '/parking/observing', 1)
+        self.skipped_pub = self.create_publisher(Bool, '/parking/skipped', 1)
+        self.approach_status_pub = self.create_publisher(String, '/parking/approach_status', 1)
         if self.preview is not None:
             self.preview_pub = self.create_publisher(MarkerArray, '/parking/preview_markers', 1)
             self.create_timer(.2, self.publish_preview)
@@ -86,6 +94,8 @@ class ParkingNode(Node):
         self.layout_pub = self.create_publisher(PoseArray, '/parking/layout', 1)
         self.layout_status_pub = self.create_publisher(String, '/parking/layout_status', 1)
         self.create_subscription(PoseWithCovarianceStamped, '/parking/entry_candidate', self.on_entry, 1)
+        self.create_subscription(Float32, '/parking/entry_distance', self.on_entry_distance, 1)
+        self.create_subscription(Twist, '/cmd_vel_lane', self.on_lane_command, 1)
         self.create_timer(.5, self.publish_layout)
         self.candidate_pub = self.create_publisher(PoseStamped, get('parking_scene_topic'), 1)
         if not self.lazy:
@@ -140,6 +150,19 @@ class ParkingNode(Node):
                                    msg.range_min, msg.range_max)
         if self.core.layout is not None and self.core.preparing:
             self.on_probe_scan(msg)
+
+    def on_lane_command(self, msg):
+        v, w = msg.linear.x, msg.angular.z
+        if not math.isfinite(v) or not math.isfinite(w):
+            return
+        if abs(v) > .001:
+            self.lane_steer = max(-self.core.planner.p.max_steer, min(self.core.planner.p.max_steer,
+                                 math.atan(self.wheelbase*w/v)))
+        self.lane_command_stamp = self.now()
+
+    def on_entry_distance(self, msg):
+        self.entry_distance = msg.data if math.isfinite(msg.data) else None
+        self.entry_distance_stamp = self.now()
 
     def on_entry(self, msg):
         stamp = self.stamp(msg)
@@ -205,6 +228,8 @@ class ParkingNode(Node):
         if not -.05 <= now - stamp <= STALE_SEC:
             return
         layout = self.core.layout
+        if self.approach.skipped:
+            return
         if layout is not None and layout.p.control_enabled:
             if layout.selected is None:
                 return
@@ -299,6 +324,17 @@ class ParkingNode(Node):
             if not self.stale():
                 self.preview.step(now)
             return  # inspection never sends commands or mission-completion flags
+        cap = self.approach.update(now, self.core.preparing, self.core.phase != Phase.IDLE or self.t_armed is not None,
+                                   self.core.layout, self.core.tracker.pose, self.core.planner.p,
+                                   sensors_fresh=not self.stale() and self.lane_command_stamp is not None and
+                                   0 <= now-self.lane_command_stamp <= STALE_SEC,
+                                   speed=self.core.tracker.speed, steer=self.lane_steer, wheelbase=self.wheelbase,
+                                   entry_distance=self.entry_distance if self.entry_distance_stamp is not None and
+                                   0 <= now-self.entry_distance_stamp <= STALE_SEC else None)
+        self.approach_pub.publish(Float32(data=-1. if cap is None else float(cap)))
+        self.observing_pub.publish(Bool(data=self.approach.observing))
+        self.skipped_pub.publish(Bool(data=self.approach.skipped))
+        self.approach_status_pub.publish(String(data=self.approach.reason))
         if self.t_armed is not None:
             self.check_armed(now)
         out = self.core.command(now)

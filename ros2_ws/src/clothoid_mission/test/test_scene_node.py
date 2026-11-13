@@ -115,3 +115,41 @@ def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
     clock[0] += n.logic.p.bump_arm_timeout_sec
     n.on_timer()
     assert flags == [True, True, False]
+
+
+def test_roadside_candidate_does_not_stop_or_park_without_scene(node):
+    n,clock=node
+    # Restore strict proximity gates: a 20px sign at the side fails the old rule.
+    from rclpy.parameter import Parameter
+    n.set_parameters([Parameter('scene_sign_candidates',value=True),
+                      Parameter('sign_max_offset_height_ratio',value=5.),
+                      Parameter('pedestrian_min_height',value=28.),
+                      Parameter('parking_min_height',value=28.)])
+    for name in ('sign_pedestrian','sign_parking'):
+        for k in range(3):
+            clock[0]+=.1
+            detections(n,clock,clock[0],name,x=10)
+            n.on_timer()
+        assert name in n.seen
+        assert n.logic.state==DRIVE and not n.logic.parking_flag
+    assert n.logic.parking_armed
+
+
+def test_scene_candidate_quality_gates_remain(node):
+    n,clock=node
+    for k in range(5):
+        msg=detections(n,clock,1000.+k*.1,'sign_pedestrian',x=0)
+    assert 'sign_pedestrian' not in n.seen
+
+
+def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():
+    from clothoid_mission.mission_logic import MissionLogic,MissionParams,Inputs
+    m=MissionLogic(MissionParams())
+    m.step(Inputs(now=0.,seen={'sign_parking'}))
+    assert m.step(Inputs(now=9.,parking_observing=True)).parking_prepare
+    out=m.step(Inputs(now=10.,parking_skipped=True,seen={'sign_parking'}))
+    assert not out.parking_flag and not out.parking_prepare and out.state==DRIVE
+    assert not m.step(Inputs(now=11.,seen={'sign_parking'})).parking_prepare
+    # A missed parking mission cannot block a subsequent independent pedestrian mission.
+    out=m.step(Inputs(now=11.1,seen={'sign_pedestrian'},line_phase='arrived'))
+    assert out.state=='stopped_pedestrian'
