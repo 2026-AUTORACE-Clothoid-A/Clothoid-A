@@ -41,7 +41,7 @@ lane_main:
     # 3x in the bags. On two-lane parts the left boundary is the dashed divider.
     initial_side: 0            # 0 left lane, 1 right lane, 2 both
     # lane width, line centre to centre in metres: 0.5 m on our track (measured 2026-11-07). The rule
-    # book says 550 mm, so check it at the venue and change only this value. In the warped image it
+    # v3 book specifies 500 mm. In the warped image it
     # is lane_width_m x warp_px_per_m (per car, camera_*.yaml): 0.5 m = 170 px.
     lane_width_m: 0.5
     parking_lane_width_m: 0.68   # was 231 px (2025's 140 px scaled with the lane width), retune

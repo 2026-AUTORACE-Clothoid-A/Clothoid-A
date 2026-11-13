@@ -12,6 +12,7 @@ import math
 from builtin_interfaces.msg import Duration
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
+from clothoid_common.parking_geometry import PARKING_GEOMETRY
 
 from clothoid_parking.planner import Phase
 
@@ -99,6 +100,24 @@ def layout_markers(core, stamp) -> MarkerArray:
     layout = core.layout
     if layout is None:
         return out
+    if layout.origin is not None:
+        n = (math.cos(layout.yaw), math.sin(layout.yaw))
+        road = (layout.p.side*n[1], -layout.p.side*n[0])
+        for index, (name, endpoints, colour) in enumerate(PARKING_GEOMETRY.stage_lines()):
+            rgba = (1., .9, .15, .7) if colour == 'yellow' else (.9, .9, 1., .7)
+            line = _marker(stamp, 'parking_stage_model', index, Marker.LINE_STRIP, rgba,
+                           .04 if name == 'entry' else PARKING_GEOMETRY.line_width)
+            for x,y in endpoints:
+                wx = float(layout.origin[0]+x*n[0]+y*road[0])
+                wy = float(layout.origin[1]+x*n[1]+y*road[1])
+                line.points.append(_to_base(core.tracker.pose, wx, wy))
+            out.markers.append(line)
+            if name in ('entry','finish'):
+                label = _marker(stamp, 'parking_stage_label', index, Marker.TEXT_VIEW_FACING, rgba, .07)
+                label.pose.position = line.points[-1]
+                label.pose.position.z = .06
+                label.text = f'{name.upper()} (MODEL)'
+                out.markers.append(label)
     for i, bay in enumerate(layout.bays()):
         state = layout.states[i]
         supported = layout.support_count >= layout.p.confirm_scans

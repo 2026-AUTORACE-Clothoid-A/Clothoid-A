@@ -5,6 +5,7 @@ approve a bay or command steering; handover still needs entry + free-space evide
 """
 import math
 from dataclasses import dataclass
+from clothoid_common.parking_geometry import PARKING_GEOMETRY
 
 
 @dataclass
@@ -14,7 +15,7 @@ class ApproachParams:
     deceleration: float = .5
     reaction_sec: float = .25
     stop_margin: float = .08
-    entry_to_grid: float = .470207  # same CAD relation as parking_landmark.entry_to_grid
+    entry_to_grid: float = PARKING_GEOMETRY.entry_to_grid
     entry_match_tolerance: float = .15 # independent entry/grid uncertainty, metres
     hold_sec: float = 3.
     timeout_sec: float = 15.

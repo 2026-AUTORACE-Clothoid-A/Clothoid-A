@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 import cv2
 import numpy as np
+from clothoid_common.parking_geometry import PARKING_GEOMETRY
 
 
 @dataclass
@@ -18,7 +19,7 @@ class LandmarkParams:
     camera_y: float = -.01
     side: float = -1.
     # CAD: stop stripe centre x=5.629878, first bay boundary centre x=6.100085.
-    entry_to_grid: float = .470207
+    entry_to_grid: float = PARKING_GEOMETRY.entry_to_grid
     near: float = .38
     far: float = 1.2
 
@@ -130,7 +131,7 @@ def find_line(im, gx, gy, roi):
                 pairs.append((a, b))
         if not pairs:
             continue
-        a, b = min(pairs, key=lambda ab: abs(ab[1] - ab[0] - 0.55))
+        a, b = min(pairs, key=lambda ab: abs(ab[1] - ab[0] - PARKING_GEOMETRY.boundary_spacing))
         corners = [rho * n + a * tangent, rho * n + b * tangent]
         extent = np.percentile(pts @ tangent, [2, 98])
         if extent[0] > a + 0.07 or extent[1] < b - 0.07:
