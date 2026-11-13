@@ -39,3 +39,17 @@ def test_missing_conflicting_or_wrong_width_lines_cannot_create_parking_frame():
     assert road_heading(stripe,conflict) is None
     wrong_width=[sides[0],sides[1]+[0.,.2]]
     assert road_heading(stripe,wrong_width) is None
+
+
+def test_parking_camera_yaw_rotates_about_camera_and_invalidates_projection_cache():
+    from clothoid_lane.parking_landmark import ParkingLandmark
+    detector = ParkingLandmark()
+    k = [500., 0., 320., 0., 500., 240., 0., 0., 1.]
+    detector.configure_camera(640, 480, k, [0.]*5)
+    before = np.array([detector.lookup[0][400, 290], detector.lookup[1][400, 290]])
+    detector.p.camera_yaw = .08
+    detector.configure_camera(640, 480, k, [0.]*5)
+    after = np.array([detector.lookup[0][400, 290], detector.lookup[1][400, 290]])
+    c, s = np.cos(.08), np.sin(.08)
+    origin = np.array([detector.p.camera_x, detector.p.camera_y])
+    assert np.allclose(after, origin+np.array([[c, -s], [s, c]])@(before-origin))

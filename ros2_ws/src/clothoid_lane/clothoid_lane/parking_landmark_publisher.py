@@ -26,6 +26,12 @@ class LandmarkPublisher:
             name = key if key.startswith('camera_') else 'parking_landmark.'+key
             if not node.has_parameter(name):
                 node.declare_parameter(name, getattr(p, key))
+            if key.startswith('camera_'):
+                # Parking calibration must not change lane steering or stopline projection.
+                fallback = node.get_parameter(name).value
+                name = 'parking_landmark.'+key
+                if not node.has_parameter(name):
+                    node.declare_parameter(name, fallback)
             setattr(p, key, node.get_parameter(name).value)
         self.detector = ParkingLandmark(p)
         self.pub = node.create_publisher(PoseWithCovarianceStamped, '/parking/entry_candidate', 1)

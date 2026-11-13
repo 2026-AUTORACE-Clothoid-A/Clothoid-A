@@ -15,6 +15,7 @@ from clothoid_common.parking_geometry import PARKING_GEOMETRY
 class LandmarkParams:
     camera_height: float = .19
     camera_pitch: float = -.021
+    camera_yaw: float = 0.
     camera_x: float = .15
     camera_y: float = -.01
     side: float = -1.
@@ -31,7 +32,8 @@ class ParkingLandmark:
         self.key = None
 
     def configure_camera(self, width, height, k, d):
-        key = (width, height, tuple(k), tuple(d))
+        key = (width, height, tuple(k), tuple(d), self.p.camera_height,
+               self.p.camera_pitch, self.p.camera_yaw, self.p.camera_x, self.p.camera_y)
         if self.key == key:
             return
         K = np.asarray(k, dtype=float).reshape(3, 3)
@@ -45,8 +47,10 @@ class ParkingLandmark:
         below = np.arctan(norm[:, :, 1]) + p.camera_pitch
         fwd = p.camera_height / np.tan(np.maximum(below, .001))
         z = fwd * math.cos(p.camera_pitch) + p.camera_height * math.sin(p.camera_pitch)
-        gx = fwd + p.camera_x
-        gy = -norm[:, :, 0] * z + p.camera_y
+        lateral = -norm[:, :, 0] * z
+        c, s = math.cos(p.camera_yaw), math.sin(p.camera_yaw)
+        gx = c*fwd-s*lateral+p.camera_x
+        gy = s*fwd+c*lateral+p.camera_y
         roi = (below > math.radians(.5)) & (gx > .35) & (gx < 1.8) & (abs(gy) < .65)
         self.lookup = gx, gy, roi
         self.key = key

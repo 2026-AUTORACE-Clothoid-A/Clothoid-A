@@ -26,6 +26,11 @@
     # lane width), 5 cm ahead of the front axle and 1 cm right of the car's centre line.
     # decision_viz ground projection only; the lane target is still the image centre, so the car
     # runs about 1 cm left of the lane centre.
+    # Parking-only camera-to-ground angular calibration, reference-wall bags 2026-11-14.
+    # Fit side-line directions and transverse stripes; leave-one-bag-out validation.
+    # Relative to lidar/body reference; recheck after camera mounting changes.
+    parking_landmark.camera_pitch: -0.034035
+    parking_landmark.camera_yaw: 0.034652
     camera_height: 0.19
     camera_x: 0.15             # m ahead of base_link (midway between the axles)
     camera_y: -0.01            # m, left positive

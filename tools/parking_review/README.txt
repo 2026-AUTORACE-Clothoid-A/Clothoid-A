@@ -1,5 +1,17 @@
 Observed road-line heading (2026-11-14)
 --------------------------------------
+Parking-only camera pitch/yaw calibration is enabled for limo2:
+parking_landmark.camera_pitch=-0.034035 rad, camera_yaw=0.034652 rad.
+Shared camera calibration, lane warp and steering are unchanged. These are
+relative camera-to-ground/lidar estimates, not surveyed mounting angles or a
+constant rotation applied to the parking map. Recheck after mount changes.
+Three reference-wall bag replays gave final heading errors +0.083, -0.164,
++0.094 degrees (heading-only: -1.976, -2.248, -1.971 degrees).
+This checks relative alignment, not absolute position or closed-loop parking.
+Independent stationary captures with measured body/lidar/wall alignment are
+needed to distinguish physical camera yaw from reference/projection bias.
+Projection lookup is cached; angular rotation adds no per-frame image pass.
+
 Initial registration now requires two parallel, separated measured road lines.
 Their direction sets parking yaw; intersection with the observed transverse
 stripe determines entry position. The stripe remains a consistency check but
@@ -30,8 +42,7 @@ IMU/odom continue to move the vehicle relative to that fixed reference.
 
 Collision envelope is vehicle dimensions plus3cm on each side. The7cm visual
 registration consistency tolerance is independent. Occupied/unknown-space gates
-and actual four-corner completion checks still apply. No new ROS tuning
-parameters or image-processing pass were added. RViz shows ALIGNING/FIXED status.
+and actual four-corner completion checks still apply. No additional image-processing pass is used. RViz shows ALIGNING/FIXED status.
 
 Reverse exit with the existing rear-masked lidar (2026-11-13)
 
