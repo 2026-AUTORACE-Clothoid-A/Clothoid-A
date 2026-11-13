@@ -46,8 +46,9 @@ class LayoutParams:
 
 
 class ParkingLayout:
-    def __init__(self, params=None):
+    def __init__(self, params=None, min_hits=2):
         self.p = params or LayoutParams()
+        self.min_hits = min_hits
         if self.p.grid <= 0 or self.p.scan_hz <= 0 or self.p.side not in (-1, 1):
             raise ValueError('invalid layout geometry/rate')
         if not isinstance(self.p.target_bay, int) or not 0 <= self.p.target_bay <= self.p.rows*self.p.columns:
@@ -74,6 +75,7 @@ class ParkingLayout:
         self.last_scan = -math.inf
         self.last_choice_scan = -math.inf
         self.cells = {}  # world grid -> (last evidence time, occupied)
+        self.endpoint_hits = {}  # cell -> (last hit time, distinct scan count)
         self.states = ['unknown'] * (self.p.rows*self.p.columns)
         self.counts = [0] * len(self.states)
         self.selected = None
@@ -153,13 +155,25 @@ class ParkingLayout:
         x = start[0]+np.cos(a)[:, None]*steps
         y = start[1]+np.sin(a)[:, None]*steps
         free = unique_cells(np.column_stack((x[valid], y[valid])), p.grid)
-        for key in map(tuple, free):
-            self.cells[key] = (stamp, False)
         end = r <= p.lidar_range
         endpoints = start + np.column_stack((np.cos(a[end]), np.sin(a[end])))*r[end, None]
-        # Endpoints win over clearing rays in this scan. One unexpected hit vetoes motion.
-        for key in map(tuple, np.floor(endpoints/p.grid).astype(int)):
-            self.cells[key] = (stamp, True)
+        hits = set(map(tuple, np.floor(endpoints/p.grid).astype(int)))
+        # Multiple beams in one scan are one observation. Endpoints win over
+        # clearing rays from that same scan; a later clearing ray resets hits.
+        for key in map(tuple, free):
+            if key not in hits:
+                self.cells[key] = (stamp, False)
+                self.endpoint_hits.pop(key, None)
+        self.endpoint_hits = {k: v for k, v in self.endpoint_hits.items()
+                              if stamp-v[0] <= p.evidence_age}
+        for key in hits:
+            count = min(self.min_hits, self.endpoint_hits.get(key, (stamp, 0))[1]+1)
+            self.endpoint_hits[key] = (stamp, count)
+            if count >= self.min_hits:
+                self.cells[key] = (stamp, True)
+            else:
+                # An unconfirmed return is not evidence of free space.
+                self.cells.pop(key, None)
         self.cells = {k: v for k, v in self.cells.items() if stamp-v[0] <= p.evidence_age}
         return True
 

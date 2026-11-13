@@ -51,10 +51,41 @@ def test_no_return_is_unknown_and_finite_rays_clear_old_obstacles():
     layout.scan(1., [np.inf, np.nan, 0.], -.1, .1, .02, 12., pose, 0.)
     assert layout.coverage([[.4, 0.]], 1.) == 'unknown'
     layout.scan(1.3, [.4], 0., .1, .02, 12., pose, 0.)
+    assert layout.coverage([[.4, 0.]], 1.3) == 'unknown'
+    layout.scan(1.6, [.4], 0., .1, .02, 12., pose, 0.)
+    assert layout.coverage([[.4, 0.]], 1.6) == 'occupied'
+    layout.scan(1.9, [1.], 0., .1, .02, 12., pose, 0.)
+    assert layout.coverage([[.4, 0.]], 1.9) == 'free'
+    assert layout.coverage([[.4, 0.]], 3.5) == 'unknown'
+
+
+def test_hit_confirmation_needs_distinct_scans_and_expires():
+    layout = ParkingLayout()
+    def scan(t, ranges):
+        return layout.scan(t, ranges, 0., 0., .02, 12., Pose2D(), 0.)
+    scan(1., [.4]*8)
+    assert layout.coverage([[.4, 0.]], 1.) == 'unknown'
+    assert not scan(1., [.4])
+    scan(1.3, [.4])
     assert layout.coverage([[.4, 0.]], 1.3) == 'occupied'
-    layout.scan(1.6, [1.], 0., .1, .02, 12., pose, 0.)
-    assert layout.coverage([[.4, 0.]], 1.6) == 'free'
-    assert layout.coverage([[.4, 0.]], 3.2) == 'unknown'
+    scan(3., [.4])
+    assert layout.coverage([[.4, 0.]], 3.) == 'unknown'
+    layout.reset()
+    scan(3.3, [.4])
+    assert layout.coverage([[.4, 0.]], 3.3) == 'unknown'
+
+
+def test_clearing_resets_hits_and_new_return_revokes_free_evidence():
+    layout = ParkingLayout()
+    def scan(t, r):
+        layout.scan(t, [r], 0., 0., .02, 12., Pose2D(), 0.)
+    scan(1., .4)
+    scan(1.3, 1.)
+    assert layout.coverage([[.4, 0.]], 1.3) == 'free'
+    scan(1.6, .4)
+    assert layout.coverage([[.4, 0.]], 1.6) == 'unknown'
+    scan(1.9, .4)
+    assert layout.coverage([[.4, 0.]], 1.9) == 'occupied'
 
 
 def test_missing_obstacles_cannot_certify_empty_layout():

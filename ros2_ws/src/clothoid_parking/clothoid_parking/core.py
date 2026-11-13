@@ -29,7 +29,7 @@ class ParkingCore:
         self.min_hits = min_hits
         self.front_range: Optional[float] = None
         self.flag = False
-        self.layout = ParkingLayout(layout) if layout is not None and layout.enabled else None
+        self.layout = ParkingLayout(layout, min_hits=self.min_hits) if layout is not None and layout.enabled else None
         self.preparing = False
         self.pose_history = deque(maxlen=400)
 
