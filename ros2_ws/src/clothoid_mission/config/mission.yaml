@@ -11,7 +11,7 @@ mission:
     light_max_offset_height_ratio: 3.5
     # Smaller sign faces need a wider ratio than lights. Recorded bump/pedestrian:
     # <= 3.9; adjacent parking sign at the start: 9.1~12.5, own parking sign: ~4.3.
-    sign_max_offset_height_ratio: 5.0  # pedestrian, slow, bump, parking; initial track setting
+    sign_max_offset_height_ratio: 7.0  # pedestrian, slow, bump, parking; initial track setting
     # Fork signs can enter at the image edge from an outer lane (recorded up to 9.4; 1114: ~9 from
     # lane 3 while swerving). Seen only around the static obstacle section and not acted on at once
     # (each new sighting overwrites the direction before the fork), so wider: 13.0 (was 10.0).
