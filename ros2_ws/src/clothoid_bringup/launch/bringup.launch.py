@@ -69,7 +69,7 @@ def generate_launch_description():
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
-        DeclareLaunchArgument('use_image_10hz', default_value='false',
+        DeclareLaunchArgument('use_image_10hz', default_value='true',
                               description='republish the colour image at 10 Hz on /camera/color/image_10hz '
                                           '(topic_tools throttle) for consumers that do not need 30 Hz'),
         DeclareLaunchArgument('use_joint_states', default_value='false',
