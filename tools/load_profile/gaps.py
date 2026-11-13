@@ -16,7 +16,7 @@ import sqlite3
 
 import numpy as np
 
-TOPICS = ['/camera/color/image_raw', '/scan', '/imu', '/odom', '/cmd_vel_lane', '/cmd_vel_avoid',
+TOPICS = ['/camera/color/image_raw', '/scan', '/imu', '/odom', '/cmd_vel_lane', '/cmd_vel_cone', '/cmd_vel_avoid',
           '/avoid/active', '/avoid/lane']
 CONTEXT = ['/camera/color/image_raw', '/imu', '/scan', '/cmd_vel_lane', '/avoid/active']
 

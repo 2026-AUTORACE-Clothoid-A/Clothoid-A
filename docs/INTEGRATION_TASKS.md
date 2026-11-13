@@ -80,7 +80,7 @@
 | 주차 중 mission | state(100)가 parking(90)보다 높음 | 주차 중 신호등 오탐이 주차를 덮는지. `/parking_flag` 동안 mission 정지를 끌지 |
 | 정지 명령 | `Twist(0,0)` | 바닥에서 조향이 중앙에 오는지 |
 
-### 7-2. 우선순위 재설계 (2026-11-09: parking 110만 적용, cone 분리는 보류, finish는 `namgyu/parking` 병합 때 105로 맞춘다)
+### 7-2. 우선순위 재설계 (2026-11-09: parking 110 적용. 2026-11-13: cone 90 `/cmd_vel_cone` 분리 적용. finish는 `namgyu/parking` 병합 때 105로 맞춘다)
 지금 값은 2025 미션 기준이다. 원칙: **각 노드는 자기 미션 구간에서만 발행하고, 우선순위는 구간이 겹치거나 오탐일 때 누가 이기는지만 정한다.**
 
 | 입력 | 지금 | 제안 | 이유 |
@@ -89,14 +89,15 @@
 | lock `estop` | 없음 | 150 | 시험용 arm lock (4번, 적용) |
 | parking | 90 | **110** | 마지막 미션이고 바로 앞이 신호등이다. 주차 중 신호등 잔상이나 시작선을 정지선으로 오인한 state 정지가 주차를 덮지 않게 한다. parking은 `/parking_flag`와 시작선이 둘 다 있어야 발행해 구간이 좁다. 대안: state 100을 유지하고 mission이 `/parking_flag` 동안 정지를 끈다 |
 | state | 100 | 100 | 보행자·신호등 정지는 주행보다 위 |
-| **cone** | (avoid 공유) | **90, `/cmd_vel_cone` 신설** | 원리가 다르다(콘 벽 사이 탈출 vs 3차선 차량 회피 경로계획). 콘 벽을 회피 노드가 장애물로 볼 수 있으므로 cone이 이긴다. 입력이 나뉘면 bag에서 누가 냈는지도 바로 보인다 |
+| **cone** | 90 (`/cmd_vel_cone`, 2026-11-13 적용) | **90, `/cmd_vel_cone` 신설** | 원리가 다르다(콘 벽 사이 탈출 vs 3차선 차량 회피 경로계획). 콘 벽을 회피 노드가 장애물로 볼 수 있으므로 cone이 이긴다. 입력이 나뉘면 bag에서 누가 냈는지도 바로 보인다 |
 | avoid | 80 | 80 | 정적 장애물(정차 LIMO) 회피. `/cone/mission_active` 동안은 발행하지 않는다 |
 | lane | 10 | 10 | 기본 주행 |
 
 정할 것: parking과 state의 순서(교환 또는 mission에서 게이트). 정해지면 `twist_mux.yaml`, `INTERFACES.md` 표, 각 노드 `cmd_topic`을 함께 바꾼다.
 
 ### 7-3. 라이다 담당에게 요청할 것 (cone_follower, 제안)
-1. `cmd_topic`을 `/cmd_vel_cone`으로 바꾼다(`lidar.yaml` 한 줄, 7-2와 함께).
+1. [x] `cmd_topic`을 `/cmd_vel_cone`으로 바꾼다(2026-11-13, `feature/mux-cone`에서 `cone_follower_node.py` 기본값을 바꿨다).
+   계기: 1113 auto 02/05에서 static_avoid가 콘 구간에서 다시 시작해 cone_follower와 같은 `/cmd_vel_avoid`에 명령이 섞였다.
 2. **콘 구간 동안 제어권 유지:** 지금 `control()`은 경계 메시지가 올 때만 돌고, 경계가 모두 stale이거나 `decide()`가 `None`이면 아무것도 내지 않는다. `cone_sorter`는 빈 경계를 발행하지 않는다. 0.3s 조용하면 mux가 `lane`으로 넘어가고, 차선 판정이 없는 구간에서 `lane_main`이 콘이나 바닥 무늬를 차선으로 보면 그쪽으로 조향한다.
    - 제안: `/cone/mission_active` 동안 **타이머(예: 20Hz)로 항상 발행**한다. 판단 성공이면 그 명령, 실패면 `hold_sec`(예: 0.3s) 동안 직전 명령, 그 뒤에는 `Twist(0,0)` 정지. `mission_active`가 false가 되면 발행을 멈춰 lane이 이어받는다.
    - 덤: 좌·우 경계 메시지마다 따로 `control()`이 돌아 한쪽이 stale로 판정되던 흔들림(위험 D3)도 줄어든다.
