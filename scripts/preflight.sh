@@ -4,8 +4,11 @@
 #   scripts/preflight.sh            report only (exit 1 when something needs attention)
 #   scripts/preflight.sh --clean    also remove zombie Fast DDS shared memory (`fastdds shm clean`:
 #                                   only files no live process holds, safe while nodes run)
-#   scripts/preflight.sh --kill     also stop leftover ROS processes (SIGINT, SIGKILL after 5 s);
-#                                   run it with every launch stopped, then --clean
+#   scripts/preflight.sh --kill     also stop leftover ROS processes (SIGINT, SIGKILL after 5 s) and
+#                                   the ros2 CLI daemon; run it with every launch stopped
+#   scripts/preflight.sh --kill --clean   both; with nothing left running it also removes port files
+#                                   `fastdds shm clean` leaves (no _el lock file, mapped by nobody),
+#                                   then checks /dev/shm again and reports the state after the clean
 # Background: docs/INTEGRATION_TASKS.md section 10 (a relaunch that does not move until reboot).
 set -u
 CLEAN=0; KILL=0
@@ -23,6 +26,11 @@ WS="${CLOTHOID_WS:-$ROOT/ros2_ws}"
 WARN=0
 ok()   { echo "  ok    $*"; }
 warn() { echo "  WARN  $*"; WARN=1; }
+# pgrep without this script and the shells that started it (their command lines can hold the pattern)
+SELF=" $$ "; p=$$
+while [ "$p" -gt 1 ]; do p=$(ps -o ppid= -p "$p" | tr -d ' '); SELF="$SELF$p "; done
+others() { for pid in $(pgrep -f -- "$1"); do case "$SELF" in *" $pid "*) ;; *) echo "$pid" ;; esac; done; }
+DAEMON_PATTERN='python3 -c from ros2cli.daemon.daemonize'
 
 echo "== DDS environment"
 echo "  ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-<unset: 0>} ROS_LOCALHOST_ONLY=${ROS_LOCALHOST_ONLY:-<unset>}"
@@ -30,13 +38,13 @@ if [ -n "${FASTRTPS_DEFAULT_PROFILES_FILE:-}" ]; then
     [ -f "$FASTRTPS_DEFAULT_PROFILES_FILE" ] && ok "Fast DDS profile $FASTRTPS_DEFAULT_PROFILES_FILE" \
         || warn "FASTRTPS_DEFAULT_PROFILES_FILE points to a missing file: $FASTRTPS_DEFAULT_PROFILES_FILE"
 else
-    warn "no Fast DDS profile: source scripts/env_jetson.sh (16 MB SHM segment for the camera)"
+    warn "no Fast DDS profile: in the terminal you launch from, source scripts/env_jetson.sh first (16 MB SHM segment for the camera)"
 fi
 
 echo "== leftover ROS processes"
 # launch/run wrappers, our python nodes, the C++ ones (twist_mux, limo_base, camera container), rviz
 PATTERN='ros2 (launch|run|bag)|/lib/clothoid_[a-z_]+/|twist_mux|limo_base|component_container|robot_state_publisher|rviz2|throttle'
-PIDS=$(pgrep -f -- "$PATTERN" | grep -vx "$$" || true)
+PIDS=$(others "$PATTERN")
 if [ -n "$PIDS" ]; then
     warn "$(echo "$PIDS" | wc -w) process(es) still running:"
     ps -o pid=,lstart=,args= -p $(echo $PIDS | tr ' ' ',') | cut -c1-160 | sed 's/^/        /'
@@ -52,12 +60,20 @@ if command -v lsof >/dev/null && [ -e /dev/ttylimo ]; then
     [ -n "$holder" ] && warn "/dev/ttylimo held by pid $holder (a new limo_base exits if it cannot open it)"
 fi
 
+DAEMON=$(others "$DAEMON_PATTERN")
+[ -n "$DAEMON" ] && echo "  info  ros2 CLI daemon running (pid $DAEMON): holds Fast DDS shared memory, stopped by --kill"
+
+if [ "$KILL" = 1 ] && [ -n "$DAEMON" ]; then
+    echo "== --kill: ros2 daemon stop"
+    ros2 daemon stop 2>&1 | sed 's/^/  /'
+    DAEMON=$(others "$DAEMON_PATTERN")
+fi
 if [ "$KILL" = 1 ] && [ -n "$PIDS" ]; then
     echo "== --kill: SIGINT"
     kill -INT $PIDS 2>/dev/null || true
     for _ in 1 2 3 4 5; do
         sleep 1
-        PIDS=$(pgrep -f -- "$PATTERN" | grep -vx "$$" || true)
+        PIDS=$(others "$PATTERN")
         [ -z "$PIDS" ] && break
     done
     if [ -n "$PIDS" ]; then
@@ -65,20 +81,39 @@ if [ "$KILL" = 1 ] && [ -n "$PIDS" ]; then
         kill -9 $PIDS 2>/dev/null || true
         sleep 1
     fi
-    PIDS=$(pgrep -f -- "$PATTERN" | grep -vx "$$" || true)
+    PIDS=$(others "$PATTERN")
     [ -z "$PIDS" ] && ok "all stopped" || warn "still running: $PIDS"
 fi
 
-echo "== Fast DDS shared memory (/dev/shm)"
-# zombie = a segment or port no live process holds a lock on (same test as `fastdds shm clean`)
-python3 - <<'PY' || WARN=1
-import fcntl,sys, os, re
+# Fast DDS shared memory. A segment / port is in use while a live process holds its _el / _sl lock
+# (the test `fastdds shm clean` uses) or has the file mapped or open (/proc/*/maps, /proc/*/fd).
+# Port files can lose their _el lock file; `fastdds shm clean` then never removes them, so
+# `remove` deletes those itself (only called with nothing ROS left running).
+shm_check() {   # report | remove
+    python3 - "$1" <<'PY'
+import fcntl, glob, os, re, sys
 d = '/dev/shm'
-files = os.listdir(d)
-seg = [f for f in files if re.fullmatch(r'fastrtps_[0-9a-f]{16}', f)]
-ports = [f for f in files if re.fullmatch(r'fastrtps_port\d+', f)]
-sems = [f for f in files if f.startswith('sem.fastrtps_')]
-def held(path):
+mode = sys.argv[1]
+files = set(os.listdir(d))
+seg = sorted(f for f in files if re.fullmatch(r'fastrtps_[0-9a-f]{16}', f))
+ports = sorted(f for f in files if re.fullmatch(r'fastrtps_port\d+', f))
+sems = sorted(f for f in files if f.startswith('sem.fastrtps_'))
+used = set()
+for pid in filter(str.isdigit, os.listdir('/proc')):
+    try:
+        with open(f'/proc/{pid}/maps') as fh:
+            used.update(line.split()[-1] for line in fh if '/dev/shm/' in line)
+        for fd in glob.glob(f'/proc/{pid}/fd/*'):
+            target = os.readlink(fd)
+            if target.startswith('/dev/shm/'):
+                used.add(target)
+    except OSError:
+        pass
+used = {os.path.basename(u.replace(' (deleted)', '')) for u in used}
+def held(name):
+    path = os.path.join(d, name)
+    if not os.path.exists(path):
+        return False
     try:
         fd = os.open(path, os.O_RDONLY)
     except OSError:
@@ -91,19 +126,57 @@ def held(path):
         return True
     finally:
         os.close(fd)
-zseg = [s for s in seg if not held(os.path.join(d, s + '_el'))]
-zport = [p for p in ports if not any(os.path.exists(os.path.join(d, p + s)) and held(os.path.join(d, p + s))
-                                     for s in ('_el', '_sl'))]
+def port_used(p):
+    return held(p + '_el') or held(p + '_sl') or p in used or f'sem.{p}_mutex' in used
+zseg = [s for s in seg if not held(s + '_el') and s not in used]
+zport = [p for p in ports if not port_used(p)]
+nolock = [p for p in zport if p + '_el' not in files and p + '_sl' not in files]
+orphan_sem = [s for s in sems if s not in used and re.fullmatch(r'sem\.(fastrtps_port\d+)_mutex', s)
+              and re.fullmatch(r'sem\.(fastrtps_port\d+)_mutex', s).group(1) not in ports]
+if mode == 'remove':
+    gone = 0
+    for p in zport:
+        for f in (p, p + '_el', p + '_sl', f'sem.{p}_mutex'):
+            try:
+                os.remove(os.path.join(d, f))
+                gone += 1
+            except FileNotFoundError:
+                pass
+    for s in orphan_sem:
+        os.remove(os.path.join(d, s))
+        gone += 1
+    print(f'  removed {len(zport)} unused ports and {len(orphan_sem)} lone semaphores ({gone} files)')
+    sys.exit(0)
 size = sum(os.path.getsize(os.path.join(d, f)) for f in seg + ports)
 print(f'  {len(seg)} segments, {len(ports)} ports, {len(sems)} semaphores, {size / 1e6:.1f} MB')
-print(f'  {"WARN " if zseg or zport else "ok   "} {len(zseg)} zombie segments, {len(zport)} zombie ports '
-      f'(no live process holds them){": scripts/preflight.sh --clean" if zseg or zport else ""}')
-sys.exit(1 if zseg or zport else 0)
+bad = zseg or zport or orphan_sem
+print(f'  {"WARN " if bad else "ok   "} {len(zseg)} zombie segments, {len(zport)} zombie ports'
+      f' ({len(nolock)} without a lock file, `fastdds shm clean` skips those), {len(orphan_sem)} lone semaphores'
+      + (': with every launch stopped, scripts/preflight.sh --kill --clean' if bad else ''))
+sys.exit(1 if bad else 0)
 PY
+}
+
+echo "== Fast DDS shared memory (/dev/shm)"
+shm_check report || SHM_WARN=1
 if [ "$CLEAN" = 1 ]; then
-    echo "== --clean: fastdds shm clean (WARN above is from before the clean)"
+    echo "== --clean: fastdds shm clean"
     fastdds shm clean | sed 's/^/  /'
+    LEFT=$(others "$PATTERN")
+    DAEMON=$(others "$DAEMON_PATTERN")
+    if [ "$KILL" = 1 ] && [ -z "$LEFT" ] && [ -z "$DAEMON" ]; then
+        echo "== --clean: ports and semaphores fastdds shm clean leaves (nothing ROS running)"
+        shm_check remove
+    else
+        echo "  ROS processes or the ros2 daemon are still running: lock-less port files stay."
+        echo "  To remove them too: stop every launch, then scripts/preflight.sh --kill --clean"
+        echo "  (by hand: ros2 daemon stop; rm -f /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*)"
+    fi
+    echo "== Fast DDS shared memory after the clean"
+    SHM_WARN=0
+    shm_check report || SHM_WARN=1
 fi
+[ "${SHM_WARN:-0}" = 1 ] && WARN=1
 
 echo "== clock"
 if command -v timedatectl >/dev/null; then
