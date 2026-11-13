@@ -56,6 +56,10 @@ mission:
     # false (2026-11-10): the confirmed YOLO sign_parking raises /parking_flag at once. true needs
     # /stopline_near from the stopline node, which full.launch does not start (use_stopline:=false)
     parking_at_stopline: false
+    # cone gate: allow parking and block speed bump only after /cone/mission_active has been true
+    require_cone_for_parking: true
+    block_bump_after_cone: true
+    cone_confirm_sec: 1.5       # consecutive seconds of cone_active before latching cone_entered
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true

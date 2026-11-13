@@ -110,6 +110,10 @@ class MissionParams:
     fork_right_direction: int = 1
     # parking: the sign is seen from afar, the stop line before the bays is where the search starts
     parking_at_stopline: bool = True
+    # cone gate: allow parking and block speed bump only after entering the cone course
+    require_cone_for_parking: bool = True
+    block_bump_after_cone: bool = True
+    cone_confirm_sec: float = 1.5      # consecutive seconds of cone_active before latching cone_entered
 
 
 @dataclass
@@ -122,6 +126,7 @@ class Inputs:
     parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
+    cone_active: bool = False                     # /cone/mission_active from cone_sorter
 
 
 @dataclass
@@ -143,6 +148,8 @@ class MissionLogic:
         self.direction: Optional[int] = None
         self.parking_flag = False
         self.parking_armed = False
+        self.cone_entered = False
+        self.cone_active_since: Optional[float] = None
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
@@ -157,13 +164,21 @@ class MissionLogic:
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
 
+        if inputs.cone_active:
+            if self.cone_active_since is None:
+                self.cone_active_since = now
+            if now - self.cone_active_since >= p.cone_confirm_sec:
+                self.cone_entered = True
+        else:
+            self.cone_active_since = None
+
         if 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
         if 'sign_left' in seen:
             self.direction = p.fork_left_direction
         elif 'sign_right' in seen:
             self.direction = p.fork_right_direction
-        if 'sign_parking' in seen:
+        if 'sign_parking' in seen and (self.cone_entered or not p.require_cone_for_parking):
             self.parking_armed = True
         if self.parking_armed and (inputs.parking_line or not p.parking_at_stopline):
             self.parking_flag = True
@@ -189,9 +204,13 @@ class MissionLogic:
 
     def _update_bump(self, inputs: Inputs) -> None:
         now, seen, pitch, p = inputs.now, inputs.seen, inputs.imu_pitch, self.p
+        bump_blocked = self.cone_entered and p.block_bump_after_cone
 
         # 1. YOLO trigger
-        if 'sign_bump' in seen:
+        if bump_blocked:
+            if self.bump_state == BUMP_APPROACHING:
+                self.bump_state = BUMP_IDLE
+        elif 'sign_bump' in seen:
             if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
                 self.bump_state = BUMP_IDLE
 
