@@ -4,7 +4,9 @@ Initial registration now requires two parallel, separated measured road lines.
 Their direction sets parking yaw; intersection with the observed transverse
 stripe determines entry position. The stripe remains a consistency check but
 its normal no longer alone sets yaw. Existing multi-frame layout confirmation
-still applies.
+still applies. Pre-control side refinement changes yaw only when both road
+boundaries agree; one boundary may refine lateral position after confirmation.
+Parking start still freezes the reference.
 
 Parking stage model and pre-control alignment
 --------------------------------------------

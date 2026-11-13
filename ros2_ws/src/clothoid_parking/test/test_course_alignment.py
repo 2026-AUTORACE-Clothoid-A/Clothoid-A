@@ -83,3 +83,18 @@ def test_rule_stage_keeps_lane_width_separate_from_bay_dimensions():
     assert np.allclose(lines['entry'][:,0],-.470207)
     assert np.allclose(lines['finish'][:,0],2.039797)
     assert np.isclose(np.ptp(lines['entry'][:,1]),.52)
+
+
+def test_one_visible_boundary_never_rotates_registered_map():
+    obj=layout();before=obj.yaw
+    points=np.array([[1.1,-.22],[1.6,-.20]])
+    for t in (1.6,1.8,2.,2.2,2.4):obj.refine_boundaries(t,[points],Pose2D())
+    assert obj.origin[1]>-.25
+    assert obj.yaw==before
+
+
+def test_disagreeing_near_and_far_boundaries_do_not_average_into_a_correction():
+    obj=layout();before=obj.origin.copy()
+    lines=[np.array([[1.1,-.25],[1.6,-.22]]),np.array([[1.1,.27],[1.6,.24]])]
+    for t in (1.6,1.8,2.,2.2):assert not obj.refine_boundaries(t,lines,Pose2D())
+    assert np.array_equal(obj.origin,before) and obj.yaw==0.

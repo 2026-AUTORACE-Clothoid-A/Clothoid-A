@@ -88,6 +88,7 @@ class ParkingLayout:
         self.support_count = 0
         self.motion_reason = ''
         self.boundary_samples = deque(maxlen=self.p.confirm_frames)
+        self.boundary_paired = None
         self.last_boundary = -math.inf
         self.last_refinement = -math.inf
         self.boundary_segments = []
@@ -210,7 +211,18 @@ class ParkingLayout:
             self.boundary_samples.clear()
             self.alignment_reason = 'measured boundaries disagree; no correction'
             return False
-        angle = float(np.median([m[1] for m in matches]))
+        errors = [m[1] for m in matches]
+        if max(errors)-min(errors) > self.p.angle_tolerance:
+            self.boundary_samples.clear()
+            self.alignment_reason = 'road boundaries disagree; no correction'
+            return False
+        # Heading needs both road edges. One edge may refine lateral position,
+        # but must not rotate the entire map when the other edge is occluded.
+        paired = len({m[2] for m in matches}) == 2
+        if paired != self.boundary_paired:
+            self.boundary_samples.clear()
+        self.boundary_paired = paired
+        angle = float(np.median(errors)) if paired else 0.
         heading = wrap(self.yaw+angle)
         normal = -self.p.side*np.array([-math.sin(heading), math.cos(heading)])
         shift = float(np.median([(m[0]-self.origin)@normal-m[2] for m in matches]))
@@ -234,7 +246,8 @@ class ParkingLayout:
         self.origin += float((candidate-self.origin)@normal)*fraction*normal
         self.yaw = wrap(self.yaw+angle)
         self.last_refinement = stamp
-        self.alignment_reason = 'side lines: yaw/lateral refined; along-road unchanged'
+        self.alignment_reason = ('paired side lines: yaw/lateral refined; along-road unchanged'
+                                 if paired else 'one side line: lateral refined; yaw unchanged')
         return True
 
     def scan(self, stamp, ranges, angle_min, angle_increment, range_min, range_max, pose, laser_x):
