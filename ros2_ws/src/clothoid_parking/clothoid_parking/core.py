@@ -71,12 +71,22 @@ class ParkingCore:
         if self.layout is None or pose is None or not (self.preparing or self.flag):
             return False
         # Re-localization during a committed manoeuvre cannot move its target.
-        if self.phase not in (Phase.IDLE, Phase.SEARCH):
+        if self.flag or self.phase != Phase.IDLE:
             return False
         observed = self.layout.observe(stamp, origin, yaw, pose)
         if not observed:
             self.approach_bay = None
         return observed
+
+    def observe_side_lines(self, stamp, segments):
+        pose = self.pose_at(stamp)
+        if (self.layout is None or pose is None or not self.preparing or
+                self.flag or self.phase != Phase.IDLE):
+            return False
+        refined = self.layout.refine_boundaries(stamp, segments, pose)
+        if refined:
+            self.approach_bay = None  # refresh clearance on the next real scan
+        return refined
 
     def set_flag(self, now: float, on: bool):
         if not on and self.layout is not None:

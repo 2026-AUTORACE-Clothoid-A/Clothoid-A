@@ -138,3 +138,24 @@ def find_line(im, gx, gy, roi):
             continue
         out.append({'rho': float(rho), 'angle': angle, 'width': b - a, 'corners': [q.tolist() for q in corners], 'fit_error': math.sqrt(vals[0]), 'raw_segment': [int(x1), int(y1), int(x2), int(y2)]})
     return min(out, key=lambda d: d['rho']) if out else None
+
+
+def fit_boundary_segments(lane_points):
+    """Compact straight-line observations from existing metric lane samples."""
+    segments = []
+    for points in lane_points:
+        points = np.asarray(points, dtype=float)
+        if len(points) < 4 or points.shape[1:] != (2,) or not np.isfinite(points).all():
+            continue
+        centre = np.mean(points, axis=0)
+        values, vectors = np.linalg.eigh(np.cov(points.T))
+        direction = vectors[:, -1]
+        if direction[0] < 0:
+            direction = -direction
+        if abs(math.atan2(direction[1], direction[0])) > math.radians(30) or math.sqrt(max(0., values[0])) > .015:
+            continue
+        extents = np.percentile((points-centre)@direction, [5, 95])
+        if extents[1]-extents[0] < .18:
+            continue
+        segments.append(centre+extents[:, None]*direction)
+    return segments

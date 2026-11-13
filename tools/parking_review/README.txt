@@ -1,3 +1,28 @@
+Parking stage model and pre-control alignment
+--------------------------------------------
+The RViz model includes the parking-entry stop stripe, both straight road
+boundaries, six bays, and the terminal line. The relative geometry comes from
+local_archive/2026 국민대 LIMO 트랙 도면/2026Track 도면.pdf. The v3 road clear
+width is500mm; with20mm paint its boundary centres are520mm apart. Bay clear
+width/depth remain separately500/600mm. Runtime uses no absolute CAD-world pose.
+
+Labels ENTRY/FINISH (MODEL) and pale road lines are predicted geometry, not
+measurements or free-space evidence. Mint measured_side_lines are straight
+segments fitted to existing metric lane samples at the existing5Hz observation
+rate. /parking/side_lines carries endpoint pairs in a base_link PolygonStamped.
+
+Before /parking_flag, repeated matching side lines gently refine map yaw and
+lateral position after visual registration and lidar corroboration. Parallel
+lines cannot determine along-road position; measured entry stripes provide that
+axis. Existing confirmation/tolerance gates are reused. Once parking starts,
+entry-stripe and side-line changes cannot move the reference, including SEARCH.
+IMU/odom continue to move the vehicle relative to that fixed reference.
+
+Collision envelope is vehicle dimensions plus3cm on each side. The7cm visual
+registration consistency tolerance is independent. Occupied/unknown-space gates
+and actual four-corner completion checks still apply. No new ROS tuning
+parameters or image-processing pass were added. RViz shows ALIGNING/FIXED status.
+
 Reverse exit with the existing rear-masked lidar (2026-11-13)
 
   EXIT_BACK and EXIT_TURN use the existing IMU/odom reverse manoeuvre without

@@ -185,12 +185,19 @@ def observation_markers(core, stamp, now) -> MarkerArray:
         arrow.points = [_to_base(pose, x, y),
                         _to_base(pose, x+.25*math.cos(layout.yaw), y+.25*math.sin(layout.yaw))]
         out.markers.append(arrow)
+    if 0 <= now-layout.last_boundary <= .5 and layout.boundary_segments:
+        measured = _marker(stamp, 'measured_side_lines', 0, Marker.LINE_LIST, (.2, 1., .6, 1.), .025)
+        measured.points = [_to_base(pose, float(x), float(y))
+                           for segment in layout.boundary_segments for x,y in segment]
+        out.markers.append(measured)
     status = _marker(stamp, 'observation_status', 0, Marker.TEXT_VIEW_FACING, (1., 1., 1., 1.), .075)
     status.pose.position.x, status.pose.position.y, status.pose.position.z = 1., 1., .1
     age = now-layout.last_scan
     freshness = 'waiting for scan' if not math.isfinite(age) else f'scan age {age:.1f}s'
     mode = 'CONTROL' if layout.p.control_enabled else 'OBSERVE'
+    alignment = 'FIXED at parking start' if core.flag or core.phase != Phase.IDLE else 'ALIGNING before parking'
     status.text = (f'{mode} | {freshness}\n{layout.reason}\n'
+                   f'{alignment} | {layout.alignment_reason}\n'
                    'MAP: cyan=observed free / red=hit / grey=unknown\n'
                    'BAYS: grey=candidate / orange=unconfirmed route / green=clear')
     out.markers.append(status)

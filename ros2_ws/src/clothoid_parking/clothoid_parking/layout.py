@@ -7,6 +7,7 @@ import math
 from collections import deque
 from dataclasses import dataclass
 import numpy as np
+from clothoid_common.parking_geometry import PARKING_GEOMETRY
 from clothoid_parking.bay_finder import Bay
 from clothoid_parking.planner import wrap
 
@@ -86,6 +87,11 @@ class ParkingLayout:
         self.reason = 'waiting for lane/entry/grid registration'
         self.support_count = 0
         self.motion_reason = ''
+        self.boundary_samples = deque(maxlen=self.p.confirm_frames)
+        self.last_boundary = -math.inf
+        self.last_refinement = -math.inf
+        self.boundary_segments = []
+        self.alignment_reason = 'waiting for measured road boundaries'
 
     def retain_free(self, now, enabled):
         """Keep measured free cells for one confirmed parking approach/entry."""
@@ -109,6 +115,8 @@ class ParkingLayout:
             self.samples.clear()
         if self.origin is not None and len(self.samples) == 0:
             self.retain_free(stamp, False)
+            self.boundary_samples.clear()
+            self.boundary_segments = []
             self.origin = None
             self.selected = None
             self.counts = [0]*len(self.counts)
@@ -127,6 +135,8 @@ class ParkingLayout:
                                        abs(wrap(angle-self.yaw)) > self.p.angle_tolerance):
             # Contradictory anchors revoke the plan instead of silently moving a frozen target.
             self.retain_free(stamp, False)
+            self.boundary_samples.clear()
+            self.boundary_segments = []
             self.origin = None
             self.counts = [0]*len(self.counts)
             self.selected = None
@@ -134,6 +144,14 @@ class ParkingLayout:
             return False
         if self.origin is None:
             self.retain_free(stamp, False)
+            self.boundary_samples.clear()
+        elif self.last_refinement == stamp:
+            # ROS can deliver the two observation topics in either order.
+            # Keep this frame's accepted side-line yaw/lateral correction;
+            # the transverse stripe still updates its observable along axis.
+            n = np.array([math.cos(self.yaw), math.sin(self.yaw)])
+            candidate = self.origin+float((candidate-self.origin)@n)*n
+            angle = self.yaw
         # Free cells are in the odometry frame, not relative to the visual
         # anchor. Consistent visual updates must not erase approach evidence;
         # contradictory registration is invalidated above.
@@ -155,6 +173,69 @@ class ParkingLayout:
                 out.append(Bay(*centre, self.yaw, self.yaw+p.side*math.pi/2,
                                p.bay_width, *face))
         return out
+
+    def refine_boundaries(self, stamp, segments, pose):
+        """Associate measured side lines; correct observable yaw/lateral only.
+
+        Parallel lines cannot determine along-road position. Longitudinal
+        updates remain the responsibility of the observed entry stripe.
+        """
+        if (self.origin is None or stamp <= self.last_boundary or
+                stamp-self.last_observation > self.p.max_pose_age):
+            return False
+        if stamp-self.last_boundary > self.p.observation_gap:
+            self.boundary_samples.clear()
+        self.last_boundary = stamp
+        c, s = math.cos(pose.yaw), math.sin(pose.yaw)
+        rotation = np.array([[c, s], [-s, c]])
+        normal = -self.p.side*np.array([-math.sin(self.yaw), math.cos(self.yaw)])
+        matches = []
+        for segment in segments:
+            points = np.asarray(segment, dtype=float)
+            if points.shape != (2, 2) or not np.isfinite(points).all():
+                continue
+            points = points@rotation + [pose.x, pose.y]
+            delta = points[1]-points[0]
+            if np.linalg.norm(delta) < .18:
+                continue
+            yaw = math.atan2(delta[1], delta[0])
+            error = .5*wrap(2*(yaw-self.yaw))
+            centre = points.mean(axis=0)
+            lateral = float((centre-self.origin)@normal)
+            offset = min((0., PARKING_GEOMETRY.boundary_spacing), key=lambda x:abs(lateral-x))
+            if abs(error) <= self.p.angle_tolerance and abs(lateral-offset) <= self.p.position_tolerance:
+                matches.append((centre, error, offset, points))
+        self.boundary_segments = [m[3] for m in matches]
+        if not matches:
+            self.boundary_samples.clear()
+            self.alignment_reason = 'measured boundaries disagree; no correction'
+            return False
+        angle = float(np.median([m[1] for m in matches]))
+        heading = wrap(self.yaw+angle)
+        normal = -self.p.side*np.array([-math.sin(heading), math.cos(heading)])
+        shift = float(np.median([(m[0]-self.origin)@normal-m[2] for m in matches]))
+        if abs(shift) > self.p.position_tolerance:
+            return False
+        self.boundary_samples.append((self.origin+shift*normal, heading))
+        if (len(self.boundary_samples) < self.p.confirm_frames or
+                self.support_count < self.p.confirm_scans):
+            self.alignment_reason = 'confirming measured road boundaries'
+            return False
+        origins = np.array([x[0] for x in self.boundary_samples])
+        angles = np.array([wrap(x[1]-self.yaw) for x in self.boundary_samples])
+        candidate = np.median(origins, axis=0)
+        if np.max(np.linalg.norm(origins-candidate, axis=1)) > self.p.position_tolerance:
+            self.boundary_samples.clear()
+            return False
+        # Reuse the existing confirmation count as the smoothing window.
+        fraction = 1./self.p.confirm_frames
+        angle = float(np.median(angles))*fraction
+        normal = -self.p.side*np.array([-math.sin(self.yaw), math.cos(self.yaw)])
+        self.origin += float((candidate-self.origin)@normal)*fraction*normal
+        self.yaw = wrap(self.yaw+angle)
+        self.last_refinement = stamp
+        self.alignment_reason = 'side lines: yaw/lateral refined; along-road unchanged'
+        return True
 
     def scan(self, stamp, ranges, angle_min, angle_increment, range_min, range_max, pose, laser_x):
         if stamp-self.last_scan < 1/self.p.scan_hz-1e-6:

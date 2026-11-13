@@ -17,5 +17,6 @@ exec ros2 bag record -o "$PARK_RECORD_OUTPUT" \
     /parking_sign /parking_prepare /parking_flag /parking_done /parking/state \
     /parking/approach_speed_limit /parking/approach_status /parking/entry_distance /parking/observing /parking/skipped \
     /parking/bay_candidate /parking/entry_candidate /parking/layout /parking/layout_status \
+    /parking/side_lines \
     /finish/state /finish_done /stopline_near /stopline_detected \
     /bump/approaching /steering_lock "$@"

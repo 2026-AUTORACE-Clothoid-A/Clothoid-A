@@ -2,11 +2,11 @@
 import math
 import cv2
 import numpy as np
-from geometry_msgs.msg import PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, PolygonStamped, Point32
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import Bool
 from rclpy.qos import qos_profile_sensor_data
-from clothoid_lane.parking_landmark import LandmarkParams, ParkingLandmark
+from clothoid_lane.parking_landmark import LandmarkParams, ParkingLandmark, fit_boundary_segments
 from clothoid_lane.lane_detector import make_warp_matrix
 
 
@@ -29,6 +29,7 @@ class LandmarkPublisher:
             setattr(p, key, node.get_parameter(name).value)
         self.detector = ParkingLandmark(p)
         self.pub = node.create_publisher(PoseWithCovarianceStamped, '/parking/entry_candidate', 1)
+        self.boundary_pub = node.create_publisher(PolygonStamped, '/parking/side_lines', 1)
         node.create_subscription(CameraInfo, '/camera/color/camera_info', self.on_info, qos_profile_sensor_data)
         node.create_subscription(Bool, '/parking_prepare', self.on_prepare, 1)
         node.create_subscription(Bool, '/parking_flag', self.on_flag, 1)
@@ -49,7 +50,7 @@ class LandmarkPublisher:
             self.active = self.prepare = False
 
     def process(self, bgr, header, result, warp):
-        if not self.enabled or not (self.always_observe or self.prepare or self.active) or self.info is None:
+        if not self.enabled or not (self.always_observe or (self.prepare and not self.active)) or self.info is None:
             return
         t = header.stamp.sec+header.stamp.nanosec*1e-9
         now = self.node.get_clock().now().nanoseconds*1e-9
@@ -74,16 +75,22 @@ class LandmarkPublisher:
             valid = (pixels[:, 0]>=0)&(pixels[:, 0]<info.width)&(pixels[:, 1]>=0)&(pixels[:, 1]<info.height)
             x, y = pixels[valid].T
             sides.append(np.column_stack((gx[y, x], gy[y, x])))
+        measured = PolygonStamped()
+        measured.header.stamp, measured.header.frame_id = header.stamp, 'base_link'
+        measured.polygon.points = [Point32(x=float(x), y=float(y))
+                                   for segment in fit_boundary_segments(sides) for x, y in segment]
         obs = self.detector.detect(bgr, sides)
-        if obs is None:
-            return
-        msg = PoseWithCovarianceStamped()
-        msg.header.stamp = header.stamp
-        msg.header.frame_id = 'base_link'
-        msg.pose.pose.position.x, msg.pose.pose.position.y = obs['origin']
-        msg.pose.pose.orientation.z = math.sin(obs['angle']/2)
-        msg.pose.pose.orientation.w = math.cos(obs['angle']/2)
-        # Conservative measurement uncertainty, not a claim of calibrated absolute accuracy.
-        msg.pose.covariance[0] = msg.pose.covariance[7] = .07**2
-        msg.pose.covariance[35] = math.radians(3)**2
-        self.pub.publish(msg)
+        if obs is not None:
+            msg = PoseWithCovarianceStamped()
+            msg.header.stamp = header.stamp
+            msg.header.frame_id = 'base_link'
+            msg.pose.pose.position.x, msg.pose.pose.position.y = obs['origin']
+            msg.pose.pose.orientation.z = math.sin(obs['angle']/2)
+            msg.pose.pose.orientation.w = math.cos(obs['angle']/2)
+            # Measurement uncertainty, not calibrated absolute accuracy.
+            msg.pose.covariance[0] = msg.pose.covariance[7] = .07**2
+            msg.pose.covariance[35] = math.radians(3)**2
+            self.pub.publish(msg)
+        # Side observations remain useful after the transverse stripe leaves
+        # view, and are a refinement of this frame's full anchor when present.
+        self.boundary_pub.publish(measured)

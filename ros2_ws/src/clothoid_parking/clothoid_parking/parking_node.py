@@ -14,7 +14,7 @@ import math
 from dataclasses import fields
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, Twist, PoseWithCovarianceStamped, PoseArray, Pose
+from geometry_msgs.msg import PoseStamped, Twist, PoseWithCovarianceStamped, PoseArray, Pose, PolygonStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -94,6 +94,7 @@ class ParkingNode(Node):
         self.layout_pub = self.create_publisher(PoseArray, '/parking/layout', 1)
         self.layout_status_pub = self.create_publisher(String, '/parking/layout_status', 1)
         self.create_subscription(PoseWithCovarianceStamped, '/parking/entry_candidate', self.on_entry, 1)
+        self.create_subscription(PolygonStamped, '/parking/side_lines', self.on_side_lines, 1)
         self.create_subscription(Float32, '/parking/entry_distance', self.on_entry_distance, 1)
         self.create_subscription(Twist, '/cmd_vel_lane', self.on_lane_command, 1)
         self.create_timer(.5, self.publish_layout)
@@ -175,6 +176,16 @@ class ParkingNode(Node):
         yaw = math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))
         self.core.observe_entry(stamp, (msg.pose.pose.position.x, msg.pose.pose.position.y), yaw)
 
+    def on_side_lines(self, msg):
+        stamp = self.stamp(msg)
+        if msg.header.frame_id != 'base_link' or not -.05 <= self.now()-stamp <= STALE_SEC:
+            return
+        points = msg.polygon.points
+        if len(points)%2:
+            return
+        segments = [((a.x, a.y), (b.x, b.y)) for a,b in zip(points[::2], points[1::2])]
+        self.core.observe_side_lines(stamp, segments)
+
     def publish_preview(self):
         if self.preview is not None:
             self.preview_pub.publish(preview_markers(self.preview, self.get_clock().now().to_msg()))
@@ -200,7 +211,9 @@ class ParkingNode(Node):
         if self.observation_pub.get_subscription_count():
             self.observation_pub.publish(observation_markers(self.core, msg.header.stamp, self.now()))
         mode = 'control' if layout.p.control_enabled else 'observe'
-        self.layout_status_pub.publish(String(data=mode+': '+layout.reason+'; '+', '.join(
+        reference = 'fixed' if self.core.flag or self.core.phase != Phase.IDLE else 'aligning'
+        self.layout_status_pub.publish(String(data=mode+': '+layout.reason+'; reference='+reference+
+            '; '+layout.alignment_reason+'; '+', '.join(
             f'{i+1}:{state}' for i, state in enumerate(layout.states))))
 
     def on_prepare(self, msg: Bool):
