@@ -942,7 +942,7 @@ def test_no_new_start_after_a_hand_over_beside_the_island():
 def test_escape_path_when_every_path_is_blocked():
     """Stuck behind a lane 2 LIMO 0.55 m ahead with the lane 1 LIMO 0.35 m further (1113 auto 05
     like): the escape search finds the quick swerve the lane-centre S-curves do not have."""
-    p = AvoidParams()
+    p = AvoidParams(escape=True)                          # off by default for now
     a = StaticAvoid(p)
     a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
     a.direction = 1
@@ -961,3 +961,17 @@ def test_escape_path_when_every_path_is_blocked():
     off.costmap = a.costmap
     off.plan = None
     assert off.control((0.0, 0.0, 0.0), Inhibit(), 0.6) == (0.0, 0.0)
+
+
+def test_a_hand_over_at_an_estimated_island_does_not_end_the_run():
+    """A false start before the section (no entry line, island estimated): reaching that island
+    must not lock out the real section after it (session A, 11-13)."""
+    a = _active_at_origin()                               # island_source 'estimate'
+    a.plan = None
+    s = a.island[0] + a.p.island_past_estimate + a.p.handover_past + a.p.handover_overshoot + 0.01
+    assert a.control((s, 0.0, 0.0), Inhibit()) is None    # overshoot: handed over, in lane 2
+    assert not a.finished and a.locked
+    limo = np.array([[1.0, 0.0]])
+    started = [a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0), entry_back=0.5,
+                          entry_pose=(11.5, 0.0, 0.0)) for k in range(6)]
+    assert any(started)                                   # the real section starts
