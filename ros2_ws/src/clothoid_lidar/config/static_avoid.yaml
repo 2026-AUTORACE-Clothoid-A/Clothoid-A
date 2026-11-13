@@ -32,6 +32,12 @@ static_avoid:
     handover_past: 0.6
     handover_heading_deg: 15.0
     handover_overshoot: 0.6      # m further: hand over whatever the heading
+    one_section_per_run: true    # after that hand-over no new start (restart the node for another run)
+    # every path blocked for stuck_time: one search of curvature-limited three-arc paths (escape_*),
+    # the best free one driven slowly to its end (1113 auto 05: 14 s stopped where only a quick
+    # swerve went through)
+    escape: true
+    escape_margin: 0.03          # m of clearance more than safety for an escape path
     outside_margin: 0.10         # m past the yellow lines: hits dropped once the lanes are measured
     # painted island. Fallback when the entry line was not seen, from the point the mission started:
     # a start just before the entry line (1108 run 1 2 3 10 11) has the front at 4.61~4.74 m. A start

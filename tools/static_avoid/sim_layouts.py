@@ -40,7 +40,24 @@ def random_layouts(seed):
              (float(rng.choice([W, -W])), round(float(rng.uniform(1.5, 3.2)), 2))] for _ in range(40)]
 
 
+def dense_layouts(seed, count):
+    """One LIMO in every lane (rear 0.8~3.4 m) and a fourth in lane 1 or 3 half the time, as the
+    hard 11-12 / 11-13 car layouts: some need a quick swerve between two of them."""
+    rng = np.random.default_rng(seed)
+    out = []
+    while len(out) < count:
+        lay = [(y, round(float(rng.uniform(0.8, 3.4)), 2)) for y in (W, 0.0, -W)]
+        if rng.random() < 0.5:
+            y = float(rng.choice([W, -W]))
+            r = round(float(rng.uniform(0.8, 3.4)), 2)
+            if all(abs(r - r2) > 0.6 for y2, r2 in lay if y2 == y):
+                lay.append((y, r))
+        out.append(lay)
+    return out
+
+
 RANDOM = random_layouts(7)
+DENSE = []
 CONFS = {}
 
 
@@ -88,9 +105,12 @@ def main():
     ap.add_argument('--workers', type=int, default=8)
     ap.add_argument('--fails', action='store_true', help='list every failed random layout')
     ap.add_argument('--seed', type=int, default=7, help='random layouts')
+    ap.add_argument('--dense', type=int, default=0,
+                    help='also this many dense layouts (a LIMO in every lane, x sign left / right)')
     a = ap.parse_args()
-    global RANDOM
+    global RANDOM, DENSE
     RANDOM = random_layouts(a.seed)
+    DENSE = dense_layouts(a.seed, a.dense)
     for c in a.conf or ['now={}']:
         name, js = c.split('=', 1)
         CONFS[name] = {k: tuple(v) if isinstance(v, list) else v for k, v in json.loads(js).items()}
@@ -103,6 +123,9 @@ def main():
         for i, layout in enumerate(RANDOM):
             for d in (0, 1):
                 jobs.append((name, 'R', i, d, i + 1, layout))
+        for i, layout in enumerate(DENSE):
+            for d in (0, 1):
+                jobs.append((name, 'D', i, d, i + 1, layout))
     with Pool(a.workers) as pool:
         res = pool.map(job, [(j[0], j[5], j[3], j[4]) for j in jobs])
     print(f'{"setting":24s} | 1108 | random | HIT gap<3 island stuck lane (tip) | gap p10 | '
@@ -111,6 +134,7 @@ def main():
         rows = [(j, r) for j, r in zip(jobs, res) if j[0] == name]
         fixed = [r for j, r in rows if j[1] == 'F']
         rand = [r for j, r in rows if j[1] == 'R']
+        dense = [r for j, r in rows if j[1] == 'D']
         allr = fixed + rand
         count = {k: sum(k in r[0] for r in allr) for k in ('HIT', 'gap<3', 'island', 'stuck', 'lane')}
         gaps = [r[1] for r in allr if np.isfinite(r[1])]
@@ -119,7 +143,14 @@ def main():
         print(f'{name:24s} | {sum(not r[0] for r in fixed):2d}/12 | {sum(not r[0] for r in rand):2d}/80 | '
               f'{count["HIT"]:3d} {count["gap<3"]:5d} {count["island"]:6d} {count["stuck"]:5d} '
               f'{count["lane"]:4d} ({count["tip"]:2d}) | {100 * np.percentile(gaps, 10):4.1f} cm | {seqs}')
+        if dense:
+            dc = {k: sum(k in r[0] for r in dense) for k in ('HIT', 'gap<3', 'island', 'stuck', 'lane')}
+            print(f'{"":24s}   dense {sum(not r[0] for r in dense)}/{len(dense)}: '
+                  + ' '.join(f'{k} {v}' for k, v in dc.items()))
         if a.fails:
+            for j, r in rows:
+                if j[1] == 'D' and r[0]:
+                    print(f'    dense {j[2]} {j[5]}, sign {"LR"[j[3]]}: {" ".join(r[0])} ({r[2]})')
             for j, r in rows:
                 if j[1] == 'R' and r[0]:
                     (_, r2), (side, ro) = j[5]

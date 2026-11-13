@@ -467,7 +467,8 @@ def test_skewed_frame_without_a_start_fit():
     One-stage paths stop there; the lane sequence (and the two-stage route) go around."""
     w = 0.50
     limos = [(1.5, 0.0), (3.5, 0.0), (3.0, -w)]
-    stuck = run(limos, direction=0, skew_deg=-12.0, params=replace(AvoidParams(), sequence=False))
+    stuck = run(limos, direction=0, skew_deg=-12.0,
+                params=replace(AvoidParams(), sequence=False, escape=False))
     assert stuck['x'] < 2.0 and stuck['stops'] > 0
     check(run(limos, direction=0, skew_deg=-12.0), w, 1)
     check(run(limos, direction=0, skew_deg=-12.0,
@@ -531,20 +532,20 @@ def test_target_lane_limo_just_before_the_island_is_reached_over_the_tip_at_most
 
 
 def test_reverse_recovery_backs_up_only_when_allowed():
-    blocked = StaticAvoid(AvoidParams(recovery_reverse=True))
+    blocked = StaticAvoid(AvoidParams(recovery_reverse=True, escape=False))
     blocked.activate((0.0, 0.0, 0.0))
     blocked.plan = None
     cmds = [blocked.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) for k in range(20)]
     assert cmds[0] == (0.0, 0.0) and any(v < 0.0 for v, _ in cmds)
     assert blocked.event == 'stuck: backing up'
-    off = StaticAvoid(AvoidParams())
+    off = StaticAvoid(AvoidParams(escape=False))
     off.activate((0.0, 0.0, 0.0))
     off.plan = None
     assert all(off.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) == (0.0, 0.0) for k in range(30))
 
 
 def test_reverse_stops_after_its_distance():
-    a = StaticAvoid(AvoidParams(recovery_reverse=True))
+    a = StaticAvoid(AvoidParams(recovery_reverse=True, escape=False))
     a.activate((0.0, 0.0, 0.0))
     a.plan = None
     for k in range(16):
@@ -916,3 +917,47 @@ def test_beams_to_far_points_clear_what_they_pass():
         cm.update(far, origin)
     assert cm.count[i[0], j[0]] == 0
     assert not cm.occupied_at(far).any()                  # the far point itself is not marked
+
+
+def test_no_new_start_after_a_hand_over_beside_the_island():
+    """1113 auto 02 / 05: started again at the cone course's white line and cones past the fork."""
+    a = _active_at_origin()
+    a.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    a.plan = None
+    assert a.control((a.island[0] + 0.65, 0.5, 0.0), Inhibit()) is None
+    assert a.finished
+    limo = np.array([[1.0, 0.0]])
+    started = [a.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0), entry_back=0.5,
+                          entry_pose=(11.5, 0.0, 0.0)) for k in range(6)]
+    assert not any(started)
+    b = _active_at_origin(AvoidParams(one_section_per_run=False))
+    b.on_lane_fit(SectionFrame(0.0, 0.0, 0.0))
+    b.plan = None
+    b.control((b.island[0] + 0.65, 0.5, 0.0), Inhibit())
+    started = [b.on_limos(20 + 0.1 * k, limo, Inhibit(), 0.3, (12.0, 0.0, 0.0), entry_back=0.5,
+                          entry_pose=(11.5, 0.0, 0.0)) for k in range(6)]
+    assert any(started)                                   # the retry as before
+
+
+def test_escape_path_when_every_path_is_blocked():
+    """Stuck behind a lane 2 LIMO 0.55 m ahead with the lane 1 LIMO 0.35 m further (1113 auto 05
+    like): the escape search finds the quick swerve the lane-centre S-curves do not have."""
+    p = AvoidParams()
+    a = StaticAvoid(p)
+    a.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
+    a.direction = 1
+    for _ in range(6):
+        a.costmap.update(np.array([[0.75 + 0.02 * k, y] for k in range(10) for y in (-0.08, 0.0, 0.08)]
+                                  + [[1.10 + 0.02 * k, y] for k in range(10) for y in (0.42, 0.5, 0.58)]),
+                         np.zeros(2))
+    a.plan = None
+    assert a.control((0.0, 0.0, 0.0), Inhibit(), 0.0) == (0.0, 0.0)          # waits stuck_time
+    v, w = a.control((0.0, 0.0, 0.0), Inhibit(), 0.6)
+    assert v > 0.0 and w < 0.0 and a.event.startswith('stuck: escape path')  # right, to lane 3
+    esc = a.escape_plan
+    assert esc.path[-1, 1] < -0.2
+    off = StaticAvoid(replace(p, escape=False))
+    off.activate((0.0, 0.0, 0.0), entry_back=0.0, entry_pose=(0.0, 0.0, 0.0))
+    off.costmap = a.costmap
+    off.plan = None
+    assert off.control((0.0, 0.0, 0.0), Inhibit(), 0.6) == (0.0, 0.0)
