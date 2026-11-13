@@ -247,7 +247,7 @@ Orin NX는 8 GB 모델이 6코어, 16 GB 모델이 8코어다. 차가 어느 모
 | yolo 테스트(한국어 에러 메시지에 맞춤) | 수정 | 이 브랜치 |
 | OMP·OPENBLAS 환경변수=1(P0-5): 차(limo2)에서 `/cmd_vel_lane` 26.6/26.3 → 28.6/28.0 Hz, `/detections` 21.7/21.6 → 23.0/22.6 Hz. PC에서는 노드 CPU 합 123.5 → 113.7%, lane_main on_image 7.7 → 6.5 ms | 완료 | 세션 A, PR #12 (c84dca2) |
 | DDS(P2-6): 모든 노드가 16 MB SHM 세그먼트를 연다(lsof) → 영상은 SHM으로 간다 | 확인 | 세션 A |
-| 10 Hz throttle 토픽 `/camera/color/image_10hz`(`use_image_10hz`, 기본 false). 차에 `ros-humble-topic-tools` 설치됨. 소비자 이동(static_avoid, yolo)은 각 담당 | 완료 | 세션 A, PR #13 |
+| 10 Hz throttle 토픽 `/camera/color/image_10hz`(`use_image_10hz`, 기본 false → 2026-11-13 full.launch에 회피를 넣으며 true). 차에 `ros-humble-topic-tools` 설치됨. 소비자 이동(static_avoid, yolo)은 각 담당 | 완료 | 세션 A, PR #13 |
 | yolo 프로세스가 코어 하나를 거의 다 씀(top 94~100%, `/detections` ~22 Hz): 원인 측정 도구 `tools/load_profile/yolo_stages.py` | 도구 준비, 차에서 측정 필요 | 이 브랜치 → 은수 |
 | `/dev/shm` Fast DDS 잔여물·남은 프로세스·빌드 잔여물 점검: `scripts/preflight.sh` | 구현 | 이 브랜치 |
 | **영상 허브 `clothoid_image_hub`(0.2절)**: C++ component. 출력은 `image_small`(bgr8 320x240, 켬), `image_bev`(꺼짐), `image_10hz`(꺼짐: 같은 토픽을 bringup `use_image_10hz`가 이미 발행한다). 구독자가 있을 때만 계산한다. PC에서 bag으로 확인: 출력 29.98 Hz / 10.0 Hz. 허브 CPU는 구독자 0일 때 0.8%, 두 출력 구독 시 2.0%(카메라 container 밖, raw를 DDS로 받은 경우). gtest 6개 | 구현, bringup 연결은 세션 A | 이 브랜치 |

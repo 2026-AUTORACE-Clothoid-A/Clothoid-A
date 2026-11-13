@@ -15,6 +15,12 @@ see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_li
 `use_image_10hz`, `require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
 `bringup.launch.py`.
 
+Static obstacle avoidance (`use_avoid`, clothoid_lidar/avoid.launch.py: limo_extractor + static_avoid)
+reads the camera at 10 Hz when `use_image_10hz:=true` (default), else every 3rd raw frame.
+`ignore_cone:=true` keeps it running while the cone course is active (test track only: after the cones
+it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_debug_heavy` are its `reverse` /
+`debug_heavy`.
+
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
 Every node gets `OMP_NUM_THREADS=1` and `OPENBLAS_NUM_THREADS=1` (docs/PIPELINE_LOAD_PLAN.md 6.0).
@@ -23,7 +29,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -39,7 +45,8 @@ def generate_launch_description():
     def enabled(name):
         return IfCondition(LaunchConfiguration(name))
 
-    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_finish', 'use_mission']
+    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_avoid', 'use_parking', 'use_finish',
+                'use_mission']
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
                      'use_image_10hz', 'steering_scale', 'max_inner_angle']
     debug = LaunchConfiguration('debug')
@@ -72,8 +79,14 @@ def generate_launch_description():
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
         DeclareLaunchArgument('use_joint_states', default_value='false'),
-        DeclareLaunchArgument('use_image_10hz', default_value='false',
-                              description='/camera/color/image_10hz (topic_tools throttle)'),
+        DeclareLaunchArgument('use_image_10hz', default_value='true',
+                              description='/camera/color/image_10hz (topic_tools throttle); static_avoid reads it'),
+        DeclareLaunchArgument('ignore_cone', default_value='false',
+                              description='static_avoid keeps running while the cone course is active (test track)'),
+        DeclareLaunchArgument('avoid_reverse', default_value='false',
+                              description='static_avoid backs up 0.2 m when every path stays blocked'),
+        DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
+                              description='static_avoid also publishes /avoid/candidates and /avoid/costmap'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
         *[DeclareLaunchArgument(name, default_value=value) for name, value in mux_args.items()],
@@ -93,6 +106,14 @@ def generate_launch_description():
                  'show': LaunchConfiguration('show'),
                  'debug': debug}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
+        # static obstacle (3-lane section): image from the 10 Hz topic when bringup publishes it
+        include('clothoid_lidar', 'avoid.launch.py',
+                {'camera': LaunchConfiguration('camera'),
+                 'image': PythonExpression(["'10hz' if '", LaunchConfiguration('use_image_10hz'),
+                                            "'.lower() == 'true' else 'raw'"]),
+                 'ignore_cone': LaunchConfiguration('ignore_cone'),
+                 'reverse': LaunchConfiguration('avoid_reverse'),
+                 'debug_heavy': LaunchConfiguration('avoid_debug_heavy')}, enabled('use_avoid')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         # after /parking_done: left yellow line to the end line (needs the camera)
         include('clothoid_finish', 'finish.launch.py',
