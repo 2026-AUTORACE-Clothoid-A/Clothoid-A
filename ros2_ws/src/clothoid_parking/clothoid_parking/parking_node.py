@@ -325,6 +325,8 @@ class ParkingNode(Node):
             return
         moving = (Phase.SEARCH, Phase.TURN, Phase.ENTER, Phase.EXIT_BACK, Phase.EXIT_TURN)
         if self.phase in moving and self.stale():
+            if self.core.layout is not None:
+                self.core.layout.retain_free(now, False)
             self.send(0.0, 0.0)
             self.get_logger().warn(f'no {self.stale()}: holding', throttle_duration_sec=1.0)
             return

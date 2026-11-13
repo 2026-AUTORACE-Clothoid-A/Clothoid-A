@@ -100,6 +100,40 @@ def fill(layout, points, stamp, occupied=False):
         layout.cells[tuple(key)] = (stamp, occupied)
 
 
+def test_entry_retains_only_measured_free_cells_and_new_hit_revokes_them():
+    layout = registered()
+    pose = Pose2D()
+    route = np.concatenate([layout.footprint(x, 0., 0.) for x in np.linspace(0., .2, 40)])
+    fill(layout, route, 2.)
+    layout.retain_free(2., True)
+    assert layout.motion_clear(4., pose, .2, 0., .2)
+    # Retention does not certify space outside the observed route.
+    assert not layout.motion_clear(4., pose, .2, 0., .2, distance=1.)
+    # One newly observed hit is unknown, but must still prevent entering it.
+    layout.scan(4.1, [.4], 0., 0., .02, 12., pose, 0.)
+    assert not layout.motion_clear(4.1, pose, .2, 0., .2)
+    assert layout.motion_reason == 'unobserved swept footprint'
+    layout.scan(4.4, [.4], 0., 0., .02, 12., pose, 0.)
+    assert not layout.motion_clear(4.4, pose, .2, 0., .2)
+    assert layout.motion_reason == 'occupied swept footprint'
+
+
+def test_free_memory_clears_on_disable_reset_and_reference_update():
+    layout = registered()
+    for action in ('disable', 'reset', 'reference'):
+        fill(layout, np.array([[.4, 0.]]), 2.)
+        layout.retain_free(2., True)
+        assert layout.retained_free
+        if action == 'disable':
+            layout.retain_free(2.1, False)
+        elif action == 'reset':
+            layout.reset()
+        else:
+            for t in (2.1, 2.3, 2.5):
+                layout.observe(t, (1., -.25), 0., Pose2D())
+        assert not layout.retained_free and not layout.retaining
+
+
 def test_inner_bay_route_crosses_front_bay_and_blockage_is_not_empty():
     layout = registered()
     front, inner = layout.bays()[0], layout.bays()[3]

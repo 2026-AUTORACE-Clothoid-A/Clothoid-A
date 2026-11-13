@@ -73,6 +73,8 @@ class ParkingCore:
         return self.layout.observe(stamp, origin, yaw, pose)
 
     def set_flag(self, now: float, on: bool):
+        if not on and self.layout is not None:
+            self.layout.retain_free(now, False)
         if on and not self.flag and self.planner.phase == Phase.IDLE:
             self.cells.clear()
             self.planner.start(now, self.tracker.pose)
@@ -130,8 +132,10 @@ class ParkingCore:
         return np.array(pts) if pts else np.zeros((0, 2))
 
     def command(self, now: float) -> Optional[Tuple[float, float]]:
+        previous_phase = self.phase
         if self.layout is not None and self.layout.p.control_enabled and self.phase not in (Phase.IDLE, Phase.DONE, Phase.ABORT):
             if now-self.layout.last_scan > .5:
+                self.layout.retain_free(now, False)
                 return 0., 0.
             if self.phase == Phase.SEARCH and (self.layout.origin is None or self.layout.support_count < self.layout.p.confirm_scans):
                 return 0., 0.
@@ -150,6 +154,10 @@ class ParkingCore:
                 out = v, self.planner._hold(pose, target.row_yaw, v)
             else:
                 out = self.planner.step(now, self.tracker.pose, self.front_range)
+            if previous_phase == Phase.SEARCH and self.phase == Phase.TURN:
+                self.layout.retain_free(now, True)
+            elif self.phase not in (Phase.TURN, Phase.ENTER):
+                self.layout.retain_free(now, False)
             if self.phase == Phase.PARKED and not self.layout.inside_bay(self.planner.bay, self.tracker.pose):
                 self.planner._go(Phase.ABORT, now, 'vehicle corners outside designated bay')
                 return 0., 0.

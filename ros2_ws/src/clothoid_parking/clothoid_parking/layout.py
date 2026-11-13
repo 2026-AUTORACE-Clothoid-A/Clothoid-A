@@ -76,12 +76,21 @@ class ParkingLayout:
         self.last_choice_scan = -math.inf
         self.cells = {}  # world grid -> (last evidence time, occupied)
         self.endpoint_hits = {}  # cell -> (last hit time, distinct scan count)
+        self.retained_free = set()
+        self.retaining = False
         self.states = ['unknown'] * (self.p.rows*self.p.columns)
         self.counts = [0] * len(self.states)
         self.selected = None
         self.reason = 'waiting for lane/entry/grid registration'
         self.support_count = 0
         self.motion_reason = ''
+
+    def retain_free(self, now, enabled):
+        """Keep measured free cells only for one committed entry manoeuvre."""
+        self.retaining = enabled
+        self.retained_free = ({k for k, (t, occupied) in self.cells.items()
+                               if not occupied and 0 <= now-t <= self.p.evidence_age}
+                              if enabled else set())
 
     def observe(self, stamp, origin, yaw, pose):
         if stamp <= self.last_observation:
@@ -97,6 +106,7 @@ class ParkingLayout:
                 abs(wrap(heading-previous[1])) > self.p.angle_tolerance):
             self.samples.clear()
         if self.origin is not None and len(self.samples) == 0:
+            self.retain_free(stamp, False)
             self.origin = None
             self.selected = None
             self.counts = [0]*len(self.counts)
@@ -114,12 +124,16 @@ class ParkingLayout:
         if self.origin is not None and (np.linalg.norm(candidate-self.origin) > self.p.position_tolerance or
                                        abs(wrap(angle-self.yaw)) > self.p.angle_tolerance):
             # Contradictory anchors revoke the plan instead of silently moving a frozen target.
+            self.retain_free(stamp, False)
             self.origin = None
             self.counts = [0]*len(self.counts)
             self.selected = None
             self.reason = 'inconsistent visual registration'
             return False
         self.origin, self.yaw = candidate, angle
+        # Observations may move the reference during search, never preserve a
+        # manoeuvre cache across such a reference update.
+        self.retain_free(stamp, False)
         self.reason = 'registered; checking observed free space'
         return True
 
@@ -164,9 +178,13 @@ class ParkingLayout:
             if key not in hits:
                 self.cells[key] = (stamp, False)
                 self.endpoint_hits.pop(key, None)
+                if self.retaining:
+                    self.retained_free.add(key)
         self.endpoint_hits = {k: v for k, v in self.endpoint_hits.items()
                               if stamp-v[0] <= p.evidence_age}
         for key in hits:
+            # Even one contradictory return revokes remembered free space.
+            self.retained_free.discard(key)
             count = min(self.min_hits, self.endpoint_hits.get(key, (stamp, 0))[1]+1)
             self.endpoint_hits[key] = (stamp, count)
             if count >= self.min_hits:
@@ -328,7 +346,7 @@ class ParkingLayout:
                 return False
             # Existing safety-envelope cells are not newly entered space. Never
             # exempt a measured obstacle there, or certify a new unknown cell.
-            if key not in current and not (recent and not value[1]):
+            if key not in current and not ((recent and not value[1]) or key in self.retained_free):
                 self.motion_reason = 'unobserved swept footprint'
                 return False
         return True
