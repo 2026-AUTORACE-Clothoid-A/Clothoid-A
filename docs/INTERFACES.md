@@ -52,7 +52,9 @@ Every node publishes `geometry_msgs/Twist` to **its own** `twist_mux` input, nev
 | `/cmd_vel_teleop` | 200 | keyboard / joystick |
 | `/cmd_vel_state` | 100 | `clothoid_mission` (stop, wait, go) |
 | `/cmd_vel_parking` | 110 | `clothoid_parking` |
-| `/cmd_vel_avoid` | 80 | `clothoid_lidar` `cone_follower`; static obstacle avoidance goes here too |
+| `/cmd_vel_finish` | 110 | `clothoid_finish` |
+| `/cmd_vel_cone` | 90 | `clothoid_lidar` `cone_follower` (above avoid: cone walls can look like obstacles to static_avoid) |
+| `/cmd_vel_avoid` | 80 | `clothoid_lidar` `static_avoid` |
 | `/cmd_vel_lane` | 10 | `lane_main` |
 
 `twist_mux` writes the winner to `/cmd_vel`, which `limo_base` reads. `twist_mux` goes silent when all its inputs time

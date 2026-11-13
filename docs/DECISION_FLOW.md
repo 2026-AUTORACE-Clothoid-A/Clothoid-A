@@ -29,15 +29,16 @@ limo2 `~/2026-autorace-namgyu/Clothoid-A`와의 차이는 [9장](#9-limo2와-다
 |---|---|---|---|---|
 | teleop | `/cmd_vel_teleop` | 200 | 0.5 s | 사람 (조이스틱·키보드) |
 | state | `/cmd_vel_state` | 100 | 0.3 s | mission (신호등·보행자 정지 중 0) |
-| parking | `/cmd_vel_parking` | 90 | 0.3 s | parking |
-| finish | `/cmd_vel_finish` | 90 | 0.3 s | finish |
-| avoid | `/cmd_vel_avoid` | 80 | 0.3 s | cone_follower (콘 구간) |
+| parking | `/cmd_vel_parking` | 110 | 0.3 s | parking |
+| finish | `/cmd_vel_finish` | 110 | 0.3 s | finish |
+| cone | `/cmd_vel_cone` | 90 | 0.3 s | cone_follower (콘 구간) |
+| avoid | `/cmd_vel_avoid` | 80 | 0.3 s | static_avoid (정적 장애물 구간) |
 | lane | `/cmd_vel_lane` | 10 | 0.3 s | lane_main |
 
 핵심 규칙
 - **노드가 보내기를 멈추면** timeout 뒤 다음 우선순위로 자동으로 넘어간다. 그래서 각 미션 노드는
   "자기 구간에서만 보내고, 끝나면 조용히 있는" 방식으로 lane에게 차를 돌려준다.
-- parking과 finish는 **같은 90**이다. 둘이 동시에 보내면 어느 쪽이 이길지 정해져 있지 않다.
+- parking과 finish는 **같은 110**이다. 둘이 동시에 보내면 어느 쪽이 이길지 정해져 있지 않다.
   정상 흐름에서는 parking이 끊긴 뒤 finish가 시작해서 겹치지 않는다.
 - lane은 항상 보내고 있지만 우선순위가 가장 낮아서, 다른 노드가 보내는 동안은 무시된다.
 
@@ -61,7 +62,7 @@ limo2 `~/2026-autorace-namgyu/Clothoid-A`와의 차이는 [9장](#9-limo2와-다
 |---|---|---|
 | obstacle_extractor (lidar) | `/scan` | `/lidar/obstacles` (PoseArray, base_link) |
 | cone_sorter (lidar) | `/lidar/obstacles` | `/cone/left_boundary`, `/cone/right_boundary` (Path), `/cone/mission_active` (Bool) |
-| cone_follower (lidar) | 위 3개 | `/cmd_vel_avoid`, `/cone/centerline` (Path), `/cone/target` (PointStamped) |
+| cone_follower (lidar) | 위 3개 | `/cmd_vel_cone`, `/cone/centerline` (Path), `/cone/target` (PointStamped) |
 | lane_main (lane) | `/camera/color/image_raw`, `/direction_flag`, `/parking_flag`, `/speed_limit` | `/cmd_vel_lane`, `/lane/debug_image`, `/lane/target_warp`, `/lane/left_warp`, `/lane/right_warp` |
 | stopline (lane) | `/camera/color/image_raw` | `/stopline_detected` (Bool, 횡단보도 줄무늬), `/stopline_near` (Bool, 정지선 한 줄), `/stopline/debug_image` |
 | speed_zone (lane) | `/camera/color/image_raw` | `/speed_limit` (Float32) |
@@ -83,7 +84,7 @@ limo2 `~/2026-autorace-namgyu/Clothoid-A`와의 차이는 [9장](#9-limo2와-다
 /scan ─▶ obstacle_extractor ─▶ /lidar/obstacles ─▶ cone_sorter ─▶ left/right boundary + mission_active
                                                                    │
                                                                    ▼
-                                                             cone_follower ─▶ /cmd_vel_avoid (우선순위 80)
+                                                             cone_follower ─▶ /cmd_vel_cone (우선순위 90)
 ```
 
 ### 3.1 obstacle_extractor: 스캔 → 콘 중심점
@@ -122,7 +123,7 @@ limo2 `~/2026-autorace-namgyu/Clothoid-A`와의 차이는 [9장](#9-limo2와-다
    - 국소 3차 최소제곱 평활 (창 9개) → 3차 스플라인으로 5 cm 간격 재샘플
 4. **Pure pursuit**: 중앙선에서 차와 가장 가까운 점부터 `lfd` 0.4 m 앞의 점을 목표로,
    θ = atan2(y, x + 0.1)(후축 기준), δ = atan(2·L·sinθ / lfd).
-5. 속도 0.4 m/s, ω = v·tan δ / L 로 `/cmd_vel_avoid` 발행.
+5. 속도 0.4 m/s, ω = v·tan δ / L 로 `/cmd_vel_cone` 발행.
 
 콘 노드는 콘이 없을 때 조용하다. 콘 구간에 들어오면 우선순위 80으로 lane(10)을 이기고, 끝나면 lane으로 돌아간다.
 

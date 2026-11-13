@@ -384,7 +384,7 @@ ls -la /dev/shm | grep -i fastrtps | head       # SHM 세그먼트가 있는지
 sudo tcpdump -i lo -c 2000 udp 2>/dev/null | wc -l   # 영상이 lo UDP 조각으로 가면 수천 개/초
 
 # 6) 녹화 (raw 영상 빼고, P0-3)
-ros2 bag record -o ~/bags/$(date +%m%d_%H%M) /scan /odom /imu /tf /tf_static /cmd_vel_lane /cmd_vel_avoid \
+ros2 bag record -o ~/bags/$(date +%m%d_%H%M) /scan /odom /imu /tf /tf_static /cmd_vel_lane /cmd_vel_cone /cmd_vel_avoid \
   /avoid/active /avoid/lane /avoid/done /direction_flag /limo_status /rosout /camera/color/camera_info
 ```
 

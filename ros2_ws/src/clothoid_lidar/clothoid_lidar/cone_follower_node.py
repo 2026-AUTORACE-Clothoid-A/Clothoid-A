@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rubber cone driving node (ROS2 port of 2025 `rubber_cone_node`).
 
-Publishes a Twist on `cmd_topic` (twist_mux input `avoid`). Steering from pure pursuit is
+Publishes a Twist on `cmd_topic` (twist_mux input `cone`, 90). Steering from pure pursuit is
 converted with the bicycle model: w = v * tan(delta) / wheelbase. Reverse (one boundary only)
 uses the same formula with a negative speed; the sign of angular.z while reversing has to be
 confirmed on the car (see docs/INTERFACES.md).
@@ -28,7 +28,7 @@ class ConeFollowerNode(Node):
     def __init__(self):
         super().__init__('cone_follower')
 
-        self.declare_parameter('cmd_topic', '/cmd_vel_avoid')
+        self.declare_parameter('cmd_topic', '/cmd_vel_cone')
         self.declare_parameter('left_boundary_topic', '/cone/left_boundary')
         self.declare_parameter('right_boundary_topic', '/cone/right_boundary')
         self.declare_parameter('mission_active_topic', '/cone/mission_active')
