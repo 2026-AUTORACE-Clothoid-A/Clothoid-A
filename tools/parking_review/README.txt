@@ -1,3 +1,58 @@
+Reverse exit with the existing rear-masked lidar (2026-11-13)
+
+  EXIT_BACK and EXIT_TURN use the existing IMU/odom reverse manoeuvre without
+  the registered layout's fresh-free-space / obstacle sweep gate. This assumes
+  fixed parking obstacles and a return along the entry route. Entry selection,
+  SEARCH/TURN/ENTER sweep checks (including reverse depth adjustments), scan
+  freshness, node IMU/odom freshness and exit timeouts are preserved.
+  The real and simulated lidar remain -110..+110 degrees. No extra map cache,
+  perception model or change to the reverse steering controller is introduced.
+  Only completed return to the lane heading reaches DONE and /parking_done;
+  finish then starts as before. Timeout/ABORT never reports parking_done.
+
+Approach observation and scene-gated sign candidates (2026-11-13)
+
+  Activated for the designated lane-side middle bay (2). The lane keeps steering;
+  /parking/approach_speed_limit is a separate minimum speed cap, so other mission
+  limits are preserved. Negative releases, zero holds, stale caps expire at the
+  lane speed-limit timeout. No steering or parking command is issued by this cap.
+
+  Starts only with: tracked P sign, repeated visual grid registration, lidar
+  corroboration, and a separately confirmed non-crosswalk entry whose position
+  matches the grid's CAD entry relation. This extra match prevents crosswalk
+  registration candidates from slowing the car prematurely. Uses existing floor
+  evidence, cached projection/map, 5 Hz scans and 20 Hz scalar control checks.
+  At most 0.20 m/s, braking toward the turn point using distance/deceleration/
+  latency; checks the next lane-steering swept envelope. Target/route clearance
+  and reached entry still gate parking handover. No implicit start flag.
+
+  Missing target confirmation holds up to 3 seconds, approach observation up to
+  15 seconds; then /parking/skipped clears the parking attempt with a cooldown.
+  Skipped is NOT parking_done and cannot trigger finish. Other missions remain
+  independent. A known obstacle blocking the driving sweep is a safety hold:
+  timers do not permit driving into it; clear observations are required to release.
+  Registration/sensor loss while such an obstacle is latched also holds.
+
+  With scene_sign_candidates=true AND scene confirmation enabled, parking and
+  pedestrian boxes are kept as candidate tracks without the old 28px / lateral
+  proximity gate. Confidence >=0.6, resolvable height >=14px, image-edge checks
+  and 3/5 distinct-frame association remain. Pedestrian candidate policy additionally
+  requires stop-line mode and crosswalk validation. Candidates alone neither stop
+  nor start parking. Light, bump, slow and fork policies are unchanged. This still
+  does not prove a roadside sign belongs to our lane in every unseen scene.
+
+  Reproduce offline inside Humble Docker (recorded motion is NOT changed):
+    python3 tools/parking_review/replay_approach.py bag/bag_1113_193953 \
+      --mode new --output ros2_ws/log/parking_approach/bag_new.json
+    # --mode old disables approach and restores the previous sign gates.
+  Current outputs: /parking/approach_status, /parking/approach_speed_limit,
+  /parking/entry_distance, /parking/observing, /parking/skipped.
+  scripts/record_parking.sh includes them; existing generic bag aliases may not.
+  No .bashrc edits or automatic driving/recording startup.
+
+----------------------------------------------------------------------
+Previous implementation and validation notes:
+
 Fixed-target / skewed parked-LIMO experiment (2026-11-13)
 
   Implemented on namgyu/parking-robustness. Six-bay visual geometry now supplies
@@ -9,7 +64,8 @@ Fixed-target / skewed parked-LIMO experiment (2026-11-13)
   layout.target_bay must be explicitly set to 1..6 for registered control;
   0 is observation only. There is no fallback to another bay. IDs 1..3 are
   lane-side and 4..6 are the inner row. User confirmed the lane-side middle
-  target: YAML and launch default to bay 2; registered control stays disabled.
+  target: YAML and launch default to bay 2. Registered control was subsequently
+  enabled in YAML and launch at the user's explicit request for Limo2 testing.
   Node handover uses the registered target in this mode, not the legacy gap.
   All six occupancy states remain visible; expensive route checks only run
   for the designated target in control mode. Vehicle-envelope samples are cached.
@@ -37,7 +93,7 @@ Fixed-target / skewed parked-LIMO experiment (2026-11-13)
   fit inside the bay on this closed-loop run. A previous static-view audit is not equivalent to a moving-view run.
   No alternate-path planner was needed for these eight entry cases.
 
-  LIMITATIONS / DO NOT ENABLE AS THE DEFAULT VEHICLE CONTROLLER:
+  LIMITATIONS IN THE ORIGINAL EXPERIMENT (before the reverse-exit update above):
   - Current simulated lidar masks the rear sector (-110..+110 degrees).
     Registered mode holds during exit and times out: 0/8 complete departures.
     In the separately labelled 360-degree visibility diagnostic, entry AND
@@ -57,8 +113,10 @@ Fixed-target / skewed parked-LIMO experiment (2026-11-13)
   Experimental node invocation (isolated test environment only):
     ros2 launch clothoid_parking parking.launch.py \
       registered_control:=true target_bay:=2
-  Default launch and full vehicle stack remain observe/legacy mode.
-  No remote deployment or changes to stopparkrun / .bashrc in this work.
+  Default launch and full vehicle stack now use registered control, target 2.
+  Deployed to Limo2 with symlink build; stopparkrun / .bashrc are unchanged.
+  To return to legacy control, set registered_control:=false at parking launch
+  (the full launch uses the parking launch default).
 
 ----------------------------------------------------------------------
 Earlier observation-only implementation notes (historical context):
@@ -165,3 +223,20 @@ Replay scope
   mode with identical recorded motion/sensor input. It checks regressions, not
   driving success; one recording has no flag and stays idle, another aborts in
   both versions. Recorded vehicle motion never responds to a new command.
+
+2026-11-13 parking clearance and handover behaviour
+--------------------------------------------------
+Occupied cells require repeated observations from distinct scans. Measured-free
+cells are retained from confirmed approach through entry. Unknown final-bay
+cells are not marked free. Known target/route obstacles and unknown immediate
+swept cells still veto motion.
+
+Preparation may advertise a provisional geometric candidate with fresh sensors
+and an observed-free immediate sweep. The existing mission sign/entry evidence
+is still required before parking control starts. This avoids waiting forever
+for final-bay space hidden by parked vehicles at the current viewpoint.
+
+Recorded-input replay: replay_approach.py uses actual mission/lane/parking
+callbacks without publishing driving commands. Recorded motion does not respond
+to computed commands, so this does not demonstrate closed-loop parking success.
+Live read-only observation is available through observe_live.py.
