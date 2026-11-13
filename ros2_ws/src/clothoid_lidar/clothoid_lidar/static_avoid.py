@@ -154,7 +154,9 @@ class AvoidParams:
     # about straight, and drive it slowly with a short look-ahead. 1113 auto 05 stopped 14 s where
     # only such a quick swerve (right at full lock, then left) went through; the lane-centre
     # S-curves never contain it
-    escape: bool = True
+    # off for now (11-13 car: with reverse on, escape paths turned the car near 90 deg and the
+    # back-up then drove it off the track; fixed on a later branch)
+    escape: bool = False
     escape_radius: float = 0.47       # m, car 7 at full lock
     escape_curvatures: Tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)
     escape_lengths: Tuple[float, ...] = (0.2, 0.4, 0.6)
@@ -1440,7 +1442,10 @@ class StaticAvoid:
     def past_island_ready(self, pose) -> bool:
         """handover_after_island: hand over (and lock) handover_past m beside the island in lane 1 / 3
         and about straight; handover_overshoot further on whatever the heading. Logs the sign's lane
-        with it (whether lane_main's /direction_flag side matches is seen there)."""
+        with it (whether lane_main's /direction_flag side matches is seen there). finished (no new
+        start this run) only with the island from the entry line or the lane tracker: after a false
+        start before the section the estimated island is reached too, and the real section that
+        follows must still start (locked, the retry from a new white line applies)."""
         p = self.p
         s, d, psi = pose
         margin = p.island_past_estimate if self.island_source == 'estimate' else 0.0
@@ -1450,12 +1455,12 @@ class StaticAvoid:
         lane = lane_of(d, p)
         sign = {0: 'sign lane 1', 1: 'sign lane 3'}.get(self.direction, 'no sign')
         if lane in (1, 3) and abs(psi) <= math.radians(p.handover_heading_deg):
-            self.finished = True
+            self.finished = self.island_source != 'estimate'
             self.stop('hand over beside the island, lane %d, %.2f m past its front (%s, %s)'
                       % (lane, past, self.island_source, sign), True)
             return True
         if past >= p.handover_past + p.handover_overshoot:
-            self.finished = True
+            self.finished = self.island_source != 'estimate'
             self.stop('hand over beside the island, lane %d, %.2f m past its front, heading %.0f deg '
                       '(%s, %s)' % (lane, past, math.degrees(psi), self.island_source, sign), True)
             return True
