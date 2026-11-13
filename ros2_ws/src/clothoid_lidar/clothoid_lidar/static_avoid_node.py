@@ -40,7 +40,7 @@ from visualization_msgs.msg import Marker, MarkerArray
 
 from clothoid_lidar.red_ratio_node import image_to_bgr
 from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker, WhiteParams,
-                                         find_entry_line)
+                                         check_start_line, find_entry_line)
 from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,
                                          PoseTracker, StaticAvoid, section_to_base,
                                          yaw_from_quaternion)
@@ -229,7 +229,8 @@ class StaticAvoidNode(Node):
         distance along the road: the car is already steering, so its pose there is not the lane's."""
         if self.avoid.state != ACTIVE or self.avoid.island_source != 'estimate':
             return
-        c = self.entry.recent(self.tracker.distance, 0.3, 0.0)
+        # the start line is confirmed up to 0.8 m after it (EntryLineTracker.is_start)
+        c = self.entry.recent(self.tracker.distance, 1.0, 0.0, start_only=True)
         if c is not None:
             self.avoid.on_entry_crossing(self.tracker.at_distance(c.odometer))
             if self.avoid.island_source == 'entry line':
@@ -299,7 +300,12 @@ class StaticAvoidNode(Node):
         line = find_entry_line(bgr, self.cam, self.white)
         crossing = self.entry.update(t_img, self.tracker.distance_at(t_img), line)
         if crossing is not None:
-            self.get_logger().info(f'entry line: crossed at odometer {crossing.odometer:.2f} m')
+            self.get_logger().info(f'white line: crossed at odometer {crossing.odometer:.2f} m')
+        for c in check_start_line(self.entry, bgr, self.cam, self.lane_fitter.colours,
+                                  self.tracker.distance_at(t_img), self.p.lane_width):
+            self.get_logger().info(f'white line at odometer {c.odometer:.2f} m: '
+                                   + ('SECTION START LINE' if c.start else 'not the section start')
+                                   + f' (lane-line pair in {c.pairs} frames around it)')
         had_event = self.avoid.event
         self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry, t_img)
         if self.avoid.event != had_event and 'fit' in self.avoid.event:
@@ -328,7 +334,7 @@ class StaticAvoidNode(Node):
         limos = (np.array([[p.position.x, p.position.y] for p in msg.poses])
                  if msg.poses else np.zeros((0, 2)))
         pose = self.tracker.latest() if self.tracker.ready else None
-        c = self.entry.recent(self.tracker.distance, self.p.island_from_entry_max + 1.0)
+        c = self.entry.recent(self.tracker.distance, self.p.island_from_entry_max + 1.0, start_only=True)
         entry_back = self.tracker.distance - c.odometer if c is not None else None
         entry_pose = self.tracker.at_distance(c.odometer) if c is not None else None
         was_done = self.avoid.done

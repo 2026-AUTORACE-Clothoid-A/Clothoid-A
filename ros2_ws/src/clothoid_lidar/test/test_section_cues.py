@@ -159,3 +159,48 @@ def test_white_only_ignores_yellow_paint_and_cones():
     obs = find_lane_lines(img, cam, ColourParams(), 0.0, math.radians(20.0), white_only=True)
     assert obs is not None and abs(obs.angle) < math.radians(2.0)
     assert obs.lines and all(line.colour == 'white' for line in obs.lines)
+
+
+
+def _crossed(tr, odo):
+    from clothoid_lidar.section_cues import Crossing
+    c = Crossing(odometer=odo, heading=0.0, t=0.0)
+    tr.crossings.append(c)
+    return c
+
+
+def test_start_line_is_where_the_lane_line_pair_starts():
+    from clothoid_lidar.section_cues import EntryLineTracker
+    tr = EntryLineTracker()
+    c = _crossed(tr, 2.3)
+    for k in range(30):                                   # corner exit: no pair
+        tr.observe_pair(0.3 + 0.05 * k, False)
+    decided = []
+    for k in range(12):                                   # from 0.6 m before it: the pair
+        decided += tr.observe_pair(1.7 + 0.08 * k, k % 2 == 0)
+    assert c.start is True and decided == [c]
+    for k in range(20):                                   # beside the island and on: the pair
+        tr.observe_pair(5.6 + 0.05 * k, True)
+    end = _crossed(tr, 7.5)                               # the section's end line, 5.2 m on
+    tr.observe_pair(7.6, True)
+    assert tr.is_start(end, 7.6) is False                 # the pair was there before it
+    assert tr.recent(8.0, 7.0, start_only=True) is c
+
+
+def test_a_crosswalk_line_is_not_the_start_line():
+    from clothoid_lidar.section_cues import EntryLineTracker
+    tr = EntryLineTracker()
+    c = _crossed(tr, 0.6)
+    for k in range(25):                                   # no lane-line pair around it
+        tr.observe_pair(0.0 + 0.06 * k, False)
+    assert c.start is False
+    assert tr.recent(1.0, 2.0, start_only=True) is None and tr.recent(1.0, 2.0) is c
+
+
+def test_pair_seen_before_the_line_is_not_a_start():
+    from clothoid_lidar.section_cues import EntryLineTracker
+    tr = EntryLineTracker()
+    c = _crossed(tr, 5.0)
+    for k in range(40):                                   # inside the section already
+        tr.observe_pair(3.0 + 0.06 * k, True)
+    assert c.start is False

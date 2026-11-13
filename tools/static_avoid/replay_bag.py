@@ -23,7 +23,7 @@ from clothoid_lidar.cone_sorter import ConeMission, ConeSorter, SorterParams  # 
 from clothoid_lidar.obstacle_extractor import (ExtractorParams, extract_obstacles,  # noqa: E402
                                                transform_points)
 from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker,  # noqa: E402
-                                         WhiteParams, find_entry_line)
+                                         WhiteParams, check_start_line, find_entry_line)
 from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,  # noqa: E402
                                          PoseTracker, StaticAvoid, base_to_section, lane_of,
                                          yaw_from_quaternion)
@@ -130,6 +130,9 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             c = entry.update(s, tracker.distance, find_entry_line(bgr, cam, white))
             if c is not None:
                 rec['crossings'].append((s, c))
+            for d in check_start_line(entry, bgr, cam, fitter.colours, tracker.distance, p.lane_width):
+                rec['events'].append((s, 'white line at %.2f m: %s (pair %s)' % (
+                    d.odometer, 'SECTION START LINE' if d.start else 'not the start', d.pairs)))
             had = avoid.event
             fitter.on_frame(bgr, avoid, tracker, entry)
             if avoid.event != had and 'fit' in avoid.event:
@@ -143,7 +146,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             q = msg.pose.pose.position
             tracker.odom(s, msg.twist.twist.linear.x, None if legacy_odom else (q.x, q.y))
             if avoid.state == ACTIVE and avoid.island_source == 'estimate':
-                c = entry.recent(tracker.distance, 0.3, 0.0)     # same as the node
+                c = entry.recent(tracker.distance, 1.0, 0.0, start_only=True)     # same as the node
                 if c is not None:
                     avoid.on_entry_crossing(tracker.at_distance(c.odometer))
                     if avoid.island_source == 'entry line':
@@ -162,7 +165,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                                  LIDAR_X, 0.0, 0.0)
         inh = Inhibit(cone_active=cone.running and not ignore_cone)
         pose = tracker.at(s + 0.05)
-        c = entry.recent(tracker.distance, p.island_from_entry_max + 1.0)
+        c = entry.recent(tracker.distance, p.island_from_entry_max + 1.0, start_only=True)
         entry_back = tracker.distance - c.odometer if c is not None else None
         entry_pose = tracker.at_distance(c.odometer) if c is not None else None
         was_done = avoid.done

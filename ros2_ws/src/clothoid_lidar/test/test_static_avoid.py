@@ -448,7 +448,7 @@ def test_sign_stand_at_the_island_does_not_start():
 def test_white_line_far_past_the_start_is_not_the_entry():
     a = StaticAvoid(AvoidParams())
     a.activate((0.0, 0.0, 0.0))
-    a.on_entry_crossing((3.0, 0.0, 0.0))           # a line 3 m past the start: not the entry
+    a.on_entry_crossing((3.5, 0.0, 0.0))           # past entry_late_max (3 m): not the entry
     assert a.island_source == 'estimate'
     a.on_entry_crossing((0.5, 0.0, 0.0))
     assert a.island_source == 'entry line' and a.entry_s == pytest.approx(0.5)

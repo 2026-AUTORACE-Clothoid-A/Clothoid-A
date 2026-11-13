@@ -92,7 +92,11 @@ class AvoidParams:
     # past the entry line, something in lane 2 from here on is the island's sign stand, not a LIMO:
     # lane_main takes the car into A / B there (1108 run 4 started on it)
     island_object_margin: float = 0.25
-    entry_late_max: float = 1.2       # m: an entry line crossed after the start must be this close
+    # m: a start line crossed after the start must be this close. Only lines confirmed as the
+    # section's start line by the lane-line pair (section_cues.EntryLineTracker.is_start) count, so
+    # this is a sanity bound (it was 1.2 m when any white line counted: 1108 run 4 took a line on
+    # the A / B road for it)
+    entry_late_max: float = 3.0
     fork_commit: float = 2.0          # m travelled before the A/B lane is pulled hard without a flag
     # costmap
     resolution: float = 0.02
@@ -1526,7 +1530,7 @@ class LaneFitter:
         # turning hard (still in the corner): the lines' angle and the heading at that instant do not
         # go together well enough for the direction (1112 run 02: -37.8 deg)
         steady = rate is None or abs(rate) <= math.radians(p.lane_ref_rate_max_deg)
-        c = entry.recent(odometer, p.lane_fit_give_up, 0.0)
+        c = entry.recent(odometer, p.lane_fit_give_up, 0.0, start_only=True)
         if c is not None and c.odometer != self.closed:
             entry_pose = tracker.at_distance(c.odometer)
             if entry_pose is not None:
