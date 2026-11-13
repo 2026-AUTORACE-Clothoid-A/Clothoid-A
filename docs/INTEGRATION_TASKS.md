@@ -139,9 +139,13 @@ mux는 출력 타이머가 없다. 입력 메시지가 올 때만 내보내고, 
 | 4 | 대회장에서만: NTP 시계 점프. twist_mux 타임아웃은 노드 시계(`now()`)로 잰다 | `timedatectl`, 대회장 Wi-Fi 연결 전후 비교 | 주행 중 NTP 끄기 검토 |
 | 5 | arm lock: `require_arm:=true`에서 `/estop false` 발행 없이 다시 실행하면 정상적으로 침묵한다 | `ros2 topic hz /estop` | 대회는 `require_arm:=false` |
 
-- 제안(설계 승인 뒤): `scripts/preflight.sh`. 1~4를 확인하고 `--clean`이면 남은 프로세스와 공유메모리를 정리한다. 런치를 다시 켜기 전에 매번 돌린다.
-- launch의 노드에 `sigterm_timeout`을 짧게 준다.
-- FIELD_TEST에 "런치 10회 껐다 켜기 + 매번 `/cmd_vel` 확인" 시험을 넣는다. 연습장에서도 대회장처럼 Wi-Fi에 붙여서 해 본다.
+- [x] **런치 전에 매번 `scripts/preflight.sh`** (세션 C, PR #14). 위 1~4와 DDS 프로파일, 깨진 build symlink, repo 루트 `install/`을 점검하고 문제가 있으면 exit 1.
+  - `--clean`: `fastdds shm clean`. 살아 있는 노드가 쥔 세그먼트는 건너뛰므로 노드가 떠 있어도 안전하다.
+  - `--kill`: 남은 ROS 프로세스를 SIGINT, 5초 뒤 SIGKILL. 모든 launch를 끈 뒤에만 쓴다.
+  - 재실행 순서: launch Ctrl+C → `scripts/preflight.sh` → WARN이면 `scripts/preflight.sh --kill --clean` → 다시 `scripts/preflight.sh`가 통과하면 launch.
+  - limo2(2026-11-11): `/dev/shm`에 이전 실행 세그먼트가 수십 개 쌓였고, 새 `ros2 run`에서 `Failed init_port fastrtps_port7417: open_and_lock_file failed`가 났다. 2번 원인 후보가 실제로 생긴다.
+- [ ] launch의 노드에 `sigterm_timeout`을 짧게 준다.
+- [x] FIELD_TEST 7절에 "런치 10회 껐다 켜기 + 매번 `/cmd_vel` 확인" 시험을 넣었다. 연습장에서도 대회장처럼 Wi-Fi에 붙여서 해 본다.
 
 ### 10-2. merge하면서 할 일 (주영, 2026-11-09)
 - [ ] `namgyu/parking`을 합칠 때 `twist_mux.yaml`의 `finish` 우선순위를 90이 아니라 **105**로 한다(parking 110 > finish 105 > state 100). 90이면 state보다 낮다. `decision_viz.py`의 `MUX_INPUTS`에도 finish를 넣는다.
@@ -150,6 +154,9 @@ mux는 출력 타이머가 없다. 입력 메시지가 올 때만 내보내고, 
 ### 11. 정적 장애물 회피 개발이 끝나면 할 일 (2026-11-09 기록, 지금은 보류)
 1. `feature/static-avoid`를 정리해 main에 넣는다.
 2. `full.launch.py`에 `avoid.launch.py`, `use_avoid` 스위치, `camera` 인자 전달을 넣고 새 토픽을 `INTERFACES.md`에 적는다.
+   - 같은 PR에서 `use_image_10hz` 기본값을 true로 바꾼다. static_avoid가 `/camera/color/image_10hz`를 받는다(세션 B 011e37e, 2026-11-11). 그 전에는 받는 노드가 없어 throttle만 돈다(limo2 CPU 6~9 %).
+   - `static_avoid.yaml`에 노드 이름으로 들어간 키는 launch 인자(`/**`)보다 우선한다. full.launch → avoid.launch로 넘기는 인자가 yaml에 없는지 확인한다(`reverse`, `debug_heavy`, `image`가 이 문제로 안 먹었다).
+   - 실차: 회피 노드 `load` 로그의 `image n`이 5초에 약 50인지(BEST_EFFORT로 C++ throttle 수신). 세션 B PC에서는 Python 재발행 0.9 MB를 4.6 Hz만 받았다.
 3. 콘 시작 조건과 회피를 함께 돌려 본다. 1108 bag 11개에서는 콘 모드가 한 번도 켜지지 않았다(시작 상자 안 군집 최대 5개, 기준 6개). 실제 콘이 섞이면 다시 본다.
 4. `base_speed` 0.8에서 회피 진입을 확인한다. 약 1.5 m 앞에서 켜지고, 켜지기 전 약 36 cm를 간다. 1108 bag은 수동 주행이다.
 5. 횡단보도 정지 → 회피 → 섬 인계 → A/B → 콘 이음새를 `latency_monitor`로 본다(모니터 목록에 finish 추가).
