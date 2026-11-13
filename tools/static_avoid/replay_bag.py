@@ -25,7 +25,8 @@ from clothoid_lidar.obstacle_extractor import (ExtractorParams, extract_obstacle
 from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker,  # noqa: E402
                                          WhiteParams, check_start_line, find_entry_line)
 from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,  # noqa: E402
-                                         PoseTracker, StaticAvoid, base_to_section, course_start_line, lane_of,
+                                         CourseMap, PoseTracker, StaticAvoid, base_to_section, course_start_line,
+                                         lane_of,
                                          yaw_from_quaternion)
 
 LIDAR_X = 0.103
@@ -96,11 +97,14 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
     avoid = StaticAvoid(p)
     tracker = PoseTracker()
     fitter = LaneFitter(p, cam, ColourParams())
+    course = None
     if p.course_map:                       # the bag must start at the race start (as the node then)
-        entry.start_by_map = course_start_line(tracker, p)
+        course = CourseMap(p)
+        tracker.course = course
+        entry.start_by_map = course_start_line(course, p)
     cone = ConeMission(ConeSorter(SorterParams()))
     rec = dict(events=[], plans=[], trail=[], limos=[], cost_max=None, p=p, avoid=avoid,
-               crossings=[], yaw=[], starts=[], mission=[], blocked=[])
+               crossings=[], yaw=[], starts=[], mission=[], blocked=[], course=course)
     t0 = None
     on_since, on_total = None, 0.0
     s = 0.0
@@ -133,6 +137,12 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             c = entry.update(s, tracker.distance, find_entry_line(bgr, cam, white))
             if c is not None:
                 rec['crossings'].append((s, c))
+            if course is not None:                  # as the node
+                course.frozen = avoid.state == ACTIVE
+                why = course.should_fall_back(tracker.distance, entry)
+                if why:
+                    entry.start_by_map = None
+                    rec['events'].append((s, 'course map fallback: ' + why))
             for d in check_start_line(entry, bgr, cam, fitter.colours, tracker.distance, p.lane_width):
                 rec['events'].append((s, 'white line at %.2f m: %s (%s)' % (
                     d.odometer, 'SECTION START LINE' if d.start else 'not the start',

@@ -999,46 +999,74 @@ def test_pose_of_a_line_still_ahead():
     assert tr.line_pose(0.2) == pytest.approx(tr.at_distance(0.2))
 
 
-def _course_tracker(yaw0=0.7):
+def _course_tracker(yaw0=0.7, placed_deg=0.0, wobble_deg=0.0):
     """Drive the 1114 course start: 9 m along +x, a right turn, 4.7 m down, a right turn, along -x;
-    in a world frame turned by yaw0 (the IMU's own zero)."""
+    in a world frame turned by yaw0 (the IMU's own zero). placed_deg: the car set down that much
+    off the track axis at the start (its IMU zero is then off too). wobble_deg: lane-following sway."""
+    from clothoid_lidar.static_avoid import CourseMap
     tr = PoseTracker()
+    course = CourseMap(AvoidParams())
+    tr.course = course
     pts, heads = [], []
     x, y = 0.0, 0.0
+    k = 0
     for h, n in ((0.0, 900), (-math.pi / 2, 470), (math.pi, 200)):
         for _ in range(n):
-            x += 0.01 * math.cos(h); y += 0.01 * math.sin(h)
-            pts.append((x, y)); heads.append(h)
+            k += 1
+            hh = h + math.radians(wobble_deg) * math.sin(k / 40.0)
+            x += 0.01 * math.cos(hh); y += 0.01 * math.sin(hh)
+            pts.append((x, y)); heads.append(hh)
+    off = math.radians(placed_deg)
     c, s = math.cos(yaw0), math.sin(yaw0)
     t = 0.0
-    tr.imu(t, yaw0)
+    tr.imu(t, yaw0 + off)
     tr.odom(t, 0.3, (0.0, 0.0))
     for (px, py), h in zip(pts, heads):
         t += 0.02
         tr.imu(t, yaw0 + h)
         tr.odom(t, 0.3, (c * px - s * py, s * px + c * py))
-    return tr
+    return tr, course
 
 
 def test_course_map_pose_from_the_start():
-    tr = _course_tracker()
-    x, y, h = tr.map_pose(tr.latest())
-    assert x == pytest.approx(7.0, abs=0.05) and y == pytest.approx(-4.7, abs=0.05)
-    assert abs(math.degrees(h)) == pytest.approx(180.0, abs=1.0)
+    tr, course = _course_tracker()
+    assert course.x == pytest.approx(7.0, abs=0.05) and course.y == pytest.approx(-4.7, abs=0.05)
+    assert abs(math.degrees(course.h)) == pytest.approx(180.0, abs=1.0)
+
+
+def test_course_map_snaps_a_crooked_start_to_the_track_axes():
+    """Set down 4 deg off: unsnapped the line would be ~1 m off at 14 m."""
+    tr, course = _course_tracker(placed_deg=4.0, wobble_deg=1.5)
+    assert course.snaps and abs(course.snaps[0][1]) == pytest.approx(4.0, abs=1.0)
+    assert course.x == pytest.approx(7.0, abs=0.15) and course.y == pytest.approx(-4.7, abs=0.15)
 
 
 def test_course_map_start_line():
     from clothoid_lidar.section_cues import Crossing
     from clothoid_lidar.static_avoid import course_start_line
-    tr = _course_tracker()
-    check = course_start_line(tr, AvoidParams())
+    tr, course = _course_tracker()
+    check = course_start_line(course, AvoidParams())
     d0 = tr.distance                                       # at (7.0, -4.7)
-    real = Crossing(odometer=d0 - 1.55, heading=0.0, t=0.0)          # (8.55, -4.7), heading 180
-    side = Crossing(odometer=9.0 + 4.2, heading=0.0, t=0.0)          # (9.0, -4.2), heading -90
+    real = Crossing(odometer=d0 - 1.25, heading=0.0, t=0.0)          # (8.25, -4.7), heading 180
+    side = Crossing(odometer=9.0 + 4.0, heading=0.0, t=0.0)          # (9.0, -4.0), heading -90
     slow = Crossing(odometer=2.4, heading=0.0, t=0.0)                # top straight
     assert check(real) is True and 'from the start line' in real.where
-    assert check(side) is False                            # 0.6 m away but heading down
-    assert check(slow) is None or check(slow) is False     # out of the kept history or far
+    assert check(side) is False                            # 0.99 m away but heading down
+    assert check(slow) is False
+
+
+def test_course_map_falls_back_after_passing_the_point_without_a_line():
+    from clothoid_lidar.section_cues import EntryLineTracker
+    tr, course = _course_tracker()
+    entry = EntryLineTracker()
+    assert course.should_fall_back(14.0, entry) is None   # at (7.0, -4.7): 1.25 m from the point
+    course.min_far = 0.4                                  # it had come close
+    course.x = 6.0                                        # and is 2.25 m past now
+    why = course.should_fall_back(15.5, entry)
+    assert why and 'passed the start line point' in why and course.should_fall_back(16, entry) is None
+    far = _course_tracker()[1]
+    far.x, far.y = 3.0, 3.0                               # a wrong start pose: never near it
+    assert 'never within' in far.should_fall_back(17.5, entry)
 
 
 def test_course_map_decides_without_the_lane_line_pair():

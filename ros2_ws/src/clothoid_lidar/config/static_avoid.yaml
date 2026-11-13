@@ -60,6 +60,13 @@ static_avoid:
     start_line_radius: 1.0
     start_line_heading_deg: 180.0
     start_line_heading_tol_deg: 35.0
+    # heading snapped to the track axes on straights (not while avoiding); fallback to the lane-line pair
+    course_straight: 1.5
+    course_straight_spread_deg: 6.0
+    course_snap_max_deg: 15.0
+    course_fallback_past: 1.0
+    start_line_odometer: 14.2
+    course_fallback_odometer: 3.0
     island_handover: 1.0         # handover_after_island false: m before the island front, lane_main enters A / B
     island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
     # image_source: 10hz           # 10hz: image_10hz_topic, every frame; raw: image_topic, every image_every-th   (launch argument; a value here would override it)

@@ -42,7 +42,7 @@ from clothoid_lidar.red_ratio_node import image_to_bgr
 from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker, WhiteParams,
                                          check_start_line, find_entry_line)
 from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,
-                                         PoseTracker, StaticAvoid, course_start_line,
+                                         CourseMap, PoseTracker, StaticAvoid, course_start_line,
                                          section_to_base, yaw_from_quaternion)
 
 
@@ -108,8 +108,12 @@ class StaticAvoidNode(Node):
         self.colours = ColourParams(white_s_max=self.white.s_max, white_v_min=self.white.v_min)
         self.set_yellow(v('yellow_lower'), v('yellow_upper'))
         self.entry = EntryLineTracker()
+        self.course = None
+        self.snaps_logged = 0
         if self.p.course_map:
-            self.entry.start_by_map = course_start_line(self.tracker, self.p)
+            self.course = CourseMap(self.p)
+            self.tracker.course = self.course
+            self.entry.start_by_map = course_start_line(self.course, self.p)
         self.lane_fitter = LaneFitter(self.p, self.cam, self.colours)
         self.image_count = 0
         self.cone_active = False
@@ -303,6 +307,18 @@ class StaticAvoidNode(Node):
         crossing = self.entry.update(t_img, self.tracker.distance_at(t_img), line)
         if crossing is not None:
             self.get_logger().info(f'white line: crossed at odometer {crossing.odometer:.2f} m')
+        if self.course is not None:
+            self.course.frozen = self.avoid.state == ACTIVE      # no heading snaps while avoiding
+            for odo, deg in self.course.snaps[self.snaps_logged:]:
+                if abs(deg) >= 1.0:
+                    self.get_logger().info(f'course map: heading snapped by {deg:+.1f} deg on the '
+                                           f'straight at odometer {odo:.1f} m')
+            self.snaps_logged = len(self.course.snaps)
+            why = self.course.should_fall_back(self.tracker.distance, self.entry)
+            if why:
+                self.entry.start_by_map = None
+                self.get_logger().warn(f'course map: {why}; the dashed lane-line pair decides the '
+                                       'section start line from now on')
         for c in check_start_line(self.entry, bgr, self.cam, self.lane_fitter.colours,
                                   self.tracker.distance_at(t_img), self.p.lane_width):
             why = c.where or f'lane-line pair in {c.pairs} frames around it'
