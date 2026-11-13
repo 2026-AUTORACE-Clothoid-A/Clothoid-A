@@ -1,6 +1,6 @@
 # 요청: 미션 중간에서 재시작할 수 있게 해 주세요 (`clothoid_mission`)
 
-요청: 주영(통합/MUX) → namgyu · 2026-11-12 · 상태: 초안. 같이 정하고 싶습니다.
+요청: 주영(통합/MUX) → namgyu · 2026-11-12 (11-13 보강: cone_entered, static_avoid 초기화, 구간 신호) · 상태: 초안. 같이 정하고 싶습니다.
 
 ## 배경
 - 대회 중 미션이 실패하면(예: 정적 회피 중 LIMO 충돌) **그 미션의 시작점으로 차를 옮겨 다시 출발**하라는 지시를 받을 수 있습니다.
@@ -19,17 +19,37 @@
    `start`, `crosswalk_pedestrian`, `static_avoid`, `fork`, `cone`, `crosswalk_light`, `parking`
 2. **체크포인트별로 mission 상태가 어때야 하는지 표로 정리하기.** 어떤 값을 초기화하고 어떤 값을 미리 세팅할지입니다. 예:
 
-   | 체크포인트 | `direction` | `parking_armed` / `flag` | cooldown·arm | 기타 |
-   |---|---|---|---|---|
-   | `static_avoid` | None | False / False | 모두 초기화 | 회피 노드 상태 초기화(세션 B와 조율) |
-   | `cone` | 갈림길 이후라 유지? 초기화? | False / False | 초기화 | |
-   | `parking` | (주차에 영향 없으면) 상관없음 | False / False(표지판부터 다시) | 초기화 | |
+   | 체크포인트 | `direction` | `parking_armed` / `flag` | `cone_entered` (#20) | cooldown·arm | 기타 |
+   |---|---|---|---|---|---|
+   | `static_avoid` | None | False / False | False | 모두 초기화 | static_avoid 전체 초기화(아래 3번) |
+   | `cone` | 갈림길 이후라 유지? 초기화? | False / False | False (콘을 다시 지나며 래치) | 초기화 | |
+   | `crosswalk_light` | 유지 | False / False | **True** | 초기화 | |
+   | `parking` | (주차에 영향 없으면) 상관없음 | False / False(표지판부터 다시) | **True** | 초기화 | |
+
+   - `cone_entered`(#20, eunsoo/cone-gate)는 `/cone/mission_active`가 1.5 s 연속이어야 켜지고, 꺼지지 않습니다.
+     콘 구간 뒤 체크포인트에서 재시작하면 콘을 다시 지나지 않으므로 **True로 세팅해야 합니다.** 안 그러면 주차가 영영 안 켜집니다(`require_cone_for_parking`).
 
 3. **노드를 끄지 않고 체크포인트로 상태를 바꾸는 입력 하나.**
    - 형태 제안: 서비스 `/mission/restart_at`(체크포인트 이름 string) 또는 토픽 `std_msgs/String`.
    - 받으면 `MissionLogic`을 그 체크포인트의 상태로 다시 만들고, 로그를 한 줄 남겨 주세요.
    - 위치 리셋, 회피 노드 등 다른 노드들도 같은 이름을 받도록 통합 쪽에서 맞추겠습니다.
-4. **(선택)** 지금 mission이 어떤 체크포인트 이후인지를 상태 토픽에 함께 내 주기. 디버그와 재시작 판단에 씁니다.
+   - static_avoid(세션 B)도 같은 토픽을 구독합니다. 섬 옆 인계 뒤 그 주행 동안 잠기므로(`one_section_per_run`, #18) 초기화 입력이 필요합니다.
+     `static_avoid`나 그보다 앞의 체크포인트면 전부 초기화(frame, costmap, 잠금, finished), 뒤의 체크포인트면 끝난 상태를 유지합니다.
+     **이름과 타입을 확정하면 세션 B에 알려야 하니 주영에게 알려 주세요.**
+4. **구간 신호 `/mission/section`** (`std_msgs/String`, transient_local, 바뀔 때 + 1 Hz). 값은 위 체크포인트 이름을 그대로 씁니다.
+   처음에는 선택 항목이었는데, static_avoid 오시작 때문에 필요해졌습니다(2026-11-13 추가).
+   - 문제: 1112 전체 코스 bag을 지금 코드로 다시 돌리면, 횡단보도 직후에 static_avoid가 2번 잘못 시작합니다.
+     - `parking_1112_201114` 53.4 s
+     - `parking_1112_201340` 50.25 s, 앞을 지나가는 LIMO
+     - 콘 무리에서 생기던 오시작은 #18, #19와 `ignore_cone:=false`로 막혔지만, 이 2건은 막는 장치가 없습니다.
+   - 잘못 시작한 채로 약 5.75 m를 가면 static_avoid가 "구간 끝"으로 잠겨서 **진짜 구간을 못 할 수 있습니다.** 세션 B가 따로 고칩니다.
+   - 제안:
+     - `static_avoid` 구간은 보행자 정지가 풀린 뒤부터 갈림길 표지판이 확정될 때까지입니다.
+     - static_avoid는 `section_topic` 파라미터가 있을 때만 이 신호를 봅니다(비어 있으면 지금 동작).
+   - 같이 정할 것:
+     - 201340은 보행자 정지가 풀린 직후 LIMO가 아직 앞에 있던 경우입니다. 구간 시작을 "정지 해제 직후"로 하면 이 경우를 못 막습니다.
+       "정지 해제 + 다음 코너(90°) 통과" 같은 조건이 필요한지 정해야 합니다.
+     - 보행자 표지판을 놓치면 구간이 안 열려 회피 자체가 막힙니다. 대비책으로 "흰 진입선을 본 경우는 구간 신호 없이도 시작"을 세션 B와 맞추겠습니다.
 
 ## 하지 않아도 되는 것
 - 위치를 근거로 미션을 판단하는 것. 위치는 나중에 보조 신호로만 붙이고, 판단은 지금처럼 센서로 합니다.
