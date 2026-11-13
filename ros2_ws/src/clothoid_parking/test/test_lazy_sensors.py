@@ -139,6 +139,37 @@ def test_registered_handover_uses_grid_not_parked_vehicle_gap(node, monkeypatch)
     assert len(sent)==1
 
 
+def test_provisional_handover_requires_fresh_observed_near_term_space(node):
+    import numpy as np
+    from types import SimpleNamespace
+    from clothoid_parking.layout import LayoutParams, ParkingLayout
+    from clothoid_parking.tracker import Pose2D
+    layout=ParkingLayout(LayoutParams(control_enabled=True,target_bay=2))
+    for t in (.1,.2,.3):layout.observe(t,(1.,-.25),0.,Pose2D())
+    node.core.layout=layout
+    node.core.approach_bay=layout.bays()[1]
+    layout.support_count=layout.p.confirm_scans
+    now=node.now()
+    layout.last_scan=now
+    node.last={name:now for name in ('imu','odom','scan')}
+    sent=[]
+    node.candidate_pub=SimpleNamespace(publish=sent.append)
+    msg=LaserScan();msg.header.stamp=node.get_clock().now().to_msg()
+    node.on_probe_scan(msg)
+    assert not sent  # final target geometry alone is insufficient
+    for x in np.linspace(0.,.2,30):
+        for k in np.floor(layout.footprint(x,0.,0.)/layout.p.grid).astype(int):
+            layout.cells[tuple(k)]=(now,False)
+    node.on_probe_scan(msg)
+    assert len(sent)==1 and layout.selected is None
+    layout.cells[(int(.4/layout.p.grid),0)]=(now,True)
+    node.on_probe_scan(msg)
+    assert len(sent)==1  # known near-term obstacle still vetoes handover
+    node.last['imu']=now-1.
+    node.on_probe_scan(msg)
+    assert len(sent)==1
+
+
 @pytest.mark.parametrize('missing', ['imu', 'odom', 'scan'])
 def test_exit_stops_for_missing_sensors_without_reporting_done(node, monkeypatch, missing):
     from clothoid_parking.layout import LayoutParams

@@ -231,9 +231,19 @@ class ParkingNode(Node):
         if self.approach.skipped:
             return
         if layout is not None and layout.p.control_enabled:
-            if layout.selected is None:
+            if layout.selected is None and self.core.approach_bay is None:
                 return
-            bay = layout.bays()[layout.selected]
+            bay = (layout.bays()[layout.selected] if layout.selected is not None
+                   else self.core.approach_bay)
+            if layout.selected is None:
+                # Handover to incremental observation is allowed only with a
+                # fresh, observed-free immediate movement. It does not certify
+                # the occluded final bay or bypass mission sign/entry evidence.
+                if (layout.origin is None or layout.support_count < layout.p.confirm_scans or
+                        now-layout.last_scan > STALE_SEC or self.stale() or
+                        not layout.motion_clear(now, self.core.tracker.pose,
+                                                self.core.planner.p.search_speed, 0., self.wheelbase)):
+                    return
             pose = self.core.tracker.pose
             c, s = math.cos(pose.yaw), math.sin(pose.yaw)
             dx, dy = bay.face_x-pose.x, bay.face_y-pose.y

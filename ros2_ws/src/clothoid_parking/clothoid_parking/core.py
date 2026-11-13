@@ -31,6 +31,7 @@ class ParkingCore:
         self.flag = False
         self.layout = ParkingLayout(layout, min_hits=self.min_hits) if layout is not None and layout.enabled else None
         self.preparing = False
+        self.approach_bay = None  # geometric candidate, not a declaration of free space
         self.pose_history = deque(maxlen=400)
 
     @property
@@ -47,6 +48,8 @@ class ParkingCore:
             self.pose_history.append((now, Pose2D(p.x, p.y, p.yaw)))
 
     def prepare(self, on):
+        if not on:
+            self.approach_bay = None
         if on and not self.preparing and self.phase == Phase.IDLE and self.layout:
             self.layout.reset()
         self.preparing = on
@@ -70,7 +73,10 @@ class ParkingCore:
         # Re-localization during a committed manoeuvre cannot move its target.
         if self.phase not in (Phase.IDLE, Phase.SEARCH):
             return False
-        return self.layout.observe(stamp, origin, yaw, pose)
+        observed = self.layout.observe(stamp, origin, yaw, pose)
+        if not observed:
+            self.approach_bay = None
+        return observed
 
     def set_flag(self, now: float, on: bool):
         if not on and self.layout is not None:
@@ -89,13 +95,25 @@ class ParkingCore:
                                            range_min, range_max, pose, self.laser_x)
                 if updated and self.phase in (Phase.IDLE, Phase.SEARCH):
                     candidate = self.layout.choose(now, self.tracker.pose, self.planner.p)
-                    if self.layout.p.control_enabled and self.phase == Phase.SEARCH:
+                    if self.layout.p.control_enabled:
                         confirmed = (self.layout.origin is not None and
                                      self.layout.support_count >= self.layout.p.confirm_scans)
                         if confirmed and not self.layout.retaining:
                             self.layout.retain_free(now, True)
                         elif not confirmed:
                             self.layout.retain_free(now, False)
+                        # A provisional target does not certify the bay as free.
+                        # Preparation may advertise this geometry, but mission
+                        # still requires its sign/entry checks; command() checks
+                        # each near-term swept footprint after handover.
+                        if (candidate is None and confirmed and
+                                self.layout.states[self.layout.p.target_bay-1] == 'unknown'):
+                            target = self.layout.bays()[self.layout.p.target_bay-1]
+                            path = self.layout.path(target, self.tracker.pose, self.planner.p)
+                            if path is not None and self.layout.coverage(path, now) != 'occupied':
+                                candidate = target
+                        self.approach_bay = candidate
+                    if self.layout.p.control_enabled and self.phase == Phase.SEARCH:
                         # Revoke a candidate even inside the legacy freeze distance.
                         self.planner.bay = candidate
                         if self.layout.origin is not None:

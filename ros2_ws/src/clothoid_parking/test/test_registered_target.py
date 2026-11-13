@@ -50,6 +50,35 @@ def test_search_retains_free_evidence_before_it_expires_at_turn(monkeypatch):
     assert not core.layout.retained_free
 
 
+@pytest.mark.parametrize('blocked', ['none', 'target', 'path'])
+@pytest.mark.parametrize('active', [False, True])
+def test_provisional_target_does_not_bypass_occupied_or_unknown_motion(monkeypatch, blocked, active):
+    core=ParkingCore(layout=LayoutParams(control_enabled=True,target_bay=2))
+    if active:
+        core.set_flag(.4,True)
+    else:
+        core.prepare(True)
+    core.layout=registered()
+    monkeypatch.setattr(core.layout,'supported',lambda now:True)
+    # Model an occluded target and a known route obstruction separately.
+    def coverage(points,now):
+        if blocked=='target':return 'occupied'
+        if blocked=='path' and np.ptp(points[:,0])>.5:return 'occupied'
+        return 'unknown'
+    monkeypatch.setattr(core.layout,'coverage',coverage)
+    for now in (.6,.8,1.):
+        core.odom(now,0.)
+        core.scan(now,[1.],0.,.1,.02,12.)
+    if blocked=='none':
+        assert core.approach_bay is not None
+        assert (core.planner.bay is not None)==active
+        assert core.layout.selected is None  # not published as a confirmed free bay
+    else:
+        assert core.planner.bay is None and core.approach_bay is None
+    # Regardless of provisional geometry, an unobserved near-term sweep stops.
+    assert core.command(1.)==((0.,0.) if active else None)
+
+
 def test_displaced_and_rotated_obstacles_do_not_move_registered_targets():
     layout=registered()
     before=np.array([[b.x,b.y,b.row_yaw] for b in layout.bays()])
