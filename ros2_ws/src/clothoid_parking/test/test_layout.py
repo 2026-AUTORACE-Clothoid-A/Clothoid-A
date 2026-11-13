@@ -110,10 +110,10 @@ def test_entry_retains_only_measured_free_cells_and_new_hit_revokes_them():
     # Retention does not certify space outside the observed route.
     assert not layout.motion_clear(4., pose, .2, 0., .2, distance=1.)
     # One newly observed hit is unknown, but must still prevent entering it.
-    layout.scan(4.1, [.4], 0., 0., .02, 12., pose, 0.)
+    layout.scan(4.1, [.3], 0., 0., .02, 12., pose, 0.)
     assert not layout.motion_clear(4.1, pose, .2, 0., .2)
     assert layout.motion_reason == 'unobserved swept footprint'
-    layout.scan(4.4, [.4], 0., 0., .02, 12., pose, 0.)
+    layout.scan(4.4, [.3], 0., 0., .02, 12., pose, 0.)
     assert not layout.motion_clear(4.4, pose, .2, 0., .2)
     assert layout.motion_reason == 'occupied swept footprint'
 

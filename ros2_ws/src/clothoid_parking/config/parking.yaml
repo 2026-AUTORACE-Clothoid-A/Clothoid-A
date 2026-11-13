@@ -28,7 +28,7 @@ parking:
     layout.bay_width: 0.50
     layout.bay_depth: 0.60
     layout.line_width: 0.02
-    layout.position_tolerance: 0.07
+    layout.position_tolerance: 0.07 # registration consistency only; not collision padding
     layout.confirm_frames: 3
     layout.confirm_scans: 3
     layout.evidence_age: 1.5

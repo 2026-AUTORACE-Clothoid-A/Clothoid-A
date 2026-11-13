@@ -128,7 +128,7 @@ def test_outside_bay_obstacle_blocks_approach():
     points=np.concatenate([layout.footprint(x,0.,0.) for x in np.linspace(0,.2,100)])
     fill(layout,points)
     assert layout.motion_clear(1.,pose,.2,0.,.2)
-    fill(layout,np.array([[.4,0.]]),True)
+    fill(layout,np.array([[.3,0.]]),True)
     assert not layout.motion_clear(1.,pose,.2,0.,.2)
 
 

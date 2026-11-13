@@ -162,7 +162,7 @@ def test_provisional_handover_requires_fresh_observed_near_term_space(node):
             layout.cells[tuple(k)]=(now,False)
     node.on_probe_scan(msg)
     assert len(sent)==1 and layout.selected is None
-    layout.cells[(int(.4/layout.p.grid),0)]=(now,True)
+    layout.cells[(int(.3/layout.p.grid),0)]=(now,True)
     node.on_probe_scan(msg)
     assert len(sent)==1  # known near-term obstacle still vetoes handover
     node.last['imu']=now-1.

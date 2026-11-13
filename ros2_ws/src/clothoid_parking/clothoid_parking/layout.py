@@ -58,7 +58,9 @@ class ParkingLayout:
         if self.p.control_enabled and not self.p.target_bay:
             raise ValueError('registered control requires a designated target_bay')
         p = self.p
-        margin = p.clearance+p.position_tolerance
+        # Registration consistency tolerance is not a measured collision error.
+        # Keep it independent from the physical vehicle clearance.
+        margin = p.clearance
         u = np.linspace(-p.body_length/2-margin, p.body_length/2+margin,
                         math.ceil((p.body_length+2*margin)/(p.grid/2))+1)
         v = np.linspace(-p.body_width/2-margin, p.body_width/2+margin,
@@ -207,7 +209,7 @@ class ParkingLayout:
         return 'free'
 
     def footprint(self, x, y, yaw):
-        # Include registration tolerance in the envelope; uncertain poses cost usable clearance.
+        # Physical vehicle plus clearance; independent of registration gates.
         c, s = math.cos(yaw), math.sin(yaw)
         return self._footprint_offsets @ np.array([[c, s], [-s, c]]) + [x, y]
 
