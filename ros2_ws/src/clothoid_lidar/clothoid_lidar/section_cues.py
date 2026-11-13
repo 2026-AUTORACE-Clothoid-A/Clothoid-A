@@ -127,6 +127,7 @@ class Crossing:
     # width apart) starts there. None until decided (see EntryLineTracker.is_start)
     start: Optional[bool] = None
     pairs: str = ''               # 'k/n' frames with the pair around the line, for the log
+    where: str = ''               # course map position, when the course map decides
 
 
 class EntryLineTracker:
@@ -171,6 +172,9 @@ class EntryLineTracker:
         self.start_before_max = 0.10
         self.start_frames = 5
         self.pairs: List[Tuple[float, bool]] = []   # (odometer, pair seen)
+        # set by the caller with the course map on: crossing -> start line? (None: not yet known);
+        # the lane-line pair is then not looked for
+        self.start_by_map = None
 
     def update(self, t: float, odometer: float, line: Optional[EntryLine]) -> Optional[Crossing]:
         if line is not None:
@@ -216,6 +220,9 @@ class EntryLineTracker:
     def is_start(self, c: Crossing, odometer: float) -> Optional[bool]:
         if c.start is not None:
             return c.start
+        if self.start_by_map is not None:
+            c.start = self.start_by_map(c)
+            return c.start
         near = [v for o, v in self.pairs if self.start_near[0] <= o - c.odometer <= self.start_near[1]]
         before = [v for o, v in self.pairs if self.start_before[0] <= o - c.odometer <= self.start_before[1]]
         c.pairs = '%d/%d' % (sum(near), len(near))
@@ -254,7 +261,9 @@ def dashed_pair(obs: Optional['LaneObservation'], lane_width: float, tol: float 
 def check_start_line(entry: 'EntryLineTracker', bgr, cam, colours, odometer: float,
                      lane_width: float) -> List[Crossing]:
     """Feed one frame to the start-line check (only near white cross lines); the crossings it
-    decided."""
+    decided. With the course map the crossings are decided by their position, no image work."""
+    if entry.start_by_map is not None:
+        return [c for c in entry.crossings if c.start is None and entry.is_start(c, odometer) is not None]
     if not entry.wants_pairs(odometer):
         return []
     obs = find_lane_lines(bgr, cam, colours, 0.0, math.radians(25.0), white_only=True)

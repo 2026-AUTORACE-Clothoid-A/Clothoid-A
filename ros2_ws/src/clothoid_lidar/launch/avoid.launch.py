@@ -47,7 +47,7 @@ def _nodes(context):
     sim = {'use_sim_time': LaunchConfiguration('use_sim_time').perform(context).lower() == 'true'}
     camera = LaunchConfiguration('camera').perform(context)
     flags = {k: LaunchConfiguration(k).perform(context).lower() == 'true'
-             for k in ('ignore_cone', 'debug_heavy')}
+             for k in ('ignore_cone', 'debug_heavy', 'course_map')}
     flags['recovery_reverse'] = LaunchConfiguration('reverse').perform(context).lower() == 'true'
     cam_file, white = _lane_files(camera)
     extra = LaunchConfiguration('params').perform(context)
@@ -79,6 +79,9 @@ def generate_launch_description():
                                           'every frame; raw: /camera/color/image_raw, every 3rd frame'),
         DeclareLaunchArgument('params', default_value='',
                               description='extra static_avoid parameter file, last (e.g. the simulator)'),
+        DeclareLaunchArgument('course_map', default_value='false',
+                              description='true only when launched at the race start: the section start '
+                                          'line is told by its place on the /imu + /odom course map'),
         DeclareLaunchArgument('reverse', default_value='false',
                               description='back up 0.2 m when every path stays blocked (recovery)'),
         OpaqueFunction(function=_nodes),

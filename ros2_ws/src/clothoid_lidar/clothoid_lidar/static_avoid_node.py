@@ -42,8 +42,8 @@ from clothoid_lidar.red_ratio_node import image_to_bgr
 from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker, WhiteParams,
                                          check_start_line, find_entry_line)
 from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,
-                                         PoseTracker, StaticAvoid, section_to_base,
-                                         yaw_from_quaternion)
+                                         PoseTracker, StaticAvoid, course_start_line,
+                                         section_to_base, yaw_from_quaternion)
 
 
 class StaticAvoidNode(Node):
@@ -108,6 +108,8 @@ class StaticAvoidNode(Node):
         self.colours = ColourParams(white_s_max=self.white.s_max, white_v_min=self.white.v_min)
         self.set_yellow(v('yellow_lower'), v('yellow_upper'))
         self.entry = EntryLineTracker()
+        if self.p.course_map:
+            self.entry.start_by_map = course_start_line(self.tracker, self.p)
         self.lane_fitter = LaneFitter(self.p, self.cam, self.colours)
         self.image_count = 0
         self.cone_active = False
@@ -303,9 +305,10 @@ class StaticAvoidNode(Node):
             self.get_logger().info(f'white line: crossed at odometer {crossing.odometer:.2f} m')
         for c in check_start_line(self.entry, bgr, self.cam, self.lane_fitter.colours,
                                   self.tracker.distance_at(t_img), self.p.lane_width):
+            why = c.where or f'lane-line pair in {c.pairs} frames around it'
             self.get_logger().info(f'white line at odometer {c.odometer:.2f} m: '
                                    + ('SECTION START LINE' if c.start else 'not the section start')
-                                   + f' (lane-line pair in {c.pairs} frames around it)')
+                                   + f' ({why})')
         had_event = self.avoid.event
         self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry, t_img)
         if self.avoid.event != had_event and 'fit' in self.avoid.event:
@@ -336,7 +339,7 @@ class StaticAvoidNode(Node):
         pose = self.tracker.latest() if self.tracker.ready else None
         c = self.entry.recent(self.tracker.distance, self.p.island_from_entry_max + 1.0, start_only=True)
         entry_back = self.tracker.distance - c.odometer if c is not None else None
-        entry_pose = self.tracker.at_distance(c.odometer) if c is not None else None
+        entry_pose = self.tracker.line_pose(c.odometer) if c is not None else None
         was_done = self.avoid.done
         started = self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
                                       entry_back, entry_pose)

@@ -25,7 +25,7 @@ from clothoid_lidar.obstacle_extractor import (ExtractorParams, extract_obstacle
 from clothoid_lidar.section_cues import (CameraModel, ColourParams, EntryLineTracker,  # noqa: E402
                                          WhiteParams, check_start_line, find_entry_line)
 from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, LaneFitter,  # noqa: E402
-                                         PoseTracker, StaticAvoid, base_to_section, lane_of,
+                                         PoseTracker, StaticAvoid, base_to_section, course_start_line, lane_of,
                                          yaw_from_quaternion)
 
 LIDAR_X = 0.103
@@ -96,6 +96,8 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
     avoid = StaticAvoid(p)
     tracker = PoseTracker()
     fitter = LaneFitter(p, cam, ColourParams())
+    if p.course_map:                       # the bag must start at the race start (as the node then)
+        entry.start_by_map = course_start_line(tracker, p)
     cone = ConeMission(ConeSorter(SorterParams()))
     rec = dict(events=[], plans=[], trail=[], limos=[], cost_max=None, p=p, avoid=avoid,
                crossings=[], yaw=[], starts=[], mission=[], blocked=[])
@@ -107,7 +109,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         drop, gaps = stalls_like_live(bag, legacy_odom)
         rec['stalls'] = (len(gaps), len(drop))
     topics = ['/scan', '/odom', '/imu', '/camera/color/image_raw', '/camera/color/image_raw/compressed',
-              '/mission/state']
+              '/camera/color/image_10hz', '/mission/state']
     for topic, t, msg in messages(bag, topics):
         if drop and (topic, int(round(t * 1e6))) in drop:      # microseconds: float seconds
             continue
@@ -122,17 +124,19 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
             if not rec['mission'] or rec['mission'][-1][1] != msg.data:
                 rec['mission'].append((s, msg.data))
             continue
-        if topic.startswith('/camera/color/image_raw'):
+        if topic.startswith('/camera/color/image'):
             frames += 1
-            if (frames - 1) % image_every or not tracker.ready or not (t_from - 8.0 <= s <= t_to):
+            every = 1 if topic.endswith('10hz') else image_every     # full.launch bags: the 10 Hz topic
+            if (frames - 1) % every or not tracker.ready or not (t_from - 8.0 <= s <= t_to):
                 continue
             bgr = image_bgr(msg)
             c = entry.update(s, tracker.distance, find_entry_line(bgr, cam, white))
             if c is not None:
                 rec['crossings'].append((s, c))
             for d in check_start_line(entry, bgr, cam, fitter.colours, tracker.distance, p.lane_width):
-                rec['events'].append((s, 'white line at %.2f m: %s (pair %s)' % (
-                    d.odometer, 'SECTION START LINE' if d.start else 'not the start', d.pairs)))
+                rec['events'].append((s, 'white line at %.2f m: %s (%s)' % (
+                    d.odometer, 'SECTION START LINE' if d.start else 'not the start',
+                    d.where or 'pair ' + d.pairs)))
             had = avoid.event
             fitter.on_frame(bgr, avoid, tracker, entry)
             if avoid.event != had and 'fit' in avoid.event:
@@ -167,7 +171,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         pose = tracker.at(s + 0.05)
         c = entry.recent(tracker.distance, p.island_from_entry_max + 1.0, start_only=True)
         entry_back = tracker.distance - c.odometer if c is not None else None
-        entry_pose = tracker.at_distance(c.odometer) if c is not None else None
+        entry_pose = tracker.line_pose(c.odometer) if c is not None else None
         was_done = avoid.done
         if avoid.state != ACTIVE and avoid.blocked(limos, entry_back):
             # shadow: something LIMO-sized in our lane ahead, started or not (and why not)

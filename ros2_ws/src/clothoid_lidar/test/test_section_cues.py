@@ -204,3 +204,5 @@ def test_pair_seen_before_the_line_is_not_a_start():
     for k in range(40):                                   # inside the section already
         tr.observe_pair(3.0 + 0.06 * k, True)
     assert c.start is False
+
+
