@@ -13,10 +13,11 @@ Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking
     steering) and the car is held when it reports `arrived` (STOP).
     `use_stop_line` false: stop the moment the 2025 stripe flag (/stopline_detected) is true; that
     flag is commented out in clothoid_lane since 2026-11-09, so false means no stop at all.
-  * left / right sign -> preferred boundary; lane_main still follows the measured road
-  * parking sign     -> prepare passive scene sensing; entry plus bay confirmation transfers control
-  * require_scene_confirmation false retains the legacy immediate/timed policy for comparisons
-No mission's success or place in a route is a prerequisite for another mission.
+  * left / right sign (fork) -> direction value for lane_main
+  * parking sign     -> arm; parking flag (latched) at the next single stop line right in front
+                        (`parking_line`: /stopline_near, not the stripe detector, which needs a
+                        crosswalk; the lidar search starts there, about 2 m before the bay;
+                        `parking_at_stopline` false: at the sign)
 Driving nodes keep working underneath: `stop` only means "publish zero on the state input".
 """
 import math
@@ -109,9 +110,10 @@ class MissionParams:
     fork_right_direction: int = 1
     # parking: the sign is seen from afar, the stop line before the bays is where the search starts
     parking_at_stopline: bool = True
-    require_scene_confirmation: bool = True
-    parking_enabled: bool = True
-    slow_arms_bump: bool = False
+    # cone gate: allow parking and block speed bump only after entering the cone course
+    require_cone_for_parking: bool = True
+    block_bump_after_cone: bool = True
+    cone_confirm_sec: float = 1.5      # consecutive seconds of cone_active before latching cone_entered
 
 
 @dataclass
@@ -124,7 +126,7 @@ class Inputs:
     parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
-    parking_scene: bool = False    # fresh, repeated lidar bay observations
+    cone_active: bool = False                     # /cone/mission_active from cone_sorter
 
 
 @dataclass
@@ -136,7 +138,6 @@ class Outputs:
     parking_flag: bool = False
     stop_arm: bool = False             # run the line stop (FinishCore)
     steering_lock: bool = False        # lock steering during bump traversal
-    parking_prepare: bool = False     # observe the parking scene, keep lane control
 
 
 class MissionLogic:
@@ -147,7 +148,8 @@ class MissionLogic:
         self.direction: Optional[int] = None
         self.parking_flag = False
         self.parking_armed = False
-        self.parking_seen_at = None
+        self.cone_entered = False
+        self.cone_active_since: Optional[float] = None
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
@@ -164,17 +166,23 @@ class MissionLogic:
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
 
+        if inputs.cone_active:
+            if self.cone_active_since is None:
+                self.cone_active_since = now
+            if now - self.cone_active_since >= p.cone_confirm_sec:
+                self.cone_entered = True
+        else:
+            self.cone_active_since = None
+
         if 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
-        self._update_fork(inputs)
-        if 'sign_parking' in seen and p.parking_enabled:
-            self.parking_seen_at = now
-        self.parking_armed = (p.parking_enabled and self.parking_seen_at is not None and
-                              now - self.parking_seen_at <= p.arm_timeout_sec and
-                              not self.parking_flag and not inputs.parking_done)
-        parking_entry = (inputs.parking_line and inputs.parking_scene if p.require_scene_confirmation
-                         else inputs.parking_line or not p.parking_at_stopline)
-        if self.parking_armed and parking_entry and self.state == DRIVE:
+        if 'sign_left' in seen:
+            self.direction = p.fork_left_direction
+        elif 'sign_right' in seen:
+            self.direction = p.fork_right_direction
+        if 'sign_parking' in seen and (self.cone_entered or not p.require_cone_for_parking):
+            self.parking_armed = True
+        if self.parking_armed and (inputs.parking_line or not p.parking_at_stopline):
             self.parking_flag = True
 
         self._update_stop(inputs)
@@ -185,7 +193,7 @@ class MissionLogic:
         if now < self.slow_until or bump_active:
             limits.append(p.slow_speed)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
-        if arm and (not p.require_scene_confirmation or inputs.line_phase == 'commit'):
+        if arm:
             limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
         return Outputs(
             state=self.state,
@@ -194,26 +202,23 @@ class MissionLogic:
             direction=self.direction,
             parking_flag=self.parking_flag,
             stop_arm=arm,
-            parking_prepare=self.parking_armed and not self.parking_flag,
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
                            math.isfinite(inputs.imu_pitch)))
 
-    def _update_fork(self, inputs: Inputs) -> None:
-        seen, p = inputs.seen, self.p
-        if 'sign_left' in seen and 'sign_right' not in seen:
-            self.direction = p.fork_left_direction
-        elif 'sign_right' in seen and 'sign_left' not in seen:
-            self.direction = p.fork_right_direction
-
     def _update_bump(self, inputs: Inputs) -> None:
         now, seen, pitch, p = inputs.now, inputs.seen, inputs.imu_pitch, self.p
+        bump_blocked = self.cone_entered and p.block_bump_after_cone
 
-        # Both official warning forms can prepare a slow traversal.
-        if 'sign_bump' in seen or (p.slow_arms_bump and 'sign_slow' in seen):
+        # 1. YOLO trigger
+        if bump_blocked:
+            if self.bump_state == BUMP_APPROACHING:
+                self.bump_state = BUMP_IDLE
+        elif 'sign_bump' in seen:
             if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
                 self.bump_state = BUMP_IDLE
+
             if self.bump_state == BUMP_IDLE:
                 self.bump_state = BUMP_APPROACHING
                 self.bump_level_started_at = None
@@ -312,8 +317,7 @@ def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
                  fork_max_offset_height_ratio: float = 10.0,
                  min_sizes: Optional[Dict[str, Tuple[float, float]]] = None,
                  bump_min_area: float = 0.0,
-                 bump_min_height: float = 0.0,
-                 bump_max_offset_height_ratio: Optional[float] = None) -> Set[str]:
+                 bump_min_height: float = 0.0) -> Set[str]:
     """Classes used by the mission, excluding boxes far to the side or smaller than thresholds.
 
     abs(box centre x - camera principal x) / box height is a distance-normalised
@@ -323,8 +327,6 @@ def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
     the fork sign reached 9.4 while approaching from the outer lane.
     A configured limit <= 0 disables that group's filter for recorded comparisons.
     min_sizes maps class_name -> (min_area, min_height).
-    bump_max_offset_height_ratio overrides only the bump sign's lateral limit:
-    None inherits the shared sign limit; <= 0 disables it for roadside bump signs.
     """
     filters = dict(min_sizes or {})
     if bump_min_area > 0 or bump_min_height > 0:
@@ -351,9 +353,7 @@ def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
                 continue
 
         # 2. Horizontal offset ratio filtering (exclude adjacent track signs)
-        if name == 'sign_bump' and bump_max_offset_height_ratio is not None:
-            limit = bump_max_offset_height_ratio
-        elif name.startswith('traffic_light_'):
+        if name.startswith('traffic_light_'):
             limit = light_max_offset_height_ratio
         elif name in ('sign_left', 'sign_right'):
             limit = fork_max_offset_height_ratio

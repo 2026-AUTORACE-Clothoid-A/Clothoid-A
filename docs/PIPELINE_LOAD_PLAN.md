@@ -59,6 +59,37 @@ PR #10 이후(main 096b2c6) full.launch 기본 구성에서 raw 영상을 30 Hz�
 
 yolo도 10~15 Hz로 낮추면 30 Hz로 받는 곳은 lane_main 하나만 남는다(은수 요청).
 
+### 0.2 영상 입구 경량화 방향 (주영 결정, 2026-11-11)
+
+**알고리즘은 Python에 그대로 두고, 30 Hz raw를 받는 "입구"만 C++로 모은다.** 노드 전체를 C++로 옮기지 않는 이유:
+- lane·parking·finish·mission(남규)은 기능이 계속 들어오고 있다.
+- numpy 알고리즘을 포팅하는 양이 크고, 대회 전에 회귀가 생길 위험이 크다.
+- yolo는 이미 GPU에서 추론하므로 C++로 옮겨도 이득이 적다.
+
+| 단계 | 내용 | 담당 |
+|---|---|---|
+| ① 완료 | 10 Hz throttle(`topic_tools throttle`, `use_image_10hz`) → `/camera/color/image_10hz` (PR #13) | 세션 A |
+| ② 다음 | **영상 허브 C++ component**(`clothoid_image_hub`): 카메라 driver와 같은 component container에 올려 raw를 intra-process로 받는다. 소비자에 맞춘 작은 토픽(10 Hz, 320x240, 필요하면 BEV)을 발행한다. Python 노드는 구독 토픽만 바꾼다 | 주영(허브), 세션 A(bringup 연결), 각 담당(토픽 변경) |
+| ③ 대회 후 | 필요하면 노드 단위 C++ 이전 검토 | |
+
+노드별 영상 입력:
+
+| 노드 | 영상 입력 |
+|---|---|
+| lane_main | 30 Hz 유지. 조향 루프이고, 임계값을 raw bag으로 맞췄다. 허브의 BEV나 축소 영상으로 옮기려면 bag 전후 비교가 먼저다 |
+| static_avoid | 10 Hz로 충분하다. 계획 주기가 10 Hz이고, 영상은 차선 맞춤 보조로만 쓴다 |
+| yolo | 신중하게. 지금 약 22 Hz다. 10 Hz로 낮추면 mission 확인 창(N프레임)이 늦어진다. 0.8 m/s에서 프레임 사이 이동이 2 cm에서 8 cm로 는다. 15 Hz나 compressed가 후보이고, 차에서 측정한 뒤 정한다 |
+| finish, mission | 이미 compressed를 쓰고, 필요한 구간에서만 구독한다 |
+
+**근거: 형식별 수신 비용(4.2절, 차와 같은 Fast DDS SHM 설정, PC).**
+- raw 30 Hz를 받기만 하면 코어의 5.3%를 쓴다. 같은 조건에서 320x240은 2.1%(40%), 10 Hz는 1.9%(35%)다.
+- JPEG는 받기만 하면 2.0%로 싸다. 하지만 Python에서 `imdecode`까지 하면 7.4%가 들어 raw보다 비싸다. 픽셀이 필요한 소비자에게 compressed는 이득이 없다.
+- 그래서 허브는 **축소(320x240)와 주기 낮추기(10 Hz)** 를 발행하고, JPEG는 녹화나 원격 보기용으로만 쓴다.
+- **효과를 나눠 보면:**
+  - 이득의 대부분은 Python 소비자가 작은 토픽을 받는 데서 나온다. 노드 하나당 PC −3.2~3.4%p, Orin 환산으로 코어의 약 8~10%다.
+  - 10 Hz 이득은 topic_tools throttle(PR #13)로 이미 얻을 수 있다. C++ 허브만의 추가 이득은 30 Hz 소비자용 320x240·BEV와, 카메라 container 안에서 raw를 받는 비용(허브 단독 0.8~2.0%)을 줄이는 것이다.
+  - 그래서 허브를 켤지는 차 측정(8.1절)을 보고 정한다.
+
 ## 1. 측정 방법과 환산 기준
 
 - **차 bag 분석**: 녹화 시각으로 토픽별 주기, 공백, 공백끼리 겹치는지를 봤다. `/rosout`도 함께 봤다.
@@ -148,6 +179,23 @@ Orin NX는 8 GB 모델이 6코어, 16 GB 모델이 8코어다. 차가 어느 모
 
 구독자 7개가 동시에 받아도 각자 29 Hz를 받았다(PC). 영상을 몇 개가 받든 **비용은 구독자 수에 정비례**한다.
 
+**주의: 위 표와 4.1절은 Fast DDS 기본 설정으로 쟀다.** 기본 SHM 세그먼트(0.5 MB)가 921 KB 영상보다 작아서 영상이 UDP 조각으로 갔다.
+차는 `scripts/fastdds_local.xml`(16 MB)을 쓰므로 영상이 SHM으로 간다(세션 A가 lsof로 확인). 그래서 위 raw 수신 비용은 차보다 크게 나온 값이다.
+
+형식별 수신 비용 (`tools/load_profile/transport.sh`, 2026-11-11). **차와 같은 `fastdds_local.xml` 설정**, PC, 두 번 재서 차이 ±0.4%p:
+
+| 구독 (받기만, 1스레드) | 메시지 크기 | PC CPU | raw 대비 |
+|---|---|---|---|
+| raw rgb8 640x480, 30 Hz | 921 KB | 5.3% | 1 |
+| raw + `image_to_bgr` | 921 KB | 5.6% | 1.06 |
+| raw, 10 Hz | 921 KB | 1.9% | 0.35 |
+| bgr8 320x240, 30 Hz | 230 KB | 2.1% | 0.40 |
+| JPEG q80, 30 Hz (받기만) | 47 KB | 2.0% | 0.38 |
+| JPEG + `imdecode` 640x480 | 47 KB | 7.4% | 1.40 |
+| JPEG + `imdecode` 1/2(`IMREAD_REDUCED_COLOR_2`) | 47 KB | 4.5% | 0.85 |
+
+같은 조건에서 Fast DDS 기본 설정(UDP)이면 raw를 받는 구독자가 14~17 Hz밖에 받지 못했다. 차에서 노드를 띄울 때 `env_jetson.sh`를 source하지 않으면 이 상태가 된다(preflight가 경고한다).
+
 ### 4.3 연산 단가 (PC, bag 프레임, OpenCV 스레드 1개 / 16개)
 
 | 연산 | ms | 비고 |
@@ -197,7 +245,13 @@ Orin NX는 8 GB 모델이 6코어, 16 GB 모델이 8코어다. 차가 어느 모
 | parking: `/imu`·`/odom`·`/scan`을 `/parking_flag` 이후에만 구독(`lazy_sensors`, `arm_wait_sec` 1.0 s), DONE 후 해제 | 구현. PC 17% → 12% | 이 브랜치 |
 | finish: `/imu`·`/odom`을 `/parking_flag` 이후에만 구독(`lazy_sensors`), STOP·ABORT 후 해제 | 구현. PC 18.5% → 15% | 이 브랜치 |
 | yolo 테스트(한국어 에러 메시지에 맞춤) | 수정 | 이 브랜치 |
-| OMP·OPENBLAS 환경변수, 10 Hz throttle 토픽, DDS, mission odom 지연 구독 | 요청 | 세션 A (7절) |
+| OMP·OPENBLAS 환경변수=1(P0-5): 차(limo2)에서 `/cmd_vel_lane` 26.6/26.3 → 28.6/28.0 Hz, `/detections` 21.7/21.6 → 23.0/22.6 Hz. PC에서는 노드 CPU 합 123.5 → 113.7%, lane_main on_image 7.7 → 6.5 ms | 완료 | 세션 A, PR #12 (c84dca2) |
+| DDS(P2-6): 모든 노드가 16 MB SHM 세그먼트를 연다(lsof) → 영상은 SHM으로 간다 | 확인 | 세션 A |
+| 10 Hz throttle 토픽 `/camera/color/image_10hz`(`use_image_10hz`, 기본 false). 차에 `ros-humble-topic-tools` 설치됨. 소비자 이동(static_avoid, yolo)은 각 담당 | 완료 | 세션 A, PR #13 |
+| yolo 프로세스가 코어 하나를 거의 다 씀(top 94~100%, `/detections` ~22 Hz): 원인 측정 도구 `tools/load_profile/yolo_stages.py` | 도구 준비, 차에서 측정 필요 | 이 브랜치 → 은수 |
+| `/dev/shm` Fast DDS 잔여물·남은 프로세스·빌드 잔여물 점검: `scripts/preflight.sh` | 구현 | 이 브랜치 |
+| **영상 허브 `clothoid_image_hub`(0.2절)**: C++ component. 출력은 `image_small`(bgr8 320x240, 켬), `image_bev`(꺼짐), `image_10hz`(꺼짐: 같은 토픽을 bringup `use_image_10hz`가 이미 발행한다). 구독자가 있을 때만 계산한다. PC에서 bag으로 확인: 출력 29.98 Hz / 10.0 Hz. 허브 CPU는 구독자 0일 때 0.8%, 두 출력 구독 시 2.0%(카메라 container 밖, raw를 DDS로 받은 경우). gtest 6개 | 구현, bringup 연결은 세션 A | 이 브랜치 |
+| mission odom 지연 구독 | 요청 | 세션 A (7절) |
 | static_avoid 실행기 분리, costmap 발행 제거, 10 Hz 영상 | 요청 | 세션 B (7절) |
 | 콘·limo 추출기 통합(P2-3), 영상 허브에 speed_zone 포함 | 요청 | 남규·세션 B |
 | yolo 주기·해상도, depth 1, NameError 버그 | 요청 | 은수 |
@@ -229,8 +283,8 @@ PC 수치는 bag 01을 노드별 프로세스로 돌려 얻었다. `LAZY=false O
 
 | # | 항목 | 예상 이득 | 위험 | 파일 / 담당 |
 |---|---|---|---|---|
-| P2-1 | **공유 BEV 토픽**: 노드 하나(가능하면 C++)가 raw를 한 번 받아 `camera_limo2.yaml` warp로 320x240 BEV(230 KB)를 발행한다. lane_tracker·stopline은 BEV를 받는다 | lane+stopline raw 수신 2개 → BEV 수신 2개(1/4 크기) + warp·blur 중복 제거 ≈ 50~70% | lane_tracker는 blur → warp, stopline은 warp → blur 순서여서 결과가 조금 달라짐 → 재튜닝·bag 회귀 필요. 노드 하나 추가 지연 ~5 ms | 새 노드(clothoid_lane 안이면 남규, clothoid_common이면 주영) + lane_main/stopline(남규) |
-| P2-2 | **영상 허브(합치기)**: 같은 프레임을 쓰는 검출기(lane, stopline, speed_zone)를 Python 노드 하나에서 한 번 받아 차례로 호출한다. rclpy에는 프로세스 내 zero-copy가 없어서 composition 대신 "노드 하나에 검출기 여러 개" 방식 | 수신 2개 제거 ≈ 60~80% | 검출기 하나가 늦으면 다 늦어짐 | 남규 (요청 문서 1번) |
+| P2-1 | **공유 BEV 토픽**(0.2절 영상 허브의 `image_bev` 출력으로 진행): 노드 하나(가능하면 C++)가 raw를 한 번 받아 `camera_limo2.yaml` warp로 320x240 BEV(230 KB)를 발행한다. lane_tracker·stopline은 BEV를 받는다 | lane+stopline raw 수신 2개 → BEV 수신 2개(1/4 크기) + warp·blur 중복 제거 ≈ 50~70% | lane_tracker는 blur → warp, stopline은 warp → blur 순서여서 결과가 조금 달라짐 → 재튜닝·bag 회귀 필요. 노드 하나 추가 지연 ~5 ms | 새 노드(clothoid_lane 안이면 남규, clothoid_common이면 주영) + lane_main/stopline(남규) |
+| P2-2 | **영상 허브(C++ component, 0.2절)**: raw를 C++ 하나가 intra-process로 받고, 작은 토픽(10 Hz, 320x240, BEV)을 발행한다. Python 쪽 검출기 합치기(lane_shared)는 PR #10에서 lane+stopline까지 했다 | 30 Hz raw를 받는 Python 구독 수 감소, 메시지 크기 1/4~1/12 | 허브가 죽으면 그 토픽을 쓰는 노드가 다 멈춘다 → 카메라와 같은 container라서 운명이 같다 | 주영(허브), 세션 A(연결) |
 | P2-3 | **라이다 추출기 통합**: obstacle_extractor 하나가 `/scan`을 한 번 받아 파라미터 2세트로 `/lidar/obstacles`와 `/lidar/limos`를 함께 발행한다(클러스터 분할을 같은 루프에서 처리). lidar_debug는 debug일 때만 띄운다 | 20~25% | 콘 쪽 파라미터를 건드리면 안 됨 → 출력이 지금과 비트 단위로 같은지 bag 회귀로 확인 | `obstacle_extractor*.py`: 콘 쪽은 남규, limo 쪽은 세션 B. 합의 필요 |
 | P2-4 | **IMU·odom 적분 공용화**: C++(또는 Python 하나)가 `/imu` yaw + `/odom` 속도를 적분해 50 Hz(또는 20 Hz) 포즈 토픽을 발행한다. static_avoid·decision_viz는 이것만 받는다 | 노드당 ~20% 수신비용 → 수 % | 세션 B의 "odom 이동량 누적" 수정과 겹침 → 그 작업이 끝난 뒤 | 세션 B 이후, 주영 |
 | P2-5 | **Python 핫스팟 C++/벡터화**: obstacle_extractor의 클러스터 분할 Python 루프(np.diff로 벡터화 가능), static_avoid costmap 레이캐스트 | 각 수 % ~ 10% | 낮음(순수 함수, pytest 있음) | 각 담당 |
@@ -251,6 +305,16 @@ PC 수치는 bag 01을 노드별 프로세스로 돌려 얻었다. `LAZY=false O
 - 확인 요청: `lazy_sensors` 때문에 parking 시작이 늦어지는지 차에서 확인.
 
 **은수 (clothoid_yolo)**
+0. **yolo 프로세스가 코어 하나를 거의 다 쓴다(세션 A 차 측정, top 94~100%).**
+   - 영상은 30 Hz로 들어오는데 처리는 ~22 Hz다. 단일 스레드가 쉬지 않으므로, 무엇에 시간을 쓰든 CPU는 100%에 가깝게 나온다.
+   - 차에서 `tools/load_profile/yolo_stages.py`로 어디에 시간을 쓰는지 본다. 단계별 시간과, predict 중 CPU 시간 대 경과 시간을 출력한다.
+     - CPU 시간 ≈ 경과 시간이면 GPU를 기다리며 CPU가 돌고 있는 것이다(busy-wait).
+     - CPU 시간이 훨씬 작으면 입력 주기만 낮춰도 그 비율만큼 CPU가 준다.
+   - `scripts/run_stop.sh`는 `best.pt`(PyTorch)로 띄운다. `best_fp16.engine`(TensorRT)과도 비교한다.
+   - 예상 해법:
+     - 10 Hz 토픽(`image_topic:=/camera/color/image_10hz`, 세션 A의 `use_image_10hz`)
+     - `.engine` fp16
+   - 10 Hz로 옮기면 mission의 확인 창(`detection_confirm_hits` 3 / `detection_window` 5, 메시지 개수 기준)이 시간으로 0.14~0.23 s에서 0.3~0.5 s로 늘어난다. 함께 조정이 필요하다.
 1. P1-5: 차에서 `/detections` 주기와 노드 CPU, 추론 시간을 측정해 주기 10~15 Hz와 imgsz 축소를 검토.
 2. P1-3: 영상 구독 depth 1. `clothoid_common.qos.IMAGE_QOS`를 쓰면 된다.
 3. 버그: `on_image`에서 `bgr`이 `backend != none`일 때만 정의된다. `backend:=none`이면서 `debug`나 `show`가 true면 `NameError`가 난다.
@@ -258,9 +322,9 @@ PC 수치는 bag 01을 노드별 프로세스로 돌려 얻었다. `LAZY=false O
 5. 참고: `test_yolo_detector.py`의 `ultralytics is not installed` 기대 문구를 지금의 한국어 메시지에 맞췄다(이 브랜치).
 
 **세션 A (twist_mux.yaml, clothoid_bringup, clothoid_mission)**
-1. P0-5: full.launch/bringup에서 `OMP_NUM_THREADS=1`, `OPENBLAS_NUM_THREADS=1` 환경변수 설정.
-2. P1-2: `topic_tools throttle`로 `/camera/color/image_10hz` 노드 추가(차에 패키지가 있는지 확인).
-3. P2-6: DDS SHM 설정 검토.
+1. ~~P0-5: OMP·OPENBLAS 환경변수~~ 완료(PR #12).
+2. ~~P1-2: `/camera/color/image_10hz`~~ 완료(PR #13, `use_image_10hz`).
+3. ~~P2-6: DDS SHM~~ 확인했다. 영상은 SHM으로 간다.
 4. 참고: avoid timeout 0.3 s를 static_avoid 멈춤(최대 0.39 s)이 넘는다. **멈춤을 고치는 게 우선**이다. timeout을 늘리는 건 고치기 전 임시 대책으로만 고려한다.
 5. mission은 `/odom`을 항상 구독하지만, 실제로는 정지선 정지(`core`) 중에만 쓴다. 카메라처럼 `_image_on`에서 함께 구독하는 방안을 검토해 달라. `/imu`는 과속방지턱 pitch 때문에 항상 받아야 한다.
    이 브랜치에서 mission에 바꾼 것은 영상 QoS(`IMAGE_QOS`) 한 줄과 `clothoid_common` 의존성뿐이다.
@@ -281,6 +345,8 @@ PC 수치는 bag 01을 노드별 프로세스로 돌려 얻었다. `LAZY=false O
 ## 8. 차에서 돌릴 측정 명령
 
 모두 full.launch + avoid.launch를 띄운 상태에서, **P0 적용 전후**로 같은 구간을 한 번씩 돈다.
+- 측정 전에 `scripts/preflight.sh`를 돌린다. 이전 실행에서 남은 프로세스와 `/dev/shm` 잔여물이 있으면 수치가 달라진다. 정리는 모든 launch를 끈 뒤 `--kill`, 그다음 `--clean`.
+- **브랜치를 바꿨으면 클린 빌드한다:** `cd ros2_ws && rm -rf build install log && colcon build --symlink-install`. 다른 브랜치가 만든 `build/` symlink(예: clothoid_lidar의 `avoid.launch.py`)가 남아 있으면 colcon이 실패한다. 저장소 루트에 생긴 `~/Clothoid-A/build`·`install`·`log`도 지운다. preflight가 둘 다 알려 준다.
 
 ```bash
 # 0) 하드웨어 / 전원 모드
@@ -318,12 +384,25 @@ ls -la /dev/shm | grep -i fastrtps | head       # SHM 세그먼트가 있는지
 sudo tcpdump -i lo -c 2000 udp 2>/dev/null | wc -l   # 영상이 lo UDP 조각으로 가면 수천 개/초
 
 # 6) 녹화 (raw 영상 빼고, P0-3)
-ros2 bag record -o ~/bags/$(date +%m%d_%H%M) /scan /odom /imu /tf /tf_static /cmd_vel_lane /cmd_vel_avoid \
+ros2 bag record -o ~/bags/$(date +%m%d_%H%M) /scan /odom /imu /tf /tf_static /cmd_vel_lane /cmd_vel_cone /cmd_vel_avoid \
   /avoid/active /avoid/lane /avoid/done /direction_flag /limo_status /rosout /camera/color/camera_info
 ```
 
 판정 기준: P0 적용 뒤 ACTIVE 구간에서 `/avoid/lane` 20 Hz(최대 공백 < 100 ms), `/cmd_vel_avoid` 공백 > 0.3 s가 0번, `/cmd_vel_lane` 30 Hz.
 P0만으로 안 되면 P1-4(세션 B)가 필수다.
+
+### 8.1 영상 허브 차 확인 (bringup 연결 전후)
+
+```bash
+ros2 component list                        # 카메라 container 이름 (예: /camera/camera_container)
+ros2 param get /camera/camera_container use_intra_process_comms 2>/dev/null   # 없으면 container 실행 인자 확인
+ros2 param dump /camera/camera | grep -iE "format|mjpeg|color_width|fps"   # orbbec color 형식, MJPG 패스스루 옵션
+v4l2-ctl --list-devices; v4l2-ctl -d /dev/video0 --list-formats-ext | head -30   # 카메라가 내는 형식(MJPG/YUYV)
+ros2 launch clothoid_image_hub hub.launch.py container:=/camera/camera_container
+ros2 topic hz /camera/color/image_small; ros2 topic hz /camera/color/image_10hz
+top -b -d 1 -n 10 | grep -E "component_conta|python3"   # 허브를 켜기 전후의 카메라 container CPU
+tools/load_profile/transport.sh <bag> /tmp/transport   # Orin에서 형식별 수신 비용 (FASTRTPS_DEFAULT_PROFILES_FILE 설정 후)
+```
 
 ## 9. 재현 방법 (PC)
 

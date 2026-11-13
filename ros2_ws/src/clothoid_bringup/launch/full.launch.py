@@ -12,7 +12,7 @@ start the stopline / speed_zone nodes (off by default, see clothoid_lane/launch/
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
 see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `use_joint_states`,
-`require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
+`use_image_10hz`, `require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
 `bringup.launch.py`.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
@@ -41,7 +41,7 @@ def generate_launch_description():
 
     switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_finish', 'use_mission']
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
-                     'steering_scale', 'max_inner_angle']
+                     'use_image_10hz', 'steering_scale', 'max_inner_angle']
     debug = LaunchConfiguration('debug')
     # defaults must match bringup.launch.py
     mux_args = {'require_arm': 'false', 'mux_output': '/cmd_vel', 'cmd_timeout': '0.5'}
@@ -74,6 +74,8 @@ def generate_launch_description():
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
         DeclareLaunchArgument('use_joint_states', default_value='false'),
+        DeclareLaunchArgument('use_image_10hz', default_value='false',
+                              description='/camera/color/image_10hz (topic_tools throttle)'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
         *[DeclareLaunchArgument(name, default_value=value) for name, value in mux_args.items()],
@@ -93,7 +95,8 @@ def generate_launch_description():
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
-                 'show': LaunchConfiguration('show')}, enabled('use_yolo')),
+                 'show': LaunchConfiguration('show'),
+                 'debug': debug}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         # after /parking_done: left yellow line to the end line (needs the camera)
@@ -101,8 +104,7 @@ def generate_launch_description():
                 {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_finish')),
         # mission also runs the light / pedestrian line stop (FinishCore, camera only while armed)
         include('clothoid_mission', 'mission.launch.py',
-                {'debug': debug, 'camera': LaunchConfiguration('camera'),
-                 'parking_enabled': LaunchConfiguration('use_parking')}, enabled('use_mission')),
+                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_mission')),
         # YOLO boxes, mission state, stop line / stop point in RViz (rviz/stop.rviz), stop_viz:=true
         include('clothoid_debug', 'stop_viz.launch.py', condition=enabled('stop_viz')),
 

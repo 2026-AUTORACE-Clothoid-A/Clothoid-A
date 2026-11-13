@@ -20,7 +20,7 @@ def nodes(context):
             os.path.join(bringup_share, 'config', 'topics.yaml'),
             os.path.join(lane_share, 'config', f'camera_{camera}.yaml'),
             os.path.join(mission_share, 'config', 'mission.yaml'),
-            {'debug': LaunchConfiguration('debug'), 'parking_enabled': LaunchConfiguration('parking_enabled')},
+            {'debug': LaunchConfiguration('debug')},
         ])]
 
 
@@ -28,6 +28,5 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('camera', default_value='limo2'),
         DeclareLaunchArgument('debug', default_value='false'),
-        DeclareLaunchArgument('parking_enabled', default_value='true'),
         OpaqueFunction(function=nodes),
     ])

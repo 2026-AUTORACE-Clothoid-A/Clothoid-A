@@ -7,11 +7,10 @@ Publishes
   `direction_topic` (Int32), `parking_topic` (Bool), `steering_lock_topic` (Bool): on change and once a second
   `state_topic` (String, JSON): state, what armed it, the line stop (for clothoid_debug stop_viz)
 
-Confirmed sign tracks prepare local observers. They do not transfer driving control.
-The light/pedestrian observer starts a speed limit only after confirming its crosswalk stop line.
-Parking needs a separate entry line and fresh passive lidar bay evidence. Floor processing is
-shared by those observers; parking-only preparation caps image decoding at 6 Hz.
-lane_main keeps steering during the stop-line approach; its STOP holds the car.
+Light / pedestrian stop line (`use_stop_line`): while armed (YOLO saw the pedestrian sign / red light)
+this node runs clothoid_finish's FinishCore on the camera with the cross line in white
+(line_stop.py). lane_main keeps steering the whole time: only FinishCore's speed (approach 0.2, then
+its ramp min(0.2, 1.5 x remaining)) goes to lane_main as /speed_limit, and its STOP holds the car.
 Its steering is not used (it follows the left yellow line, which the zigzag before the pedestrian
 crosswalk turned 9 deg off in the sim), so its left-line-lost abort is off (`lost_hold_sec` 1e9).
 The camera is subscribed only while armed, as in finish.
@@ -29,7 +28,7 @@ from clothoid_finish.finish_core import FinishParams, Phase
 from clothoid_interfaces.msg import DetectionArray
 from clothoid_lane.lane_detector import LaneParams
 from cv_bridge import CvBridge
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -38,10 +37,7 @@ from std_msgs.msg import Bool, Float32, Int32, String
 
 from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
-    BUMP_APPROACHING, Inputs, MissionLogic, MissionParams, STOPPED_LIGHT, classes_seen,
-    quaternion_to_pitch_deg)
-from clothoid_mission.scene_evidence import ParkingEntryEvidence
-from clothoid_mission.sign_tracker import SignTracker
+    BUMP_APPROACHING, Inputs, MissionLogic, MissionParams, DetectionGate, classes_seen, quaternion_to_pitch_deg)
 
 # FinishCore phase -> what mission_logic expects
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
@@ -86,31 +82,19 @@ class MissionNode(Node):
         self.declare_parameter('parking_sign_topic', '/parking_sign')
         # one stop line right in front (clothoid_lane stopline node): where parking starts
         self.declare_parameter('parking_line_topic', '/stopline_near')
-        self.declare_parameter('parking_prepare_topic', '/parking_prepare')
-        self.declare_parameter('parking_scene_topic', '/parking/bay_candidate')
-        self.declare_parameter('parking_scene_rate_hz', 6.0)
-        self.declare_parameter('parking_entry_max_travel', 3.0)
+        self.declare_parameter('cone_active_topic', '/cone/mission_active')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line / imu older than this are dropped
         self.declare_parameter('refresh_sec', 1.0)
+        self.declare_parameter('light_max_offset_height_ratio', 3.5)
+        self.declare_parameter('sign_max_offset_height_ratio', 5.0)
+        self.declare_parameter('fork_max_offset_height_ratio', 10.0)
         for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
                             ('sign_min_height', 14), ('light_min_height', 8),
                             ('detection_edge_margin', 2)]:
             self.declare_parameter(name, value)
-        self.declare_parameter('track_retention_sec', 2.0)
-        self.declare_parameter('track_max_objects', 32)
-        self.declare_parameter('track_match_gate', 1.0)
-        self.declare_parameter('track_scale_ratio', 3.0)
-        self.declare_parameter('light_max_offset_height_ratio', 3.5)
-        self.declare_parameter('sign_max_offset_height_ratio', 5.0)
-        self.declare_parameter('fork_max_offset_height_ratio', 10.0)
-        self.declare_parameter('bump_max_offset_height_ratio', 0.0)
-        for kind, area, height in [('bump', 0.0, 28.0), ('slow', 2500.0, 40.0),
-                                   ('parking', 0.0, 28.0), ('pedestrian', 0.0, 28.0)]:
-            self.declare_parameter(kind + '_min_area', area)
-            self.declare_parameter(kind + '_min_height', height)
 
         d = MissionParams()
         self.declare_parameter('slow_speed', d.slow_speed)
@@ -120,6 +104,14 @@ class MissionNode(Node):
         self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
         self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
         self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
+        self.declare_parameter('bump_min_area', 2500.0)    # px^2, minimum bbox area to arm bump
+        self.declare_parameter('bump_min_height', 40.0)    # px, minimum bbox height to arm bump
+        self.declare_parameter('slow_min_area', 2500.0)    # px^2, minimum bbox area to trigger slow
+        self.declare_parameter('slow_min_height', 40.0)    # px, minimum bbox height to trigger slow
+        self.declare_parameter('parking_min_area', 2500.0) # px^2, minimum bbox area to latch parking
+        self.declare_parameter('parking_min_height', 40.0) # px, minimum bbox height to latch parking
+        self.declare_parameter('pedestrian_min_area', 2500.0) # px^2, minimum bbox area to arm pedestrian
+        self.declare_parameter('pedestrian_min_height', 40.0) # px, minimum bbox height to arm pedestrian
 
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
@@ -130,18 +122,16 @@ class MissionNode(Node):
         self.declare_parameter('fork_left_direction', d.fork_left_direction)
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
-        self.declare_parameter('require_scene_confirmation', d.require_scene_confirmation)
-        self.declare_parameter('parking_enabled', d.parking_enabled)
-        self.declare_parameter('slow_arms_bump', d.slow_arms_bump)
+        self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
+        self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
+        self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
-        self.sign_tracker = SignTracker(
+        self.detection_gate = DetectionGate(
             hits=get('detection_confirm_hits'), window=get('detection_window'),
             max_age=get('detection_max_age'), confidence=get('detection_confidence'),
             sign_height=get('sign_min_height'), light_height=get('light_min_height'),
-            edge_margin=get('detection_edge_margin'), retention=get('track_retention_sec'),
-            max_tracks=get('track_max_objects'), match_gate=get('track_match_gate'),
-            scale_ratio=get('track_scale_ratio'))
+            edge_margin=get('detection_edge_margin'))
         self.logic = MissionLogic(MissionParams(
             slow_speed=get('slow_speed'),
             slow_hold_sec=get('slow_hold_sec'),
@@ -159,19 +149,16 @@ class MissionNode(Node):
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction'),
             parking_at_stopline=get('parking_at_stopline'),
-            require_scene_confirmation=get('require_scene_confirmation'),
-            parking_enabled=get('parking_enabled'),
-            slow_arms_bump=get('slow_arms_bump')))
+            require_cone_for_parking=get('require_cone_for_parking'),
+            block_bump_after_cone=get('block_bump_after_cone'),
+            cone_confirm_sec=get('cone_confirm_sec')))
 
         self.seen, self.seen_time = set(), None
-        self.light_target_id = None
-        self.confirmed_tracks = []
-        self.parking_scene_time = None
-        self.travel, self._odom_stamp = 0., None
-        self._scene_stamp = None
         self.stopline, self.stopline_time = False, None
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
+        self.cone_active = False
+        self.cone_entered_logged = False
         self.sign_time = None            # last /parking_sign true
         self.line, self.line_time = False, None
         self.parking_log = (False, False)
@@ -182,7 +169,6 @@ class MissionNode(Node):
         self.limit_pub = self.create_publisher(Float32, get('speed_limit_topic'), 1)
         self.direction_pub = self.create_publisher(Int32, get('direction_topic'), 1)
         self.parking_pub = self.create_publisher(Bool, get('parking_topic'), 1)
-        self.prepare_pub = self.create_publisher(Bool, get('parking_prepare_topic'), 1)
         self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
         self.bump_approach_pub = self.create_publisher(Bool, get('bump_approach_topic'), 1)
 
@@ -194,17 +180,11 @@ class MissionNode(Node):
         self.mission_state_pub = self.create_publisher(String, get('state_topic'), 1)
         self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
         self.create_subscription(Bool, get('parking_line_topic'), self.on_parking_line, 1)
-        self.create_subscription(PoseStamped, get('parking_scene_topic'), self.on_parking_scene, 1)
+        self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
-        self.finish_params = FinishParams(lost_hold_sec=1e9, band=get('line_band'), speed=get('approach_speed'))
-        if get('parking_scene_rate_hz') <= 0 or get('parking_entry_max_travel') <= 0:
-            raise ValueError('parking scene rate and entry travel must be positive')
-        self.entry_evidence = ParkingEntryEvidence(
-            confirm_frames=self.finish_params.confirm_frames, tolerance=self.finish_params.confirm_tolerance,
-            max_frame_gap=get('line_max_frame_gap'), max_travel=get('parking_entry_max_travel'),
-            crosswalk_margin=get('line_max_thickness'))
+        self.finish_params = FinishParams(lost_hold_sec=1e9, band=get('line_band'))
         self.warp = LaneParams(x_h=get('warp_x_h'), x_l=get('warp_x_l'), y_h=get('warp_y_h'),
                                y_l=get('warp_y_l'))
         self.cam = CameraModel(height=get('camera_height'), pitch=get('camera_pitch'),
@@ -233,43 +213,44 @@ class MissionNode(Node):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_detections(self, msg: DetectionArray):
-        now = self.now_sec()
-        stamp = self.stamp(msg, now)
-        if not -.05 <= now - stamp <= self.get_parameter('input_timeout').value:
-            return
-        if self.sign_tracker._last_frame is not None and stamp <= self.sign_tracker._last_frame:
-            return
-        get = lambda name: self.get_parameter(name).value
-        filters = dict(
-            camera_center_x=self.cam.cx,
-            light_max_offset_height_ratio=get('light_max_offset_height_ratio'),
-            sign_max_offset_height_ratio=get('sign_max_offset_height_ratio'),
-            fork_max_offset_height_ratio=get('fork_max_offset_height_ratio'),
-            bump_max_offset_height_ratio=get('bump_max_offset_height_ratio'),
-            min_sizes={'sign_' + kind: (get(kind + '_min_area'), get(kind + '_min_height'))
-                       for kind in ('bump', 'slow', 'parking', 'pedestrian')})
-        # Apply proximity gates to each box before collecting confirmation hits.
-        # A valid box of one class must not admit a second distant box of that class.
-        detections = [d for d in msg.detections if classes_seen((d,), **filters)]
-        tracks = self.sign_tracker.update(stamp, detections, self.warp.width, self.warp.height)
-        self.confirmed_tracks = tracks
-        if self.light_target_id is None:
-            red = [t for t in tracks if t.box.class_name in ('traffic_light_red', 'traffic_light_yellow')]
-            if red:
-                self.light_target_id = max(red, key=lambda t: (t.hits, t.box.confidence)).id
-                self.sign_tracker.pin(self.light_target_id)
-        self.seen = {t.box.class_name for t in tracks if not t.box.class_name.startswith(
-            'traffic_light_') or self.light_target_id is None or t.id == self.light_target_id}
-        self.seen_time = stamp
+        min_sizes = {
+            'sign_bump': (self.get_parameter('bump_min_area').value,
+                          self.get_parameter('bump_min_height').value),
+            'sign_slow': (self.get_parameter('slow_min_area').value,
+                          self.get_parameter('slow_min_height').value),
+            'sign_parking': (self.get_parameter('parking_min_area').value,
+                             self.get_parameter('parking_min_height').value),
+            'sign_pedestrian': (self.get_parameter('pedestrian_min_area').value,
+                                self.get_parameter('pedestrian_min_height').value),
+        }
+        accepted = classes_seen(
+            msg.detections, camera_center_x=self.cam.cx,
+            light_max_offset_height_ratio=self.get_parameter(
+                'light_max_offset_height_ratio').value,
+            sign_max_offset_height_ratio=self.get_parameter('sign_max_offset_height_ratio').value,
+            fork_max_offset_height_ratio=self.get_parameter('fork_max_offset_height_ratio').value,
+            min_sizes=min_sizes)
+        self.seen = self.detection_gate.update(
+            self.now_sec(), msg.detections, accepted,
+            width=self.warp.width, height=self.warp.height)
+        self.seen_time = self.now_sec()
 
-    def on_parking_scene(self, msg: PoseStamped):
-        now = self.now_sec()
-        stamp = self.stamp(msg, now)
-        p = msg.pose.position
-        if (msg.header.frame_id == 'base_link' and self.logic.parking_armed and
-                -.05 <= now - stamp <= self.get_parameter('input_timeout').value and
-                math.isfinite(p.x) and math.isfinite(p.y) and p.x > 0):
-            self.parking_scene_time = stamp
+        # Log sign bbox size for easy on-track tuning
+        for d in msg.detections:
+            if d.class_name in min_sizes:
+                min_area, min_h = min_sizes[d.class_name]
+                w = max(0, d.x_max - d.x_min)
+                h = max(0, d.y_max - d.y_min)
+                area = float(w * h)
+                tag = d.class_name.upper().replace('SIGN_', '')
+                if d.class_name in self.seen:
+                    self.get_logger().info(
+                        f'[{tag}] {d.class_name} ARMED (area={area:.0f}px^2, h={h}px >= min_area={min_area:.0f}, min_h={min_h:.0f})',
+                        throttle_duration_sec=1.0)
+                else:
+                    self.get_logger().info(
+                        f'[{tag}] {d.class_name} IGNORED (area={area:.0f}px^2, h={h}px < min_area={min_area:.0f}, min_h={min_h:.0f})',
+                        throttle_duration_sec=1.0)
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()
@@ -290,7 +271,6 @@ class MissionNode(Node):
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')
         core.require_crosswalk = get('line_require_crosswalk')
-        core.observe_scene = True
         core.debug = self.debug_pub is not None
         return core
 
@@ -317,12 +297,8 @@ class MissionNode(Node):
         self.latest_pitch_time = self.now_sec()
 
     def on_odom(self, msg: Odometry):
-        stamp = self.stamp(msg, self.now_sec())
-        if self._odom_stamp is not None and 0 < stamp - self._odom_stamp < .2:
-            self.travel += msg.twist.twist.linear.x * (stamp - self._odom_stamp) * self.finish_params.odom_scale
-        self._odom_stamp = stamp
         if self.core:
-            self.core.odom(stamp, msg.twist.twist.linear.x)
+            self.core.odom(self.stamp(msg, self.now_sec()), msg.twist.twist.linear.x)
 
     def _image_on(self, on: bool):
         if on and self.image_sub is None:
@@ -334,32 +310,15 @@ class MissionNode(Node):
             self.image_sub = None
 
     def on_image(self, msg):
-        if self.core is None:
+        if self.core is None or self.core.phase not in (Phase.FOLLOW, Phase.COMMIT):
             return
-        stop_observer = self.core.phase in (Phase.FOLLOW, Phase.COMMIT)
-        if not stop_observer and not self.logic.parking_armed:
-            return
-        now = self.now_sec()
-        stamp = self.stamp(msg, now)
-        if not -.05 <= now - stamp <= self.get_parameter('input_timeout').value:
-            return
-        if self._scene_stamp is not None and stamp <= self._scene_stamp:
-            return
-        if (not stop_observer and self._scene_stamp is not None and
-                stamp - self._scene_stamp < 1. / self.get_parameter('parking_scene_rate_hz').value):
-            return
-        if self._fresh(self.latest_pitch_time) and abs(self.latest_pitch) >= self.logic.p.bump_pitch_thresh:
-            return                       # the fixed floor projection is invalid while tilted
-        self._scene_stamp = stamp
         if self.get_parameter('compressed').value:
             bgr = cv2.imdecode(np.frombuffer(bytes(msg.data), np.uint8), cv2.IMREAD_COLOR)
         else:
             bgr = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         if bgr is None:
             return
-        self.core.image(stamp, bgr)
-        if self.logic.parking_armed:
-            self.entry_evidence.observe(stamp, self.travel, self.core.observation)
+        self.core.image(self.now_sec(), bgr)
         if self.debug_pub is not None:
             self.debug_pub.publish(self.bridge.cv2_to_imgmsg(self.line_debug_image(), 'bgr8'))
 
@@ -385,16 +344,18 @@ class MissionNode(Node):
             return None
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
+            self._image_on(True)
         elif not arm and self.core.phase != Phase.IDLE:
             self.core = self.new_core()          # fresh for the next stop (tracker restarts)
+            self._image_on(False)
         if self.core.phase == Phase.IDLE:
             return None
-        # FOLLOW observes geometry only. A distant sign neither slows lane_main nor
-        # exhausts FinishCore's search-distance budget before its stop line appears.
-        cmd = self.core.command(now) if self.core.phase == Phase.COMMIT else None
+        cmd = self.core.command(now)
         if self.core.phase != self.core_phase:
             self.core_phase = self.core.phase
             self.get_logger().info(f'line stop {self.core.phase.value}: {self.core.reason}')
+            if self.core.phase in (Phase.STOP, Phase.ABORT):
+                self._image_on(False)
         if cmd is None or self.core.phase not in (Phase.FOLLOW, Phase.COMMIT):
             return None
         return float(cmd[0])                     # speed only: lane_main steers
@@ -402,8 +363,11 @@ class MissionNode(Node):
     def on_parking_done(self, msg: Bool):
         self.parking_done = msg.data
 
+    def on_cone_active(self, msg: Bool):
+        self.cone_active = bool(msg.data)
+
     def _fresh(self, stamp) -> bool:
-        return stamp is not None and -.05 <= self.now_sec() - stamp <= self.get_parameter(
+        return stamp is not None and self.now_sec() - stamp <= self.get_parameter(
             'input_timeout').value
 
     def _publish_changed(self, key, value, publish):
@@ -426,37 +390,24 @@ class MissionNode(Node):
             now=self.now_sec(),
             seen=seen,
             stopline=self.stopline if self._fresh(self.stopline_time) else False,
-            parking_line=(self.entry_evidence.reached(self.travel, self.finish_params.front)
-                          if self.logic.p.require_scene_confirmation else
-                          self.line if self._fresh(self.line_time) else False),
-            parking_scene=self._fresh(self.parking_scene_time),
+            parking_line=self.line if self._fresh(self.line_time) else False,
             line_phase=line_phase,
             line_speed=self.line_speed,
             parking_done=self.parking_done,
-            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None))
+            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
+            cone_active=self.cone_active))
+        if self.logic.cone_entered and not self.cone_entered_logged:
+            self.cone_entered_logged = True
+            self.get_logger().info('cone course entered: parking unlocked, bump blocked')
         self.line_speed = self.line_stop_step(now, out.stop_arm)
-        self._image_on(out.stop_arm or out.parking_prepare)
-        self._publish_changed('parking_prepare', out.parking_prepare,
-                              lambda v: self.prepare_pub.publish(Bool(data=bool(v))))
-        if not out.parking_prepare:
-            self.entry_evidence.clear()
-            self.parking_scene_time = None
-        if self.logic.light_armed_at is None and self.logic.state != STOPPED_LIGHT:
-            self.light_target_id = None
-            self.sign_tracker.pin(None)
         armed = [n for n, a in (('pedestrian', self.logic.pedestrian_armed_at),
                                 ('light', self.logic.light_armed_at)) if a is not None]
         core = self.core
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
         self.mission_state_pub.publish(String(data=json.dumps({
             'state': out.state, 'armed': armed,
+            'cone_entered': self.logic.cone_entered,
             'seen': sorted(seen),
-            'tracks': [{'id': t.id, 'class': t.box.class_name, 'hits': t.hits}
-                       for t in self.confirmed_tracks] if self._fresh(self.seen_time) else [],
-            'light_track': self.light_target_id,
-            'parking_prepare': out.parking_prepare,
-            'parking_scene': self._fresh(self.parking_scene_time),
-            'parking_entry': self.entry_evidence.entry_at,
             'line_phase': None if core is None else LINE_PHASE[core.phase],
             'remaining': None if left is None else round(left, 4),
             'line': None if core is None or core.cross_x is None else round(core.cross_x, 4),
@@ -468,10 +419,8 @@ class MissionNode(Node):
 
         log = (self.logic.parking_armed, out.parking_flag)
         if log != self.parking_log:
-            message = ('parking entry and bay confirmed: control on' if out.parking_flag else
-                       'parking track confirmed: observing entry and bay' if out.parking_prepare else
-                       'parking candidate expired or cleared')
-            self.get_logger().info(message)
+            self.get_logger().info('parking sign seen: waiting for the stop line' if not log[1]
+                                   else 'stop line: parking flag on')
             self.parking_log = log
         if out.state != self.state:
             self.get_logger().info(f'{self.state} -> {out.state}')
@@ -488,10 +437,10 @@ class MissionNode(Node):
             self._publish_changed('parking', True,
                                   lambda v: self.parking_pub.publish(Bool(data=bool(v))))
 
-        self._publish_changed('steering_lock', out.steering_lock,
-                              lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
         self._publish_changed('bump_approaching', self.logic.bump_state == BUMP_APPROACHING,
                               lambda v: self.bump_approach_pub.publish(Bool(data=bool(v))))
+        self._publish_changed('steering_lock', out.steering_lock,
+                              lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
 
 
 def main(args=None):

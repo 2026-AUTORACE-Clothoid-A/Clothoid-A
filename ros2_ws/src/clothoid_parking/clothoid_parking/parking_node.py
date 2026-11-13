@@ -6,15 +6,14 @@ lane) through SEARCH -> TURN -> ENTER -> DONE (see planner.py). In DONE it keeps
 speed so lane cannot take the car back, and repeats `/parking_done` true once a second.
 Phase changes go to the log and to `state_topic`. With `debug:=true` it also publishes RViz
 markers on `marker_topic` (see viz.py, `ros2 launch clothoid_parking rviz.launch.py`).
-Before that flag, /parking_prepare enables only a passive /scan subscription. It confirms a bay
-at at most probe.rate_hz and publishes /parking/bay_candidate without sending a command.
-With lazy_sensors, high-rate /imu and /odom still start only at the actual parking flag.
+With `lazy_sensors` (default) /imu, /odom and /scan are subscribed only from the flag until DONE: the
+flag subscribes them and the run starts once all three arrive (at most `arm_wait_sec`).
 """
 import math
 from dataclasses import fields
 
 import rclpy
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -25,7 +24,6 @@ from visualization_msgs.msg import MarkerArray
 from clothoid_parking.bay_finder import BayParams
 from clothoid_parking.core import ParkingCore
 from clothoid_parking.planner import Phase, PlanParams
-from clothoid_parking.scene_probe import ParkingSceneProbe, ProbeParams
 from clothoid_parking.viz import markers
 
 STALE_SEC = 0.5
@@ -36,8 +34,6 @@ class ParkingNode(Node):
         super().__init__('parking')
         for name, default in (('scan_topic', '/scan'), ('imu_topic', '/imu'), ('odom_topic', '/odom'),
                               ('parking_topic', '/parking_flag'), ('cmd_topic', '/cmd_vel_parking'),
-                              ('parking_prepare_topic', '/parking_prepare'),
-                              ('parking_scene_topic', '/parking/bay_candidate'),
                               ('parking_done_topic', '/parking_done'),
                               ('state_topic', '/parking/state'),
                               ('marker_topic', '/parking/markers')):
@@ -52,12 +48,9 @@ class ParkingNode(Node):
         self.declare_parameter('arm_wait_sec', 1.0)
         plan = self._declare_dataclass(PlanParams(), 'plan.')
         bay = self._declare_dataclass(BayParams(), 'bay.')
-        probe = self._declare_dataclass(ProbeParams(), 'probe.')
         get = lambda n: self.get_parameter(n).value  # noqa: E731
 
         self.core = ParkingCore(plan, bay, laser_x=get('laser_x'))
-        self.probe = ParkingSceneProbe(bay, probe, laser_x=get('laser_x'))
-        self.probe_sub = None
         self.wheelbase = get('wheelbase')
         self.last = {'imu': None, 'odom': None, 'scan': None}
         self.phase = self.core.phase
@@ -71,11 +64,9 @@ class ParkingNode(Node):
         self.cmd_pub = self.create_publisher(Twist, get('cmd_topic'), 1)
         self.done_pub = self.create_publisher(Bool, get('parking_done_topic'), 1)
         self.state_pub = self.create_publisher(String, get('state_topic'), 1)
-        self.candidate_pub = self.create_publisher(PoseStamped, get('parking_scene_topic'), 1)
         if not self.lazy:
             self._sensors_on(True)
         self.create_subscription(Bool, get('parking_topic'), self.on_flag, 1)
-        self.create_subscription(Bool, get('parking_prepare_topic'), self.on_prepare, 1)
         self.create_timer(1.0 / get('rate_hz'), self.on_timer)
         if get('debug'):
             self.marker_pub = self.create_publisher(MarkerArray, get('marker_topic'), 1)
@@ -113,39 +104,6 @@ class ParkingNode(Node):
         self.core.scan(self.last['scan'], msg.ranges, msg.angle_min, msg.angle_increment,
                        msg.range_min, msg.range_max)
 
-    def on_prepare(self, msg: Bool):
-        on = msg.data and self.core.phase == Phase.IDLE and self.t_armed is None
-        if on and self.probe_sub is None:
-            self.probe.reset()
-            self.probe_sub = self.create_subscription(
-                LaserScan, self.get_parameter('scan_topic').value, self.on_probe_scan, qos_profile_sensor_data)
-        elif not on and self.probe_sub is not None:
-            self.destroy_subscription(self.probe_sub)
-            self.probe_sub = None
-            self.probe.reset()
-
-    def on_probe_scan(self, msg: LaserScan):
-        if self.core.phase != Phase.IDLE or self.t_armed is not None:
-            return
-        now, stamp = self.now(), self.stamp(msg)
-        if not -.05 <= now - stamp <= STALE_SEC:
-            return
-        _, bay = self.probe.scan(stamp, msg.ranges, msg.angle_min, msg.angle_increment,
-                                 msg.range_min, msg.range_max)
-        if bay is None:
-            return
-        # Do not invite a handover after the full-lock turn point has passed.
-        along = bay.face_x * math.cos(bay.row_yaw) + bay.face_y * math.sin(bay.row_yaw)
-        if along < self.core.planner.p.turn_radius + self.core.planner.p.turn_lead:
-            return
-        candidate = PoseStamped()
-        candidate.header.stamp = msg.header.stamp
-        candidate.header.frame_id = 'base_link'
-        candidate.pose.position.x, candidate.pose.position.y = bay.face_x, bay.face_y
-        candidate.pose.orientation.z = math.sin(bay.row_yaw / 2)
-        candidate.pose.orientation.w = math.cos(bay.row_yaw / 2)
-        self.candidate_pub.publish(candidate)
-
     def _sensors_on(self, on: bool):
         get = lambda n: self.get_parameter(n).value  # noqa: E731
         if on and not self.sensor_subs:
@@ -164,7 +122,6 @@ class ParkingNode(Node):
 
     def on_flag(self, msg: Bool):
         if msg.data and not self.core.flag:
-            self.on_prepare(Bool(data=False))
             if self.t_armed is not None:
                 return                  # already waiting for the sensors (on_timer starts the run)
             stale = self.stale()

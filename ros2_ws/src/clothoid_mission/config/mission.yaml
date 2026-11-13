@@ -5,22 +5,16 @@ mission:
     rate_hz: 20.0
     input_timeout: 0.5          # detections / stop line / imu older than this count as "not seen"
     refresh_sec: 1.0            # direction / parking / steering_lock flag re-sent this often
-    # Per-class proximity gates run before object tracking and frame confirmation.
-    # Values need field calibration for the actual camera and sign dimensions.
+    # abs(light box centre x - camera principal x) / box height. Start-straight
+    # adjacent light: 5.3; own signal approach: 2.9. Initial threshold, validate on
+    # the track. Applies to every light colour; 0.0 disables that group's filter.
     light_max_offset_height_ratio: 3.5
-    sign_max_offset_height_ratio: 5.0
-    fork_max_offset_height_ratio: 10.0
-    # The valid roadside bump warning is far off centre in this camera.
-    bump_max_offset_height_ratio: 0.0 # <=0 disables only the bump lateral gate
-    bump_min_area: 0.0
-    bump_min_height: 28.0      # bag_1111_065554: own warning retained, adjacent warning rejected
-    slow_min_area: 2500.0
-    slow_min_height: 40.0
-    parking_min_area: 0.0
-    parking_min_height: 28.0   # prepare before entry/bay handover; retain source quality checks
-    pedestrian_min_area: 0.0
-    pedestrian_min_height: 28.0 # 2500 px^2 plus lateral gate rejected the valid warning in the bag
-    # Confirm on distinct source images; colours share a traffic-light identity.
+    # Smaller sign faces need a wider ratio than lights. Recorded bump/pedestrian:
+    # <= 3.9; adjacent parking sign at the start: 9.1~12.5, own parking sign: ~4.3.
+    sign_max_offset_height_ratio: 5.0  # pedestrian, slow, bump, parking; initial track setting
+    # Fork signs can enter at the image edge from an outer lane (recorded up to 9.4).
+    fork_max_offset_height_ratio: 10.0  # sign_left / sign_right; initial track setting
+    # Confirm on distinct YOLO frames; timer ticks never count as new evidence.
     detection_confirm_hits: 3
     detection_window: 5
     detection_max_age: 0.5
@@ -28,14 +22,6 @@ mission:
     sign_min_height: 14
     light_min_height: 8
     detection_edge_margin: 2
-    track_retention_sec: 2.0    # selected red light is retained through occlusion until release
-    track_max_objects: 32      # bounded history and association work
-    track_match_gate: 1.0      # centre displacement in object-size units
-    track_scale_ratio: 3.0     # symmetric size-change association limit
-    require_scene_confirmation: true  # local evidence, independent for each mission; no route order
-    parking_enabled: true      # full.launch overrides with use_parking; no idle P processing when off
-    parking_scene_rate_hz: 6.0 # decode/warp cap while only preparing parking; stops use camera rate
-    parking_entry_max_travel: 3.0 # entry evidence expires after this measured travel past the line
     # Stop-line corridor and physical thickness, in metres on the ground.
     line_band: 0.22
     line_min_run: 0.7
@@ -51,7 +37,15 @@ mission:
     bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
-    slow_arms_bump: false      # round slow warning uses slow_hold_sec, independent of bump traversal
+    bump_min_area: 2500.0       # px^2, minimum bbox area (approx 50x50 px) to trigger bump logic
+    bump_min_height: 40.0       # px, minimum bbox height to trigger bump logic
+    # sign bbox size filters (prevent distant premature triggers)
+    slow_min_area: 2500.0       # px^2, minimum bbox area to trigger slow down
+    slow_min_height: 40.0       # px, minimum bbox height to trigger slow down
+    parking_min_area: 2500.0    # px^2, minimum bbox area to latch parking flag
+    parking_min_height: 40.0    # px, minimum bbox height to latch parking flag
+    pedestrian_min_area: 2500.0 # px^2, minimum bbox area to arm pedestrian stop
+    pedestrian_min_height: 40.0 # px, minimum bbox height to arm pedestrian stop
     # missions
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s
     stop_on_yellow: true        # rules say nothing about yellow
@@ -59,8 +53,13 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
-    # Only used when require_scene_confirmation is explicitly disabled (legacy mode).
-    parking_at_stopline: true
+    # false (2026-11-10): the confirmed YOLO sign_parking raises /parking_flag at once. true needs
+    # /stopline_near from the stopline node, which full.launch does not start (use_stopline:=false)
+    parking_at_stopline: false
+    # cone gate: allow parking and block speed bump only after /cone/mission_active has been true
+    require_cone_for_parking: true
+    block_bump_after_cone: true
+    cone_confirm_sec: 1.5       # consecutive seconds of cone_active before latching cone_entered
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true

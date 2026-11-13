@@ -22,18 +22,3 @@ def test_full_stack_enables_wait_only_when_yolo_is_used(use_yolo, wait, expected
     context.launch_configurations.update(use_yolo=use_yolo, wait_for_yolo=wait)
     args = dict(platform.launch_arguments)
     assert args['require_yolo_ready'].perform(context) == expected
-
-
-@pytest.mark.parametrize('enabled', ['true', 'false'])
-def test_parking_observation_follows_the_actual_parking_launch_switch(enabled):
-    path = Path(__file__).parents[1]/'launch/full.launch.py'
-    spec = importlib.util.spec_from_file_location('full_parking_test', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    description = module.generate_launch_description()
-    includes = [dict(a.launch_arguments) for a in description.entities
-                if isinstance(a, IncludeLaunchDescription)]
-    mission = next(args for args in includes if 'parking_enabled' in args)
-    context = LaunchContext()
-    context.launch_configurations['use_parking'] = enabled
-    assert mission['parking_enabled'].perform(context) == enabled

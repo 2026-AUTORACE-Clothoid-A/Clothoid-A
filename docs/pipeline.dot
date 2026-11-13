@@ -54,9 +54,9 @@ digraph pipeline {
 
   // cmd_vel inputs
   lane    -> mux [label="cmd_vel_lane  (10)", color="#2a7f2a", fontcolor="#2a7f2a"];
-  cone    -> mux [label="cmd_vel_avoid  (80)", color="#2a7f2a", fontcolor="#2a7f2a"];
+  cone    -> mux [label="cmd_vel_cone  (90)", color="#2a7f2a", fontcolor="#2a7f2a"];
   avoid   -> mux [label="cmd_vel_avoid  (80)", style=dashed, color="#cc6666", fontcolor="#cc6666"];
-  park    -> mux [label="cmd_vel_parking  (90)", color="#2a7f2a", fontcolor="#2a7f2a"];
+  park    -> mux [label="cmd_vel_parking  (110)", color="#2a7f2a", fontcolor="#2a7f2a"];
   mission -> mux [label="cmd_vel_state  (100)\nzero Twist while stopped", color="#2a7f2a", fontcolor="#2a7f2a"];
   tele [label="joystick / keyboard", style="rounded,dashed,filled", fillcolor="#f5f5f5"];
   tele -> mux [label="cmd_vel_teleop  (200)", color="#2a7f2a", fontcolor="#2a7f2a"];

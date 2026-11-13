@@ -7,6 +7,7 @@ Change it only by agreement; topic names live in `ros2_ws/src/clothoid_bringup/c
 | Topic | Type | Notes |
 |---|---|---|
 | `/camera/color/image_raw` | `sensor_msgs/Image` | 640x480, `rgb8`, `frame_id: camera_color_optical_frame`. Rate depends on light, measured on limo2 on 2026-11-02: 29.3 Hz in a lit room with all streams on; in the dark 12.3 Hz alone, 12.4 Hz with all streams, 10.9 Hz with all mission nodes. Bringup enables color only |
+| `/camera/color/image_10hz` | `sensor_msgs/Image` | same frames as `image_raw`, thinned by `topic_tools throttle` (rate 12.0: a frame once 83 ms have passed). Only with `use_image_10hz:=true` (bringup/full.launch, default false). 10 Hz from the 30 Hz camera (limo2 2026-11-11: raw stays 29.9 Hz, throttle 6~9 % CPU); when the camera drops to ~12 Hz in the dark it passes every 2nd frame, ~6 Hz. For consumers that do not need 30 Hz (static_avoid first); topics.yaml `image_10hz_topic` |
 | `/scan` | `sensor_msgs/LaserScan` | YDLidar Tmini Plus, 10 Hz, ±110°, ~410 points per turn, frame `laser_link` |
 | `/odom` | `nav_msgs/Odometry` | from our `limo_base` (needs the LIMO body and motor battery connected). 50 Hz measured in Ackermann mode, frames `odom` → `base_link`. The factory `limo_base` publishes none in that mode |
 | `/imu` | `sensor_msgs/Imu` | from the base driver. 100 Hz measured, frame `imu_link`. Yaw and gyro respond to the chassis being turned by hand; 90° accuracy and sign not confirmed (see `PACKAGES.md`) |
@@ -25,19 +26,6 @@ TF: `base_link → laser_link` is (0.103, 0, -0.034) with no rotation (URDF).
 Pixel boxes refer to the 640x480 color image.
 
 ## Other detection outputs
-
-`namgyu/mission-triggers` (2026-11-11) adds these local scene observations. None encode route order.
-
-| Topic | Type | Publisher → subscriber | Meaning |
-|---|---|---|---|
-| `/parking_prepare` | `std_msgs/Bool` | mission → parking | Enable passive scan-only probing; lane retains control |
-| `/parking/bay_candidate` | `geometry_msgs/PoseStamped` | parking → mission | Repeatedly observed bay face centre in `base_link`, row yaw in orientation, original scan timestamp. No message means no fresh confirmation; mission expires after `input_timeout` |
-| `/bump/approaching` | `std_msgs/Bool` | mission → lane | Refreshed approach state permitting a bounded low-speed continuation through a short lane occlusion before bump contact |
-
-The default parking flag now requires a prepared P track, a reached entry line outside the tracked
-crosswalk, and fresh bay evidence. `/stopline_near` alone no longer transfers control.
-The selected traffic-light track ID and prepared/confirmed scene state appear in `/mission/state`.
-
 | Topic | Type | Publisher | Meaning |
 |---|---|---|---|
 | `/stopline_detected` | `std_msgs/Bool` | `clothoid_lane` `stopline` | 2025 crosswalk stripes, commented out since 2026-11-09 (not published) |
@@ -64,7 +52,9 @@ Every node publishes `geometry_msgs/Twist` to **its own** `twist_mux` input, nev
 | `/cmd_vel_teleop` | 200 | keyboard / joystick |
 | `/cmd_vel_state` | 100 | `clothoid_mission` (stop, wait, go) |
 | `/cmd_vel_parking` | 110 | `clothoid_parking` |
-| `/cmd_vel_avoid` | 80 | `clothoid_lidar` `cone_follower`; static obstacle avoidance goes here too |
+| `/cmd_vel_finish` | 110 | `clothoid_finish` |
+| `/cmd_vel_cone` | 90 | `clothoid_lidar` `cone_follower` (above avoid: cone walls can look like obstacles to static_avoid) |
+| `/cmd_vel_avoid` | 80 | `clothoid_lidar` `static_avoid` |
 | `/cmd_vel_lane` | 10 | `lane_main` |
 
 `twist_mux` writes the winner to `/cmd_vel`, which `limo_base` reads. `twist_mux` goes silent when all its inputs time

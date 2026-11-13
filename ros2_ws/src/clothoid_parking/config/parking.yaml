@@ -11,11 +11,6 @@ parking:
     laser_x: 0.103             # laser_link ahead of base_link (URDF)
     lazy_sensors: true         # imu/odom/scan only from /parking_flag until DONE (false: always)
     arm_wait_sec: 1.0          # after the flag, wait this long for all three before refusing
-    # Preparation subscribes only scan and never commands the vehicle.
-    probe.rate_hz: 5.0
-    probe.confirm_scans: 3
-    probe.max_gap: 0.75
-    probe.tolerance: 0.08
 
     plan.side: -1.0            # bays on the right
     # limo2, fitted to 5 parking bags against the lidar (2026-11-09): rear slides at full lock.
