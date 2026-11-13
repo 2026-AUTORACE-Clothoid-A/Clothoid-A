@@ -161,6 +161,13 @@ class ParkingCore:
             if self.phase == Phase.PARKED and not self.layout.inside_bay(self.planner.bay, self.tracker.pose):
                 self.planner._go(Phase.ABORT, now, 'vehicle corners outside designated bay')
                 return 0., 0.
+            if self.phase in (Phase.EXIT_BACK, Phase.EXIT_TURN):
+                # Fixed parking obstacles: use the legacy IMU/odom reverse exit
+                # along the entry route. The rear lidar sector is masked, so
+                # requiring fresh free-space evidence here prevents all exits.
+                # Scan freshness above and node IMU/odom checks still apply.
+                self.layout.reason = 'exiting along entry route using IMU/odom'
+                return out
             distance = .20
             if out is not None and self.phase == Phase.ENTER and self.planner.bay is not None:
                 b, pose = self.planner.bay, self.tracker.pose

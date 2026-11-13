@@ -137,3 +137,45 @@ def test_registered_handover_uses_grid_not_parked_vehicle_gap(node, monkeypatch)
     node.core.layout.selected=None
     node.on_probe_scan(scan)
     assert len(sent)==1
+
+
+@pytest.mark.parametrize('missing', ['imu', 'odom', 'scan'])
+def test_exit_stops_for_missing_sensors_without_reporting_done(node, monkeypatch, missing):
+    from clothoid_parking.layout import LayoutParams
+    from clothoid_parking.core import ParkingCore
+    from types import SimpleNamespace
+    node.core = ParkingCore(layout=LayoutParams(control_enabled=True, target_bay=2))
+    node.core.planner._go(Phase.EXIT_TURN, node.now(), 'exiting')
+    node.core.planner.bay = SimpleNamespace(row_yaw=2.)
+    now = node.now()
+    node.core.layout.last_scan = now
+    node.last = {name: now for name in node.last}
+    node.last[missing] = now-1.
+    sent, done = [], []
+    monkeypatch.setattr(node, 'send', lambda *args: sent.append(args))
+    node.done_pub = SimpleNamespace(publish=done.append)
+    node.on_timer()
+    assert sent == [(0., 0.)]
+    assert not done and node.core.phase == Phase.EXIT_TURN
+
+
+def test_completed_exit_publishes_done_only_after_lane_heading(node, monkeypatch):
+    from types import SimpleNamespace
+    from clothoid_parking.core import ParkingCore
+    from clothoid_parking.layout import LayoutParams
+    node.core = ParkingCore(layout=LayoutParams(control_enabled=True, target_bay=2))
+    now = node.now()
+    node.core.planner._go(Phase.EXIT_TURN, now, 'exiting')
+    node.core.planner.bay = SimpleNamespace(row_yaw=2.)
+    node.core.layout.last_scan = now
+    node.last = {name: now for name in node.last}
+    sent, done = [], []
+    monkeypatch.setattr(node, 'send', lambda *args: sent.append(args))
+    node.done_pub = SimpleNamespace(publish=done.append)
+    node.on_timer()
+    assert sent[-1][0] < 0 and not done
+    node.core.tracker.rear.yaw = 2.
+    node.on_timer()
+    assert node.core.phase == Phase.DONE
+    assert sent[-1] == (0., 0.)
+    assert len(done) == 1 and done[0].data

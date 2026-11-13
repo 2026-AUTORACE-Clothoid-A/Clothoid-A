@@ -96,3 +96,83 @@ def test_unknown_target_stops_before_turn_without_false_parking():
     core.tracker.rear=Pose2D(bay.x-core.planner.p.turn_radius-core.planner.p.turn_lead-.05-core.tracker.rear_offset,0.,0.)
     assert core.command(1.)==(0.,0.)
     assert core.phase==Phase.SEARCH and core.planner.bay is None
+
+
+def parked_core():
+    core = ParkingCore(layout=LayoutParams(control_enabled=True, target_bay=2))
+    core.layout = registered()
+    bay = core.layout.bays()[1]
+    core.planner.bay = bay
+    core.planner._arc_end = Pose2D(bay.x, bay.y+.10, bay.entry_yaw)
+    core.planner._go(Phase.PARKED, 1., 'parked')
+    place(core, Pose2D(bay.x, bay.y, bay.entry_yaw))
+    return core
+
+
+def place(core, pose):
+    offset = core.tracker.rear_offset
+    core.tracker.rear = Pose2D(pose.x-offset*math.cos(pose.yaw),
+                               pose.y-offset*math.sin(pose.yaw), pose.yaw)
+
+
+def test_registered_reverse_exit_completes_without_rear_free_space_evidence():
+    core = parked_core()
+    assert not core.layout.cells
+    core.layout.last_scan = 2.
+    assert core.command(2.) == (0., 0.)
+    assert core.phase == Phase.PARKED
+    core.layout.last_scan = 4.1
+    assert core.command(4.1)[0] < 0
+    assert core.phase == Phase.EXIT_BACK
+    place(core, core.planner._arc_end)
+    core.layout.last_scan = 4.3
+    assert core.command(4.3)[0] < 0
+    assert core.phase == Phase.EXIT_TURN
+    place(core, Pose2D(core.tracker.pose.x, core.tracker.pose.y, core.planner.bay.row_yaw))
+    core.layout.last_scan = 4.5
+    assert core.command(4.5) is None
+    assert core.phase == Phase.DONE
+
+
+@pytest.mark.parametrize('phase', [Phase.SEARCH, Phase.TURN, Phase.ENTER])
+def test_entry_still_requires_observed_free_space(phase):
+    core = parked_core()
+    core.planner._go(phase, 1., 'entry')
+    bay = core.planner.bay
+    place(core, Pose2D(bay.x-.60, 0., 0.) if phase != Phase.ENTER
+          else Pose2D(bay.x, bay.y+.08, bay.entry_yaw))
+    core.layout.last_scan = 1.1
+    core.layout.support_count = core.layout.p.confirm_scans
+    assert core.command(1.1) == (0., 0.)
+    assert core.phase == phase
+    assert core.layout.reason == 'holding: unobserved swept footprint'
+
+
+def test_reverse_depth_adjustment_is_not_exempt_from_entry_checks():
+    core = parked_core()
+    core.planner._go(Phase.ENTER, 1., 'depth adjustment')
+    bay = core.planner.bay
+    place(core, Pose2D(bay.x, bay.y-.08, bay.entry_yaw))
+    core.layout.last_scan = 1.1
+    assert core.command(1.1) == (0., 0.)
+    assert core.phase == Phase.ENTER
+    assert core.layout.reason == 'holding: unobserved swept footprint'
+
+
+def test_exit_still_holds_when_scans_stop_arriving():
+    core = parked_core()
+    core.layout.last_scan = 4.1
+    assert core.command(4.1)[0] < 0
+    assert core.phase == Phase.EXIT_BACK
+    assert core.command(4.7) == (0., 0.)
+    assert core.phase == Phase.EXIT_BACK
+
+
+@pytest.mark.parametrize('phase', [Phase.EXIT_BACK, Phase.EXIT_TURN])
+def test_exit_timeout_does_not_report_success(phase):
+    core = parked_core()
+    core.planner._go(phase, 4., 'exit')
+    now = 4.+core.planner.p.exit_max_sec+.1
+    core.layout.last_scan = now
+    assert core.command(now) == (0., 0.)
+    assert core.phase == Phase.ABORT
