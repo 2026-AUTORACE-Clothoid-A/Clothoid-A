@@ -53,8 +53,10 @@ def quaternion_to_pitch_deg(x: float, y: float, z: float, w: float) -> float:
 class DetectionGate:
     """Confirm spatially consistent boxes on distinct detector frames, not timer ticks."""
     def __init__(self, hits=3, window=5, max_age=0.5, confidence=0.6,
-                 sign_height=14, light_height=8, edge_margin=2):
+                 sign_height=14, light_height=8, edge_margin=2, class_hits=None):
         self.hits, self.window, self.max_age = hits, window, max_age
+        # per-class override of `hits`, e.g. fork signs: small, seen between the static obstacles
+        self.class_hits = dict(class_hits or {})
         self.confidence, self.sign_height = confidence, sign_height
         self.light_height, self.edge_margin = light_height, edge_margin
         self.history = deque(maxlen=window)
@@ -69,22 +71,33 @@ class DetectionGate:
                 abs((a.y_min+a.y_max-b.y_min-b.y_max)/2) <= max(ah, bh) and
                 0.5 <= ah / bh <= 2.0)
 
+    def required(self, name: str) -> int:
+        return self.class_hits.get(name, self.hits)
+
+    def box_reason(self, d, width=640, height=480) -> Optional[str]:
+        """Why the box itself cannot count (None: it can): conf, height or edge."""
+        minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
+        if d.confidence < self.confidence:
+            return 'conf %.2f < %.2f' % (d.confidence, self.confidence)
+        if d.y_max-d.y_min < minimum or d.x_max <= d.x_min:
+            return 'h %d < %d' % (d.y_max-d.y_min, minimum)
+        if (d.x_min < self.edge_margin or d.y_min < self.edge_margin or
+                d.x_max > width-self.edge_margin or d.y_max > height-self.edge_margin):
+            return 'edge'
+        return None
+
+    def count(self, d, now) -> int:
+        """Recent frames (within max_age, this one included) holding a box matching d."""
+        return sum(any(self.matches(d, old) for old in frame)
+                   for stamp, frame in self.history if 0 <= now-stamp <= self.max_age)
+
     def update(self, now, detections, accepted, width=640, height=480):
         if self.history and now < self.history[-1][0]:
             self.history.clear()
-        boxes = []
-        for d in detections:
-            minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
-            if (d.class_name in accepted and d.confidence >= self.confidence and
-                    d.y_max-d.y_min >= minimum and d.x_max > d.x_min and
-                    d.x_min >= self.edge_margin and d.y_min >= self.edge_margin and
-                    d.x_max <= width-self.edge_margin and d.y_max <= height-self.edge_margin):
-                boxes.append(d)
+        boxes = [d for d in detections
+                 if d.class_name in accepted and self.box_reason(d, width, height) is None]
         self.history.append((now, boxes))
-        return {d.class_name for d in boxes if sum(
-            any(self.matches(d, old) for old in frame)
-            for stamp, frame in self.history if 0 <= now-stamp <= self.max_age
-        ) >= self.hits}
+        return {d.class_name for d in boxes if self.count(d, now) >= self.required(d.class_name)}
 
 
 @dataclass

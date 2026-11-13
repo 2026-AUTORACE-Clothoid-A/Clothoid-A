@@ -14,6 +14,8 @@
 - 애커만 모드: `ros2 topic echo /limo_status --once`에서 `motion_mode: 1`. 0이면 4륜 차동이라 같은 `angular.z`가 요레이트로 해석된다(앞쪽 핀 전환).
 - 디스크: `df -h`(bag 용량은 아래 2절).
 - 런치를 띄우기 전에 매번 `scripts/preflight.sh`(남은 프로세스, `/dev/shm` 잔여물, DDS 프로파일). WARN이면 7절 순서로 정리한다.
+- 전체 주행 기록은 `scripts/rec_full.sh [이름]`(full.launch가 뜬 뒤 다른 터미널). `/detections`, `/direction_flag`, mux 입력 전부, 회피 토픽이 들어간다. 1114에는 `/detections`가 없어 갈림길 표지판을 놓친 이유를 확인할 수 없었다.
+- 갈림길 표지판: launch 로그에서 `[LEFT]` / `[RIGHT]` 줄(확정 `ARMED` 또는 탈락 이유)과 `fork: direction ...` 한 줄을 확인한다. 방향이 안 정해지면 lane_main은 기본값(오른쪽)으로 간다.
 
 ## 1. RC 조작
 
