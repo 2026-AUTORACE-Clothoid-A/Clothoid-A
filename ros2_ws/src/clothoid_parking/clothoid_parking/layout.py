@@ -86,7 +86,7 @@ class ParkingLayout:
         self.motion_reason = ''
 
     def retain_free(self, now, enabled):
-        """Keep measured free cells only for one committed entry manoeuvre."""
+        """Keep measured free cells for one confirmed parking approach/entry."""
         self.retaining = enabled
         self.retained_free = ({k for k, (t, occupied) in self.cells.items()
                                if not occupied and 0 <= now-t <= self.p.evidence_age}
@@ -130,10 +130,12 @@ class ParkingLayout:
             self.selected = None
             self.reason = 'inconsistent visual registration'
             return False
+        if self.origin is None:
+            self.retain_free(stamp, False)
+        # Free cells are in the odometry frame, not relative to the visual
+        # anchor. Consistent visual updates must not erase approach evidence;
+        # contradictory registration is invalidated above.
         self.origin, self.yaw = candidate, angle
-        # Observations may move the reference during search, never preserve a
-        # manoeuvre cache across such a reference update.
-        self.retain_free(stamp, False)
         self.reason = 'registered; checking observed free space'
         return True
 

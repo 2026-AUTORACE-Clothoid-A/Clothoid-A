@@ -134,6 +134,17 @@ def test_free_memory_clears_on_disable_reset_and_reference_update():
         assert not layout.retained_free and not layout.retaining
 
 
+def test_consistent_visual_updates_keep_approach_memory_but_disagreement_revokes_it():
+    layout=registered()
+    fill(layout,np.array([[.4,0.]]),1.4)
+    layout.retain_free(1.4,True)
+    saved=set(layout.retained_free)
+    assert layout.observe(1.6,(1.,-.25),0.,Pose2D())
+    assert layout.retaining and layout.retained_free==saved
+    layout.observe(1.8,(2.,-.25),0.,Pose2D())
+    assert not layout.retaining and not layout.retained_free
+
+
 def test_inner_bay_route_crosses_front_bay_and_blockage_is_not_empty():
     layout = registered()
     front, inner = layout.bays()[0], layout.bays()[3]

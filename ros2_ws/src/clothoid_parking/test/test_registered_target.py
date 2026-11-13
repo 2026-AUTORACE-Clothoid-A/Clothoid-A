@@ -23,6 +23,33 @@ def test_control_cannot_silently_select_an_unspecified_bay():
     with pytest.raises(ValueError): ParkingLayout(LayoutParams(target_bay=7))
 
 
+def test_search_retains_free_evidence_before_it_expires_at_turn(monkeypatch):
+    core=ParkingCore(layout=LayoutParams(control_enabled=True,target_bay=2))
+    core.layout=registered()
+    core.set_flag(.4,True)
+    monkeypatch.setattr(core.layout,'supported',lambda now:True)
+    # Three actual scan updates corroborate the supplied visual registration.
+    for now in (.6,.8,1.):
+        core.odom(now,0.)
+        core.scan(now,[1.],0.,.1,.02,12.)
+    assert core.phase==Phase.SEARCH and core.layout.retaining
+    key=next(iter(core.layout.retained_free))
+    saved=set(core.layout.retained_free)
+    # Move the test clock beyond the old free-cell lifetime while scans remain
+    # live. The turn transition must not replace the approach memory.
+    core.layout.cells.clear()
+    core.layout.last_scan=3.
+    core.planner.bay=core.layout.bays()[1]
+    def start_turn(*args):
+        core.planner.phase=Phase.TURN
+        return .2,-.41
+    monkeypatch.setattr(core.planner,'step',start_turn)
+    core.command(3.)
+    assert saved<=core.layout.retained_free and key in core.layout.retained_free
+    core.set_flag(3.1,False)
+    assert not core.layout.retained_free
+
+
 def test_displaced_and_rotated_obstacles_do_not_move_registered_targets():
     layout=registered()
     before=np.array([[b.x,b.y,b.row_yaw] for b in layout.bays()])

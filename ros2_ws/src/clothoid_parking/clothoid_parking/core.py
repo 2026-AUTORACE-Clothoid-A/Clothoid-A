@@ -90,6 +90,12 @@ class ParkingCore:
                 if updated and self.phase in (Phase.IDLE, Phase.SEARCH):
                     candidate = self.layout.choose(now, self.tracker.pose, self.planner.p)
                     if self.layout.p.control_enabled and self.phase == Phase.SEARCH:
+                        confirmed = (self.layout.origin is not None and
+                                     self.layout.support_count >= self.layout.p.confirm_scans)
+                        if confirmed and not self.layout.retaining:
+                            self.layout.retain_free(now, True)
+                        elif not confirmed:
+                            self.layout.retain_free(now, False)
                         # Revoke a candidate even inside the legacy freeze distance.
                         self.planner.bay = candidate
                         if self.layout.origin is not None:
@@ -154,9 +160,9 @@ class ParkingCore:
                 out = v, self.planner._hold(pose, target.row_yaw, v)
             else:
                 out = self.planner.step(now, self.tracker.pose, self.front_range)
-            if previous_phase == Phase.SEARCH and self.phase == Phase.TURN:
+            if previous_phase == Phase.SEARCH and self.phase == Phase.TURN and not self.layout.retaining:
                 self.layout.retain_free(now, True)
-            elif self.phase not in (Phase.TURN, Phase.ENTER):
+            elif self.phase not in (Phase.SEARCH, Phase.TURN, Phase.ENTER):
                 self.layout.retain_free(now, False)
             if self.phase == Phase.PARKED and not self.layout.inside_bay(self.planner.bay, self.tracker.pose):
                 self.planner._go(Phase.ABORT, now, 'vehicle corners outside designated bay')
