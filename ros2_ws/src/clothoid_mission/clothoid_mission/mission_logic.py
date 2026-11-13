@@ -113,6 +113,7 @@ class MissionParams:
     # cone gate: allow parking and block speed bump only after entering the cone course
     require_cone_for_parking: bool = True
     block_bump_after_cone: bool = True
+    cone_confirm_sec: float = 1.5      # consecutive seconds of cone_active before latching cone_entered
 
 
 @dataclass
@@ -148,6 +149,7 @@ class MissionLogic:
         self.parking_flag = False
         self.parking_armed = False
         self.cone_entered = False
+        self.cone_active_since: Optional[float] = None
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
@@ -163,7 +165,12 @@ class MissionLogic:
         now, seen, p = inputs.now, inputs.seen, self.p
 
         if inputs.cone_active:
-            self.cone_entered = True
+            if self.cone_active_since is None:
+                self.cone_active_since = now
+            if now - self.cone_active_since >= p.cone_confirm_sec:
+                self.cone_entered = True
+        else:
+            self.cone_active_since = None
 
         if 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec

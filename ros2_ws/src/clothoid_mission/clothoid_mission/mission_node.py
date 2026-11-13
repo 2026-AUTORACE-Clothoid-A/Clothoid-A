@@ -123,6 +123,7 @@ class MissionNode(Node):
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
+        self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.detection_gate = DetectionGate(
@@ -148,7 +149,8 @@ class MissionNode(Node):
             fork_right_direction=get('fork_right_direction'),
             parking_at_stopline=get('parking_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
-            block_bump_after_cone=get('block_bump_after_cone')))
+            block_bump_after_cone=get('block_bump_after_cone'),
+            cone_confirm_sec=get('cone_confirm_sec')))
 
         self.seen, self.seen_time = set(), None
         self.stopline, self.stopline_time = False, None
