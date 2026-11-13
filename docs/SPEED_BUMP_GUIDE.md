@@ -1,132 +1,86 @@
-# 과속방지턱(Speed Bump) 구간 주행 & IMU 제어 가이드
+# 방지턱 제어와 시뮬 검증
 
-> **작성일**: 2026-11-09  
-> **대상**: 방지턱 미션 제어 및 센서 퓨전 개발  
-> **관련 패키지**: `clothoid_mission`, `clothoid_lane`, `limo_base`
+2026-11-13 main 통합: 주차 시작·표지판 필터는 main을 유지한다.
+콘 활성 1.5초를 확인한 이후에는 새로운 방지턱 접근을 차단한다.
+아래 과거 실차·시뮬 기록은 당시 버전의 결과이며, 이번 통합 버전의 실차 검증을 의미하지 않는다.
 
----
+## 현재 제어
 
-## 1. 개요 및 대회 규정
+별도 방지턱 노드 없이 `clothoid_mission`이 표지판과 IMU를 처리하고,
+`clothoid_lane`이 속도 제한과 조향 잠금을 적용한다. 새로운 영상 검출기는 추가하지 않았다.
 
-- **규정 요구사항**: 과속방지턱 표지판(`sign_bump`) 인식 후 방지턱 구간을 **0.2 m/s 이하**의 속도로 서행 통과해야 함.
-- **기존 방식의 한계 (타이머 기반)**:
-  - 표지판을 인식한 순간부터 단순 4초 타이머로 감속할 경우, 차간 거리나 인식 거리에 따라 **턱에 오르기도 전에 가속**하거나 **턱 위에서 속도를 올려 실격/감점**될 위험이 큼.
-  - 방지턱을 넘는 동안 카메라가 위아래로 흔들려 **차선 인식 및 조향이 급격히 튀는 현상** 발생.
-- **해결책**: **YOLO(사전 감속 트리거)** + **IMU Pitch 센싱(실시간 턱 등판/탈출 감지 및 조향 보정)** 융합.
+1. 기존 크기·위치·신뢰도 필터와 연속 프레임 확인을 통과한 `sign_bump`가 접근 서행을 시작한다.
+2. 접근 중 0.2 m/s 제한을 유지한다. 대기 만료는 마지막으로 확인한 표지판부터 계산한다.
+3. 피치 절댓값이 3.5도 이상이면 `on_bump`로 들어가고 조향을 잠근다. ROS 좌표에서
+   앞바퀴가 올라갈 때 피치는 음수다. 하드웨어의 부호 차이에 의존하지 않도록 양쪽을 허용한다.
+4. 진입 때와 반대 방향으로 1.2도를 넘는 기울기를 확인한 뒤, 절댓값 1.2도 이내가
+   0.3초 지속돼야 통과로 처리한다. 두 축 사이의 잠깐 수평 구간에서 풀리지 않게 한다.
+5. 통과하면 잠금을 풀고 4초 쿨다운을 적용한다. 속도 제한은 기존 lane의 만료 시간에 따라 해제된다.
 
----
+IMU가 사라지면 통과 판정을 보류하고 서행은 유지하지만 조향 잠금은 푼다.
+다시 IMU가 들어오면 상태에 따라 판단을 이어간다. 서행이 계속되면 센서와 상태를 확인해야 한다.
 
-## 2. IMU 데이터 해석 & 핵심 원리
+## 조향 잠금
 
-LIMO 본체 드라이버는 `/imu` 토픽을 **100 Hz**로 발행합니다.
+기존 코드는 잠금 분기 뒤에서 조향각을 다시 계산해 잠금을 덮어썼다. 이제 잠금 중에는
+속도에 따른 게인까지 적용해서 실제로 출력했던 조향각을 유지한다. 속도가 바뀌면
+`angular.z = speed * tan(angle) / wheelbase`로 다시 계산한다.
 
-### 2.1 쿼터니언 → Pitch 각도 변환
-차량의 앞뒤 기울기를 나타내는 각도는 **Pitch(피치)**입니다.
+진입 기준인 3.5도에 도달한 순간에는 카메라도 이미 기울어져 있다. 따라서 lane은
+기존 IMU를 구독해 수평일 때 마지막으로 실제 출력한 조향각·목표점을 저장하고 잠금에 사용한다.
+영상과 IMU의 센서 시각 차이가 40ms 이내인 경우에만 수평 기준을 갱신한다. 늦게 도착한 IMU로 최신 영상을 수평이라고 판단하지 않게 한다. 최근 수평 기준이 없으면 직전 조향각을 사용한다. 차선을 잠깐 잃어도 유효한 잠금 중에는
+현재 속도 제한과 고정 조향각으로 명령을 낸다. 잠금 갱신이 끊기면 1.5초 뒤 일반 차선 제어로 돌아간다.
 
-```python
-import math
-from geometry_msgs.msg import Quaternion
+추가 연산은 IMU 쿼터니언의 피치 계산과 상태 비교다. 차선 검출, 정지선 검출, YOLO 모델·입력 크기·
+임계값은 바꾸지 않았다. 리모 전체 CPU/GPU 부하는 이번 PC 시뮬 검증으로 판단할 수 없다.
 
-def get_pitch_deg(q: Quaternion) -> float:
-    # 쿼터니언 (x, y, z, w) -> Pitch 각도 (도, degree)
-    sinp = 2.0 * (q.w * q.y - q.z * q.x)
-    if abs(sinp) >= 1.0:
-        pitch_rad = math.copysign(math.pi / 2, sinp)
-    else:
-        pitch_rad = math.asin(sinp)
-    return math.degrees(pitch_rad)
+## 파라미터
+
+| 파일 | 파라미터 | 값 | 의미 |
+|---|---|---:|---|
+| mission.yaml | slow_speed | 0.2 | 접근·통과 속도 제한, m/s |
+| mission.yaml | bump_pitch_thresh | 3.5 | 진입 피치 절댓값, 도 |
+| mission.yaml | bump_level_thresh | 1.2 | 수평·반대 방향 기울기 기준, 도 |
+| mission.yaml | bump_level_duration | 0.3 | 반대 기울기 이후 수평 확인, 초 |
+| mission.yaml | bump_arm_timeout | 12.0 | 마지막 확인 표지판 이후 접근 대기 상한, 초 |
+| mission.yaml | bump_cooldown | 4.0 | 통과 뒤 재진입 무시, 초 |
+| lane.yaml | steering_lock_timeout | 1.5 | 잠금 신호 갱신 만료, 초 |
+| lane.yaml | steering_lock_level_deg | 1.2 | 수평 조향 기준을 저장하는 피치 범위, 도 |
+| lane.yaml | steering_lock_reference_timeout | 1.0 | 저장한 수평 조향 기준 유효 시간, 초 |
+| lane.yaml | steering_lock_imu_timeout | 0.25 | lane에서 사용하는 IMU 유효 시간, 초 |
+
+접근 대기 12초는 시뮬에서 표지판이 시야 밖으로 나간 뒤에도 턱까지 약 1.5 m가 남아
+기존 6초가 만료되던 결과를 반영한 설정값이다. 통과 판정은 타이머 대신 피치 변화로 한다.
+12초보다 긴 접근이나 다른 설치 간격에서는 이 값의 재검증이 필요하다. 좌표·경로 번호를 제어 코드에 넣지 않았다.
+
+## 시뮬 구현과 재현
+
+로컬 `simul/`의 길이 160 mm, 높이 18 mm 코사인 곡면을 렌더링하고 네 바퀴의 원형 접촉 높이로
+차체 피치·롤·높이를 계산한다. 차체 메시, 카메라, IMU, odometry와 TF가 같은 자세를 사용한다.
+속도와 조향은 실제 ROS lane + YOLO(best.pt) + mission + twist_mux가 결정한다.
+검증 도구가 객체 검출 결과나 IMU 이벤트를 대신 넣지 않는다.
+
+Docker `clothoid-dev`에서 ROS/workspace를 source한 후 실행한다.
+
+```bash
+export ROS_DOMAIN_ID=187 ROS_LOCALHOST_ONLY=1
+export PYTHONPATH=/home/user/Clothoid-A/simul/src/limo_parking_sim:$PYTHONPATH
+python3 simul/tools/check_bump_driving.py --output ros2_ws/log/bump_sim_1110/manual
 ```
 
-### 2.2 방지턱 통과 시 Pitch 프로파일
+`--gui`는 시뮬 창을 켜고, `--spawn X Y YAW`와 `--map PATH`는 검증 조건을 바꾼다.
+기본 검증은 실차 stopparkrun과 같은 lane/stopline 공유 카메라 구성을 사용한다.
+실행 로그·검출 박스·주행 상태·상승/하강 카메라 캡처를 출력 디렉토리에 저장한다.
+검증 시작 시 실제 YOLO 출력 8프레임을 기다리는 것은 검증 도구의 동작이다.
+실차 시작 시 YOLO 준비를 기다리는 기능을 추가한 것은 아니다.
 
-```
-       [2. 앞바퀴 하강 / 뒷바퀴 등판]
-              Pitch (-) 음수
-                 \      /
-  Pitch (+)       \    /        Pitch ≈ 0°
- [1. 앞바퀴 등판]   \  /       [3. 완전 탈출 후 수평]
-     /\             \/             ──────────────
-────/  \─────────────────────────
- (평지)
-```
+시뮬은 접촉 기하 모델이며 서스펜션 충격, 모터 토크, 미끄럼을 재현하지 않는다.
+LiDAR는 기존 수평 광선 근사를 유지하므로 기울어진 3차원 스캔 검증에는 사용할 수 없다.
+`simul/`은 이 저장소의 로컬 제외 경로다. Git push만으로 다른 PC에 전달되지 않는다.
+검증 결과와 시뮬 수정본 백업 위치는 `ros2_ws/log/bump_sim_1110/RESULT.md`에 기록한다.
 
-1. **앞바퀴 등판 (Nose Up)**: 차체 앞부분이 들리며 `Pitch > +Threshold` (예: +3° ~ +6° 이상 급상승)
-2. **앞바퀴 하강 & 뒷바퀴 등판 (Nose Down)**: 차체 앞이 숙여지며 `Pitch < -Threshold` (음수로 급전환)
-3. **뒷바퀴 탈출 (Leveling)**: 뒷바퀴까지 완전히 내려오며 `abs(Pitch) < 1.0°` (수평 복귀 및 안정화)
+## 차선 일시 상실 보완
 
----
-
-## 3. 방지턱 상태 머신 (FSM) 구조
-
-```mermaid
-stateDiagram-v2
-    [*] --> NORMAL_DRIVE: 기본 주행
-    NORMAL_DRIVE --> APPROACHING: YOLO sign_bump 인식
-    APPROACHING --> CLIMBING: IMU Pitch > +Threshold (앞바퀴 등판)
-    CLIMBING --> DESCENDING: IMU Pitch < -Threshold (앞바퀴 하강)
-    DESCENDING --> EXITED: abs(Pitch) < 1.0° 연속 유지 (수평 복귀)
-    EXITED --> NORMAL_DRIVE: 속도 정상 복구 (쿨다운 타이머 시작)
-```
-
-- **`APPROACHING` (접근 서행)**: 속도를 규정 속도인 **0.2 m/s**로 사전 감속.
-- **`CLIMBING` / `DESCENDING` (방지턱 통과 중)**:
-  - 0.2 m/s 속도 유지.
-  - **카메라 화각 흔들림 방지**: 조향각(Steering)을 고정하거나 저주파 필터(LPF)로 급회전 방지.
-- **`EXITED` (탈출)**: 차체가 수평으로 복귀하고 0.3~0.5초간 안정화되면 정상 주행 속도로 가속.
-
----
-
-## 4. 실전 주행 꿀팁 (Crucial Tips)
-
-### Tip 1. 방지턱 통과 중 차선 조향(Steering) 흔들림 방어
-- **문제**: 방지턱을 올라탈 때 카메라가 위를 보면서 차선 하단부가 시야에서 사라지거나, 노면의 그림자/턱 모서리를 차선으로 오인식하여 바퀴를 꺾어버릴 수 있음.
-- **해결책**:
-  - `CLIMBING` 상태에 진입하면 차선 인식 노드의 조향 출력 변화율(Slew Rate)을 강하게 제한하거나,
-  - 방지턱을 넘는 동안 **진입 직전의 조향각을 그대로 유지(Steering Lock)**하도록 설정.
-
-### Tip 2. 저속(0.2 m/s) 등판 시 턱 걸림(Stall) 방지
-- **문제**: LIMO의 0.2 m/s는 모터에 인가되는 전압이 낮아, 방지턱 턱부분에 앞바퀴가 닿았을 때 차가 멈칫하며 못 올라갈 수 있음.
-- **해결책**:
-  - 오도메트리 속도(`/odom`)가 0.05 m/s 이하로 떨어지는데 IMU Pitch가 올라가기 시작했다면, 순간적으로 명령 속도를 살짝(0.25~0.3 m/s) 올려 턱을 넘길 수 있는 토크를 확보한 뒤 즉시 0.2 m/s로 복귀.
-
-### Tip 3. 센서 노이즈 필터링 (False Positive 방지)
-- 주행 중 바닥의 작은 요철이나 가속/감속 시 차체 출렁임(Pitch)으로 인해 오작동할 수 있음.
-- **필터링 규칙**:
-  1. **YOLO 선행 조건**: 반드시 `sign_bump` 표지판이 최근에 감지된 상태에서만 IMU 피크 검사를 활성화 (Gate 조건).
-  2. **이동 평균(Moving Average)**: 최근 5~10개(50~100ms) IMU 샘플의 이동 평균을 취해 고주파 진동 노이즈 제거.
-
----
-
-## 5. 빠른 구현을 위한 코드 스니펫
-
-```python
-class SpeedBumpDetector:
-    def __init__(self, pitch_threshold_deg: float = 4.0):
-        self.pitch_thresh = pitch_threshold_deg
-        self.is_armed = False       # YOLO 표지판 감지 시 True
-        self.on_bump = False        # 현재 턱 위인지 여부
-        self.level_count = 0        # 수평 안정 카운트
-
-    def update_imu(self, pitch_deg: float, dt: float) -> bool:
-        """현재 방지턱 통과 중인지 여부를 반환 (True: 감속 및 조향 보호 필요)"""
-        if not self.is_armed:
-            return False
-
-        # 앞바퀴가 들리면 턱 진입
-        if not self.on_bump and pitch_deg > self.pitch_thresh:
-            self.on_bump = True
-            self.level_count = 0
-
-        # 턱 위에서 수평으로 복귀하는지 체크
-        if self.on_bump:
-            if abs(pitch_deg) < 1.5:
-                self.level_count += 1
-                # 100Hz 기준 30개 샘플(0.3초) 이상 수평 유지 시 탈출
-                if self.level_count > 30:
-                    self.on_bump = False
-                    self.is_armed = False  # 쿨다운 시작
-            else:
-                self.level_count = 0
-
-        return self.on_bump
-```
+`/bump/approaching`이 유효할 때만 마지막 정상 차선의 조향을 제한적으로 유지한다.
+최대 거리·시간·조향·yaw·횡방향 오차 제한을 넘으면 이어가지 않는다.
+콘 진입 후 접근 상태가 취소되면 이 기능도 해제된다.

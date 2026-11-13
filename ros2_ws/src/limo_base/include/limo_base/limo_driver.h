@@ -46,6 +46,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 
 #include "std_msgs/msg/string.hpp"
+#include "std_msgs/msg/bool.hpp"
 #include "limo_msgs/msg/limo_status.hpp"
 // #include <ros/ros.h>
 // #include <tf/transform_broadcaster.h>
@@ -107,6 +108,9 @@ private:
     rclcpp::Publisher<limo_msgs::msg::LimoStatus>::SharedPtr status_publisher_;
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr motion_cmd_sub_;
+    rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr yolo_ready_sub_;
+    bool require_yolo_ready_ = false;
+    bool yolo_ready_ = false;
     // rclcpp::Subscription<scout_msgs::msg::ScoutLightCmd>::SharedPtr
     //   light_cmd_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;

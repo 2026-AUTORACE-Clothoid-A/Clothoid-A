@@ -49,6 +49,22 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
     steering_scale_ = this->declare_parameter<double>("steering_scale", 2.47);
     max_inner_angle_ = this->declare_parameter<double>("max_inner_angle", 0.48869);
     cmd_timeout_ = this->declare_parameter<double>("cmd_timeout", 0.5);
+    require_yolo_ready_ = this->declare_parameter<bool>("require_yolo_ready", false);
+    if (require_yolo_ready_) {
+        yolo_ready_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/yolo/ready", rclcpp::QoS(1).reliable().transient_local(),
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                if (msg->data != yolo_ready_) {
+                    RCLCPP_INFO(this->get_logger(), "YOLO ready: %s; automatic commands %s",
+                                msg->data ? "true" : "false", msg->data ? "enabled" : "held at zero");
+                }
+                yolo_ready_ = msg->data;
+                if (!yolo_ready_ && port_) {
+                    setMotionCommand(0, 0, 0, 0);
+                }
+            });
+        RCLCPP_INFO(this->get_logger(), "Waiting for first successful YOLO inference; holding automatic commands at zero");
+    }
 
     std::cout << "Loading parameters: " << std::endl;
     std::cout << "- port name: " << port_name << std::endl;
@@ -83,11 +99,16 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
     // motion_cmd_sub_ = nh.subscribe<geometry_msgs::Twist>("/cmd_vel", 5, &LimoDriver::twistCmdCallback, this);
     
     // connect to the serial port
-    if (port_name.find("tty") != port_name.npos){ 
-        port_name = "/dev/" + port_name;
+    if (port_name.find("tty") != port_name.npos || (!port_name.empty() && port_name.front() == '/')) {
+        if (port_name.front() != '/') {
+            port_name = "/dev/" + port_name;
+        }
         keep_running_=true;
         this->connect(port_name, B460800);
         this->enableCommandedMode();
+        if (require_yolo_ready_) {
+            setMotionCommand(0, 0, 0, 0);
+        }
         RCLCPP_INFO(this->get_logger(),"Open the serial port:'%s'",port_name.c_str());
         // twist_mux goes silent when all its inputs time out, so stop the car here. 0 disables this.
         if (cmd_timeout_ > 0.0) {
@@ -430,6 +451,12 @@ void LimoDriver::twistCmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg
 {
     has_cmd_ = true;
     last_cmd_ = std::chrono::steady_clock::now();
+    // This is the last ROS command boundary, after twist_mux: covers lane,
+    // cones, parking and finish without depending on their startup order.
+    if (require_yolo_ready_ && !yolo_ready_) {
+        setMotionCommand(0, 0, 0, 0);
+        return;
+    }
     switch (motion_mode_) {
         case MODE_FOUR_DIFF: {
             setMotionCommand(msg->linear.x, msg->angular.z, 0, 0);

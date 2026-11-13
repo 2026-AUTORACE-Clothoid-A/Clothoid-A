@@ -34,9 +34,13 @@ def generate_launch_description():
                               description='YOLO weights (.pt on the PC, .engine on the Jetson)'),
         DeclareLaunchArgument('device', default_value='cpu'),
         DeclareLaunchArgument('rviz', default_value='true'),
+        DeclareLaunchArgument('use_stopline', default_value='false'),
+        DeclareLaunchArgument('share_lane_camera', default_value='true'),
         GroupAction([
             SetParameter(name='use_sim_time', value=True),
-            include('clothoid_lane', 'lane.launch.py', {'debug': 'true'}),
+            include('clothoid_lane', 'lane.launch.py', {
+                'debug': 'true', 'use_stopline': LaunchConfiguration('use_stopline'),
+                'share_lane_camera': LaunchConfiguration('share_lane_camera')}),
             include('clothoid_mission', 'mission.launch.py', {'debug': 'true'}),
             Node(package='clothoid_yolo', executable='yolo', name='yolo', output='screen',
                  parameters=[share('clothoid_bringup', 'config', 'topics.yaml'),

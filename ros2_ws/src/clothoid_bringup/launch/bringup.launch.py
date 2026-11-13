@@ -63,6 +63,8 @@ def generate_launch_description():
                               description='twist_mux output; /cmd_vel_dry = shadow run, nothing drives'),
         DeclareLaunchArgument('cmd_timeout', default_value='0.5',
                               description='limo_base: stop after this long without /cmd_vel'),
+        DeclareLaunchArgument('require_yolo_ready', default_value='false',
+                              description='hold base commands until the first successful YOLO inference'),
         DeclareLaunchArgument('camera_pitch', default_value='0.0',
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
@@ -109,7 +111,7 @@ def generate_launch_description():
 
         include('limo_base', 'launch', 'limo_base.launch.py', args={
             name: LaunchConfiguration(name)
-            for name in ('steering_scale', 'max_inner_angle', 'cmd_timeout')}),
+            for name in ('steering_scale', 'max_inner_angle', 'cmd_timeout', 'require_yolo_ready')}),
 
         # DaBai DC1 runs on astra_stereo_u3.launch.py. Color only; the driver's own TF has a
         # unit error (29 m), so publish_tf is off and we publish the TF above.

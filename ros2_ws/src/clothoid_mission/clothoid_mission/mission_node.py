@@ -37,7 +37,7 @@ from std_msgs.msg import Bool, Float32, Int32, String
 
 from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
-    Inputs, MissionLogic, MissionParams, DetectionGate, classes_seen, quaternion_to_pitch_deg)
+    BUMP_APPROACHING, Inputs, MissionLogic, MissionParams, DetectionGate, classes_seen, quaternion_to_pitch_deg)
 
 # FinishCore phase -> what mission_logic expects
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
@@ -77,6 +77,7 @@ class MissionNode(Node):
         self.declare_parameter('direction_topic', '/direction_flag')
         self.declare_parameter('parking_topic', '/parking_flag')
         self.declare_parameter('steering_lock_topic', '/steering_lock')
+        self.declare_parameter('bump_approach_topic', '/bump/approaching')
         # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
         self.declare_parameter('parking_sign_topic', '/parking_sign')
         # one stop line right in front (clothoid_lane stopline node): where parking starts
@@ -169,6 +170,7 @@ class MissionNode(Node):
         self.direction_pub = self.create_publisher(Int32, get('direction_topic'), 1)
         self.parking_pub = self.create_publisher(Bool, get('parking_topic'), 1)
         self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
+        self.bump_approach_pub = self.create_publisher(Bool, get('bump_approach_topic'), 1)
 
         self.create_subscription(DetectionArray, get('detections_topic'), self.on_detections, 1)
         # 2025 stripe flag (clothoid_lane stopline), commented out there in 2026: the light /
@@ -410,6 +412,9 @@ class MissionNode(Node):
             'remaining': None if left is None else round(left, 4),
             'line': None if core is None or core.cross_x is None else round(core.cross_x, 4),
             'front': self.finish_params.front, 'speed_limit': out.speed_limit,
+            'bump_state': self.logic.bump_state,
+            'imu_pitch': self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
+            'steering_lock': out.steering_lock,
             'stopped_for': (round(now - self.logic.stopped_at, 2) if out.stop else None)})))
 
         log = (self.logic.parking_armed, out.parking_flag)
@@ -432,6 +437,8 @@ class MissionNode(Node):
             self._publish_changed('parking', True,
                                   lambda v: self.parking_pub.publish(Bool(data=bool(v))))
 
+        self._publish_changed('bump_approaching', self.logic.bump_state == BUMP_APPROACHING,
+                              lambda v: self.bump_approach_pub.publish(Bool(data=bool(v))))
         self._publish_changed('steering_lock', out.steering_lock,
                               lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
 
