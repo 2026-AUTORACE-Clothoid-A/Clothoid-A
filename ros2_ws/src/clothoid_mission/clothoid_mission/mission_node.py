@@ -91,7 +91,7 @@ class MissionNode(Node):
         self.declare_parameter('refresh_sec', 1.0)
         self.declare_parameter('light_max_offset_height_ratio', 3.5)
         self.declare_parameter('sign_max_offset_height_ratio', 5.0)
-        self.declare_parameter('fork_max_offset_height_ratio', 10.0)
+        self.declare_parameter('fork_max_offset_height_ratio', 13.0)
         for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
                             ('sign_min_height', 14), ('light_min_height', 8),
