@@ -36,7 +36,10 @@ static_avoid:
     # every path blocked for stuck_time: one search of curvature-limited three-arc paths (escape_*),
     # the best free one driven slowly to its end (1113 auto 05: 14 s stopped where only a quick
     # swerve went through)
-    escape: true
+    # OFF since 2026-11-13 until the heading limit along the whole path and a recovery cap land: on the car
+    # (with reverse) an escape path turned the car ~90 deg across the lanes and it left the track. Stuck
+    # now means stop and wait. recovery_reverse stays off too (full.launch avoid_reverse).
+    escape: false
     escape_margin: 0.03          # m of clearance more than safety for an escape path
     outside_margin: 0.10         # m past the yellow lines: hits dropped once the lanes are measured
     # painted island. Fallback when the entry line was not seen, from the point the mission started:

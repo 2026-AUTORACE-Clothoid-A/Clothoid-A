@@ -19,7 +19,8 @@ Static obstacle avoidance (`use_avoid`, clothoid_lidar/avoid.launch.py: limo_ext
 reads the camera at 10 Hz when `use_image_10hz:=true` (default), else every 3rd raw frame.
 `ignore_cone:=true` keeps it running while the cone course is active (test track only: after the cones
 it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_debug_heavy` are its `reverse` /
-`debug_heavy`.
+`debug_heavy`. Keep `avoid_reverse` off: on the car it backed across the lanes and left the track (2026-11-13);
+the escape paths are off in static_avoid.yaml (`escape: false`) for the same reason.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
