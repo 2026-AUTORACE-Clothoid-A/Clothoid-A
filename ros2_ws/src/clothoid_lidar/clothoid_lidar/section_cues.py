@@ -123,6 +123,11 @@ class Crossing:
     odometer: float               # m, where base_link crossed the line
     heading: float                # rad, heading estimate from the last sighting
     t: float
+    # the static obstacle section's start line: the pair of white dashed lane lines (one lane
+    # width apart) starts there. None until decided (see EntryLineTracker.is_start)
+    start: Optional[bool] = None
+    pairs: str = ''               # 'k/n' frames with the pair around the line, for the log
+    where: str = ''               # course map position, when the course map decides
 
 
 class EntryLineTracker:
@@ -152,6 +157,24 @@ class EntryLineTracker:
         self.last: Optional[Tuple[float, float, EntryLine]] = None   # (t, odometer, line)
         self.count = 0                         # sightings of the line in self.last
         self.crossings: List[Crossing] = []
+        # the section's start line among all the white cross lines (every mission has start / end
+        # lines, the crosswalks too): the pair of dashed lane lines one lane width apart is seen from
+        # start_near[0] to start_near[1] m around it in at least start_ratio of start_frames+ frames,
+        # and was not start_before m before it (where frames exist: a line inside the section, its
+        # end ~5.2 m on). The 33 section bags 11-08~11-13: 33 start lines confirmed, every crosswalk
+        # and end line not. The whole-course bags also confirm lines at the slow zone, the zigzag /
+        # diamond marks and the parking area (white lines 0.5 m apart there too); they matter only
+        # if the avoidance starts there, which is a false start anyway. No "no new start line within
+        # 7 m of one" rule: the zigzag line at 9.9 m hid the real one at 14.1 m
+        self.start_near = (-0.7, 0.8)
+        self.start_before = (-2.0, -1.0)
+        self.start_ratio = 0.30
+        self.start_before_max = 0.10
+        self.start_frames = 5
+        self.pairs: List[Tuple[float, bool]] = []   # (odometer, pair seen)
+        # set by the caller with the course map on: crossing -> start line? (None: not yet known);
+        # the lane-line pair is then not looked for
+        self.start_by_map = None
 
     def update(self, t: float, odometer: float, line: Optional[EntryLine]) -> Optional[Crossing]:
         if line is not None:
@@ -181,17 +204,70 @@ class EntryLineTracker:
         self.crossings = [x for x in self.crossings if odometer - x.odometer <= self.keep]
         return c
 
-    def recent(self, odometer: float, max_back: float, max_ahead: float = 1.0) -> Optional[Crossing]:
+    def wants_pairs(self, odometer: float) -> bool:
+        """The lane-line pair is looked for only around white cross lines (5 ms a frame on the PC)."""
+        if self.last is not None:
+            return True
+        return any(-1.0 <= odometer - c.odometer <= self.start_near[1] + 0.1 and c.start is None
+                   for c in self.crossings[-3:])
+
+    def observe_pair(self, odometer: float, seen: bool) -> List[Crossing]:
+        """One frame's answer at its odometer; returns the crossings decided by it."""
+        self.pairs.append((odometer, seen))
+        self.pairs = [q for q in self.pairs if odometer - q[0] <= self.keep]
+        return [c for c in self.crossings if c.start is None and self.is_start(c, odometer) is not None]
+
+    def is_start(self, c: Crossing, odometer: float) -> Optional[bool]:
+        if c.start is not None:
+            return c.start
+        if self.start_by_map is not None:
+            c.start = self.start_by_map(c)
+            return c.start
+        near = [v for o, v in self.pairs if self.start_near[0] <= o - c.odometer <= self.start_near[1]]
+        before = [v for o, v in self.pairs if self.start_before[0] <= o - c.odometer <= self.start_before[1]]
+        c.pairs = '%d/%d' % (sum(near), len(near))
+        if len(before) >= 3 and sum(before) / len(before) > self.start_before_max:
+            c.start = False
+        elif len(near) >= self.start_frames and sum(near) / len(near) >= self.start_ratio:
+            c.start = True
+        elif odometer - c.odometer > self.start_near[1]:
+            c.start = False
+        return c.start
+
+    def recent(self, odometer: float, max_back: float, max_ahead: float = 1.0,
+               start_only: bool = False) -> Optional[Crossing]:
         """The latest crossing at most max_back metres behind the car, or already seen but still up
         to max_ahead metres ahead of it (the base crosses it soon). A line seen ahead wins over an
         older one behind: in the 1108 bags the stop line before the corner is 1.7 m before the entry
         line, and the start often comes just before the entry line."""
         best = None
         for c in self.crossings:
+            if start_only and c.start is not True:
+                continue
             if -max_ahead <= odometer - c.odometer <= max_back:
                 if best is None or c.odometer > best.odometer:
                     best = c
         return best
+
+
+def dashed_pair(obs: Optional['LaneObservation'], lane_width: float, tol: float = 0.08) -> bool:
+    """Two white lines along the road one lane width apart (the three-lane section's dividers)."""
+    if obs is None:
+        return False
+    ys = sorted(ln.y0 for ln in obs.lines if ln.colour == 'white')
+    return any(abs(b - a - lane_width) <= tol for i, a in enumerate(ys) for b in ys[i + 1:])
+
+
+def check_start_line(entry: 'EntryLineTracker', bgr, cam, colours, odometer: float,
+                     lane_width: float) -> List[Crossing]:
+    """Feed one frame to the start-line check (only near white cross lines); the crossings it
+    decided. With the course map the crossings are decided by their position, no image work."""
+    if entry.start_by_map is not None:
+        return [c for c in entry.crossings if c.start is None and entry.is_start(c, odometer) is not None]
+    if not entry.wants_pairs(odometer):
+        return []
+    obs = find_lane_lines(bgr, cam, colours, 0.0, math.radians(25.0), white_only=True)
+    return entry.observe_pair(odometer, dashed_pair(obs, lane_width))
 
 
 @dataclass

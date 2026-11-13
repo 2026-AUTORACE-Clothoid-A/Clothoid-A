@@ -92,7 +92,38 @@ class AvoidParams:
     # past the entry line, something in lane 2 from here on is the island's sign stand, not a LIMO:
     # lane_main takes the car into A / B there (1108 run 4 started on it)
     island_object_margin: float = 0.25
-    entry_late_max: float = 1.2       # m: an entry line crossed after the start must be this close
+    # course map (/imu yaw + /odom distance from where the node started: the race start, heading +x,
+    # as docs 1105 map_03 / 1114 maps_1114): the section's start line is the white line crossed within
+    # start_line_radius of start_line_xy, heading start_line_heading_deg +- tol. Before the section the
+    # car stays on the course, so the lines of the slow zone, the zigzag marks, the crosswalks and
+    # the parking area are told apart by where they are. Replays from the race start (1114 x3, 1112
+    # whole course x2): the real line at x 8.07~8.32, y -4.25~-4.80, heading -172~180 deg, the
+    # nearest other line 0.98 m away heading -92 deg (the crosswalk). Off: the dashed lane-line pair decides (a start
+    # away from the race start, e.g. the avoid-only tests from the crosswalk)
+    course_map: bool = False
+    start_line_x: float = 8.25
+    start_line_y: float = -4.65
+    start_line_radius: float = 1.0
+    start_line_heading_deg: float = 180.0
+    start_line_heading_tol_deg: float = 35.0
+    # the map's heading is snapped to the track axes on straights: a mean heading over course_straight
+    # m that varied less than course_straight_spread_deg (lane following, no turn, no lane change)
+    # and lies within course_snap_max_deg of a multiple of 90 deg is made that multiple (the car set
+    # down 3 deg off at the start puts the line 0.7 m off at 14 m; the IMU drifts). Not while avoiding
+    course_straight: float = 1.5
+    course_straight_spread_deg: float = 6.0
+    course_snap_max_deg: float = 15.0
+    # no start line confirmed by the map although the car came within start_line_radius of the point
+    # and is course_fallback_past m further off again, or the odometer passed start_line_odometer by
+    # course_fallback_odometer: the dashed lane-line pair decides from then on (a wrong start pose)
+    course_fallback_past: float = 1.0
+    start_line_odometer: float = 14.2
+    course_fallback_odometer: float = 3.0
+    # m: a start line crossed after the start must be this close. Only lines confirmed as the
+    # section's start line by the lane-line pair (section_cues.EntryLineTracker.is_start) count, so
+    # this is a sanity bound (it was 1.2 m when any white line counted: 1108 run 4 took a line on
+    # the A / B road for it)
+    entry_late_max: float = 3.0
     fork_commit: float = 2.0          # m travelled before the A/B lane is pulled hard without a flag
     # costmap
     resolution: float = 0.02
@@ -252,6 +283,7 @@ class PoseTracker:
         self.yaw: Optional[float] = None
         self.last_t: Optional[float] = None
         self.x = self.y = 0.0
+        self.course: Optional['CourseMap'] = None   # fed every step when the course map is on
         self.speed = 0.0
         self.distance = 0.0           # odometer, m
         self.last_pos: Optional[Tuple[float, float]] = None   # /odom position of the last message
@@ -313,6 +345,8 @@ class PoseTracker:
             self.y += step * math.sin(self.yaw)
             self.distance += step
         self.last_t = t
+        if self.course is not None:
+            self.course.step(self.distance, step or 0.0, self.yaw)
         self.trace.append((t, self.x, self.y, self.yaw))
         self.dtrace.append((t, self.distance))
         while self.trace and self.trace[0][0] < t - self.history:
@@ -339,6 +373,19 @@ class PoseTracker:
                 bd.pop(0)
             while bd and bd[-1][0] > self.distance + self.distance_history:
                 bd.pop()
+
+    def line_pose(self, odometer: float, ahead_max: float = 1.5) -> Optional[Tuple[float, float, float]]:
+        """Pose where the odometer reads `odometer`: from the history, or for a line still ahead (up
+        to ahead_max) straight on from the latest pose. A start line confirmed 0.5 m ahead must count
+        for a retry before the base reaches it (parking_1112_201114: 1.1 m late)."""
+        pose = self.at_distance(odometer)
+        if pose is not None or not self.trace:
+            return pose
+        ahead = odometer - self.distance
+        if not 0.0 < ahead <= ahead_max:
+            return None
+        x, y, yaw = self.latest()
+        return x + ahead * math.cos(yaw), y + ahead * math.sin(yaw), yaw
 
     def at_distance(self, odometer: float) -> Optional[Tuple[float, float, float]]:
         """Pose where the odometer read `odometer` (1 cm steps), None outside the kept range."""
@@ -825,6 +872,118 @@ def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
                 feasible=feasible)
 
 
+class CourseMap:
+    """The race course as /imu yaw + /odom distance from where the node started (the race start,
+    heading +x; docs: 1105 map_03, 1114 maps_1114), its heading snapped to the track axes on straights
+    (AvoidParams.course_*). Poses by odometer for the start line check; `frozen` while avoiding."""
+
+    def __init__(self, p: AvoidParams):
+        self.p = p
+        self.h0: Optional[float] = None       # IMU yaw at the start
+        self.off = 0.0                        # rad, heading correction from the straights
+        self.x = self.y = self.h = 0.0
+        self.hist: List[Tuple[float, float, float, float]] = []   # (odometer, x, y, heading)
+        self.win: List[Tuple[float, float, float, float]] = []    # the same over the last straight
+        self.frozen = False
+        self.snaps: List[Tuple[float, float]] = []                # (odometer, deg) for the log
+        self.min_far = math.inf
+        self.fell_back = False
+
+    def step(self, odometer: float, step: float, yaw: float) -> None:
+        if yaw is None:
+            return
+        if self.h0 is None:
+            self.h0 = yaw
+            self.hist.append((odometer, 0.0, 0.0, 0.0))
+            return
+        self.h = wrap(yaw - self.h0 - self.off)
+        self.x += step * math.cos(self.h)
+        self.y += step * math.sin(self.h)
+        if odometer > self.hist[-1][0] + 0.01:
+            self.hist.append((odometer, self.x, self.y, self.h))
+        self._snap(odometer)
+
+    def _snap(self, odometer: float) -> None:
+        p = self.p
+        if self.frozen:
+            self.win = []
+            return
+        self.win.append((odometer, self.x, self.y, self.h))
+        if odometer - self.win[0][0] < p.course_straight:
+            return
+        while odometer - self.win[1][0] >= p.course_straight:
+            self.win.pop(0)
+        hs = np.unwrap([q[3] for q in self.win])
+        if np.ptp(hs) > math.radians(p.course_straight_spread_deg):
+            return
+        mean = float(np.mean(hs))
+        axis = round(mean / (math.pi / 2)) * (math.pi / 2)
+        err = wrap(mean - axis)
+        if abs(err) > math.radians(p.course_snap_max_deg) or abs(err) < math.radians(0.2):
+            return
+        # this straight lies along `axis`: turn what was driven on it about its first point
+        ox, oy = self.win[0][1], self.win[0][2]
+        c, sn = math.cos(-err), math.sin(-err)
+        dx, dy = self.x - ox, self.y - oy
+        self.x, self.y = ox + c * dx - sn * dy, oy + sn * dx + c * dy
+        self.off += err
+        self.h = wrap(self.h - err)
+        self.snaps.append((odometer, math.degrees(err)))
+        self.win = [(odometer, self.x, self.y, self.h)]
+
+    def pose_at(self, odometer: float, ahead_max: float = 1.5) -> Optional[Tuple[float, float, float]]:
+        """Map pose where the odometer read `odometer`; a line still ahead straight on from now."""
+        if not self.hist:
+            return None
+        last = self.hist[-1][0]
+        if odometer > last:
+            ahead = odometer - last
+            if ahead > ahead_max:
+                return None
+            return self.x + ahead * math.cos(self.h), self.y + ahead * math.sin(self.h), self.h
+        keys = [q[0] for q in self.hist]
+        k = bisect.bisect_left(keys, odometer)
+        if k >= len(keys) or (k > 0 and odometer - keys[k - 1] < keys[k] - odometer):
+            k -= 1
+        if abs(keys[k] - odometer) > 0.05:
+            return None
+        return self.hist[k][1:]
+
+    def should_fall_back(self, odometer: float, entry) -> Optional[str]:
+        """Give the start line over to the dashed lane-line pair? Returns the reason once."""
+        p = self.p
+        if self.fell_back or any(c.start for c in entry.crossings):
+            return None
+        far = math.hypot(self.x - p.start_line_x, self.y - p.start_line_y)
+        self.min_far = min(self.min_far, far)
+        why = None
+        if self.min_far <= p.start_line_radius and far > p.start_line_radius + p.course_fallback_past:
+            why = ('passed the start line point (%.2f m at the closest, %.2f m now) without a white '
+                   'line there' % (self.min_far, far))
+        elif odometer > p.start_line_odometer + p.course_fallback_odometer:
+            why = ('%.1f m driven, never within %.1f m of the start line point (closest %.2f m)'
+                   % (odometer, p.start_line_radius, self.min_far))
+        if why:
+            self.fell_back = True
+        return why
+
+
+def course_start_line(course: CourseMap, p: AvoidParams):
+    """EntryLineTracker.start_by_map: is a crossed white line the section's start line, by where it is
+    on the course map? None while its pose is not known yet."""
+    def check(c) -> Optional[bool]:
+        pose = course.pose_at(c.odometer)
+        if pose is None:
+            return None
+        x, y, h = pose
+        far = math.hypot(x - p.start_line_x, y - p.start_line_y)
+        turn = abs(wrap(h - math.radians(p.start_line_heading_deg)))
+        c.where = 'map (%.2f, %.2f), heading %.0f deg, %.2f m from the start line' % (
+            x, y, math.degrees(h), far)
+        return far <= p.start_line_radius and turn <= math.radians(p.start_line_heading_tol_deg)
+    return check
+
+
 def path_blocker(s0: float, costmap: 'Costmap', lane_rel: Optional['SectionFrame'],
                  island: Tuple[float, float], p: AvoidParams, margin: float = 0.0):
     """blocked(s, d, heading) per sample, lane coordinates: a footprint circle on a lethal cell (past
@@ -1003,8 +1162,11 @@ class StaticAvoid:
         if self.finished and p.one_section_per_run:
             self.blocked_scans = 0
             return False
+        # a new section start line ahead (up to 1 m, already confirmed) or just crossed: start as
+        # usual. Waiting until the base crossed it started 0.4~0.6 m after it, 0.6 m from the
+        # LIMO, after a wrong lock at the slow zone's lines (1114 car)
         retry = (self.locked and blocked and entry_pose is not None and entry_pose != self.lock_entry
-                 and entry_back is not None and 0.0 <= entry_back <= p.entry_max_back)
+                 and entry_back is not None and -1.0 <= entry_back <= p.entry_max_back)
         if self.locked and not retry:
             self.blocked_scans = 0
             return False
@@ -1526,7 +1688,7 @@ class LaneFitter:
         # turning hard (still in the corner): the lines' angle and the heading at that instant do not
         # go together well enough for the direction (1112 run 02: -37.8 deg)
         steady = rate is None or abs(rate) <= math.radians(p.lane_ref_rate_max_deg)
-        c = entry.recent(odometer, p.lane_fit_give_up, 0.0)
+        c = entry.recent(odometer, p.lane_fit_give_up, 0.0, start_only=True)
         if c is not None and c.odometer != self.closed:
             entry_pose = tracker.at_distance(c.odometer)
             if entry_pose is not None:

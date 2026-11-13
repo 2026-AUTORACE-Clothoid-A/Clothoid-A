@@ -19,7 +19,9 @@ Static obstacle avoidance (`use_avoid`, clothoid_lidar/avoid.launch.py: limo_ext
 reads the camera at 10 Hz when `use_image_10hz:=true` (default), else every 3rd raw frame.
 `ignore_cone:=true` keeps it running while the cone course is active (test track only: after the cones
 it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_debug_heavy` are its `reverse` /
-`debug_heavy`. Keep `avoid_reverse` off: on the car it backed across the lanes and left the track (2026-11-13);
+`debug_heavy`. `avoid_course_map` (default true): static_avoid tells the section's start line by its
+place on the /imu + /odom course map, so launch at the race start (false when starting elsewhere).
+Keep `avoid_reverse` off: on the car it backed across the lanes and left the track (2026-11-13);
 the escape paths are off in static_avoid.yaml (`escape: false`) for the same reason.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
@@ -86,6 +88,10 @@ def generate_launch_description():
                               description='/camera/color/image_10hz (topic_tools throttle); static_avoid reads it'),
         DeclareLaunchArgument('ignore_cone', default_value='false',
                               description='static_avoid keeps running while the cone course is active (test track)'),
+        DeclareLaunchArgument('avoid_course_map', default_value='true',
+                              description='static_avoid finds the section start line by its place on the '
+                                          '/imu + /odom course map: launch at the race start; false when '
+                                          'starting elsewhere (then the dashed lane-line pair decides)'),
         DeclareLaunchArgument('avoid_reverse', default_value='false',
                               description='static_avoid backs up 0.2 m when every path stays blocked'),
         DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
@@ -119,6 +125,7 @@ def generate_launch_description():
                                             "'.lower() == 'true' else 'raw'"]),
                  'ignore_cone': LaunchConfiguration('ignore_cone'),
                  'reverse': LaunchConfiguration('avoid_reverse'),
+                 'course_map': LaunchConfiguration('avoid_course_map'),
                  'debug_heavy': LaunchConfiguration('avoid_debug_heavy')}, enabled('use_avoid')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         # after /parking_done: left yellow line to the end line (needs the camera)
