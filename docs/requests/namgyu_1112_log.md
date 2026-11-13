@@ -8,6 +8,8 @@
 
 ## 1. mission: 표지판 `IGNORED` 로그가 실제 탈락 이유와 다름
 
+> **2026-11-14 처리됨 (세션 A, `feature/fork-sign`):** 로그가 탈락 단계(size / offset / conf / h / edge / hits n/m)와 conf·박스를 찍는다. 클래스마다 1초에 한 줄, 판정이 바뀌면 바로. `sign_left` / `sign_right`도 찍고, 방향이 정해질 때 `fork: direction ...` 한 줄. 갈림길 표지판만 0.5 s 안 2프레임으로 확정(`fork_confirm_hits: 2`).
+
 ### 증상
 ```
 [mission]: [PARKING] sign_parking IGNORED (area=7632px^2, h=159px < min_area=2500, min_h=40)

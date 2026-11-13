@@ -16,6 +16,9 @@ mission:
     fork_max_offset_height_ratio: 10.0  # sign_left / sign_right; initial track setting
     # Confirm on distinct YOLO frames; timer ticks never count as new evidence.
     detection_confirm_hits: 3
+    # Fork signs (sign_left / sign_right) confirm on 2 frames within detection_max_age: small (~20 px)
+    # and seen between the static obstacles (1114: never confirmed with 3, the car took the default road).
+    fork_confirm_hits: 2
     detection_window: 5
     detection_max_age: 0.5
     detection_confidence: 0.6

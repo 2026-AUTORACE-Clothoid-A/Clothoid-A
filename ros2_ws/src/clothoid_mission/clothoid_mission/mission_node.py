@@ -42,6 +42,8 @@ from clothoid_mission.mission_logic import (
 # FinishCore phase -> what mission_logic expects
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
               Phase.STOP: 'arrived', Phase.ABORT: 'abort'}
+FORK_SIGNS = ('sign_left', 'sign_right')
+DIRECTION_NAMES = {0: 'left lane', 1: 'right lane', 2: 'both'}
 
 
 class MissionNode(Node):
@@ -93,7 +95,7 @@ class MissionNode(Node):
         for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
                             ('sign_min_height', 14), ('light_min_height', 8),
-                            ('detection_edge_margin', 2)]:
+                            ('detection_edge_margin', 2), ('fork_confirm_hits', 2)]:
             self.declare_parameter(name, value)
 
         d = MissionParams()
@@ -131,7 +133,8 @@ class MissionNode(Node):
             hits=get('detection_confirm_hits'), window=get('detection_window'),
             max_age=get('detection_max_age'), confidence=get('detection_confidence'),
             sign_height=get('sign_min_height'), light_height=get('light_min_height'),
-            edge_margin=get('detection_edge_margin'))
+            edge_margin=get('detection_edge_margin'),
+            class_hits={name: get('fork_confirm_hits') for name in FORK_SIGNS})
         self.logic = MissionLogic(MissionParams(
             slow_speed=get('slow_speed'),
             slow_hold_sec=get('slow_hold_sec'),
@@ -154,6 +157,8 @@ class MissionNode(Node):
             cone_confirm_sec=get('cone_confirm_sec')))
 
         self.seen, self.seen_time = set(), None
+        self.direction_logged = None
+        self.sign_logged = {}            # class -> (last log time, verdict): one line per class per second
         self.stopline, self.stopline_time = False, None
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
@@ -235,22 +240,40 @@ class MissionNode(Node):
             width=self.warp.width, height=self.warp.height)
         self.seen_time = self.now_sec()
 
-        # Log sign bbox size for easy on-track tuning
+        # one throttled line per sign class: confirmed, or the first check it failed
+        now = self.now_sec()
         for d in msg.detections:
-            if d.class_name in min_sizes:
-                min_area, min_h = min_sizes[d.class_name]
-                w = max(0, d.x_max - d.x_min)
-                h = max(0, d.y_max - d.y_min)
-                area = float(w * h)
-                tag = d.class_name.upper().replace('SIGN_', '')
-                if d.class_name in self.seen:
-                    self.get_logger().info(
-                        f'[{tag}] {d.class_name} ARMED (area={area:.0f}px^2, h={h}px >= min_area={min_area:.0f}, min_h={min_h:.0f})',
-                        throttle_duration_sec=1.0)
-                else:
-                    self.get_logger().info(
-                        f'[{tag}] {d.class_name} IGNORED (area={area:.0f}px^2, h={h}px < min_area={min_area:.0f}, min_h={min_h:.0f})',
-                        throttle_duration_sec=1.0)
+            if d.class_name in min_sizes or d.class_name in FORK_SIGNS:
+                self._log_sign(d, now, accepted, min_sizes)
+
+    def _log_sign(self, d, now, accepted, min_sizes):
+        name = d.class_name
+        w, h = max(0, d.x_max - d.x_min), max(0, d.y_max - d.y_min)
+        area = float(w * h)
+        limit = self.get_parameter('fork_max_offset_height_ratio' if name in FORK_SIGNS
+                                   else 'sign_max_offset_height_ratio').value
+        ratio = abs((d.x_min + d.x_max) / 2.0 - self.cam.cx) / h if h > 0 else float('inf')
+        gate = self.detection_gate
+        hits = f'{gate.count(d, now)}/{gate.required(name)}'
+        if name in self.seen:
+            verdict = f'ARMED (hits {hits})'
+        elif name not in accepted:
+            min_area, min_h = min_sizes.get(name, (0.0, 0.0))
+            if area < min_area or h < min_h:
+                verdict = f'IGNORED: size (area {area:.0f} < {min_area:.0f} or h {h} < {min_h:.0f})'
+            else:
+                verdict = f'IGNORED: offset {ratio:.1f} x h > {limit:.1f}'
+        else:
+            reason = gate.box_reason(d, self.warp.width, self.warp.height)
+            verdict = f'IGNORED: {reason}' if reason else f'IGNORED: hits {hits} within {gate.max_age:.1f} s'
+        last = self.sign_logged.get(name)
+        if last is not None and now - last[0] < 1.0 and last[1] == verdict.split(' (')[0]:
+            return
+        self.sign_logged[name] = (now, verdict.split(' (')[0])
+        tag = name.upper().replace('SIGN_', '')
+        self.get_logger().info(
+            f'[{tag}] {name} {verdict} (conf {d.confidence:.2f}, h {h}px, area {area:.0f}px^2, '
+            f'offset {ratio:.1f} x h, box {d.x_min},{d.y_min},{d.x_max},{d.y_max})')
 
     def on_stopline(self, msg: Bool):
         self.stopline, self.stopline_time = msg.data, self.now_sec()
@@ -430,6 +453,11 @@ class MissionNode(Node):
             self.cmd_pub.publish(Twist())   # zero command
         if out.speed_limit is not None:
             self.limit_pub.publish(Float32(data=float(out.speed_limit)))
+        if out.direction is not None and out.direction != self.direction_logged:
+            sign = next((n for n in FORK_SIGNS if n in self.seen), 'earlier sign')
+            self.get_logger().info(f'fork: direction {out.direction} '
+                                   f'({DIRECTION_NAMES.get(out.direction, "?")}) from {sign}')
+            self.direction_logged = out.direction
         if out.direction is not None:
             self._publish_changed('direction', out.direction,
                                   lambda v: self.direction_pub.publish(Int32(data=int(v))))
