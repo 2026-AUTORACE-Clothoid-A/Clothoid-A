@@ -59,22 +59,45 @@ class ParkingLandmark:
         line = find_line(bgr, gx, gy, roi)
         if line is None or not self.p.near <= line['rho'] <= self.p.far:
             return None
-        n = np.array([math.cos(line['angle']), math.sin(line['angle'])])
-        edge = np.asarray(line['corners'][0 if self.p.side < 0 else 1])
-        # Optional independent check using the existing lane detector's ground points.
-        if lane_points is not None:
-            usable = []
-            for points in lane_points:
-                points = np.asarray(points)
-                if len(points) < 4 or np.ptp(points @ n) < .18:
-                    continue
-                _, vec = np.linalg.eigh(np.cov(points.T))
-                direction = vec[:, -1]
-                usable.append(abs(float(direction @ n)) > math.cos(math.radians(12)))
-            if not usable or not all(usable):
-                return None
+        road = road_heading(line, lane_points, self.p.side)
+        if road is None:
+            return None
+        angle, edge = road
+        n = np.array([math.cos(angle), math.sin(angle)])
         origin = edge + self.p.entry_to_grid*n
-        return dict(line, origin=origin.tolist())
+        return dict(line, stripe_angle=line['angle'], angle=angle, origin=origin.tolist())
+
+
+def road_heading(stripe, lane_points, side=-1.):
+    """Two parallel road boundaries supply heading; the stripe supplies distance.
+
+    A single edge or two conflicting lines cannot create a new parking frame.
+    These are camera observations sharing one calibration, not independent GT.
+    """
+    segments = fit_boundary_segments([] if lane_points is None else lane_points)
+    if len(segments) != 2:
+        return None
+    directions = [q[1]-q[0] for q in segments]
+    angles = np.array([math.atan2(v[1], v[0]) for v in directions])
+    # Same angular consistency scale as the registered parking layout (0.07 rad).
+    if np.ptp(angles) > .07:
+        return None
+    angle = float(np.mean(angles))
+    if abs(angle-stripe['angle']) > math.radians(12):
+        return None
+    n = np.array([math.cos(angle), math.sin(angle)])
+    stripe_normal = np.array([math.cos(stripe['angle']), math.sin(stripe['angle'])])
+    centres = [q.mean(axis=0) for q in segments]
+    edges = [c+(stripe['rho']-c@stripe_normal)/(n@stripe_normal)*n for c in centres]
+    lateral = np.array([-n[1], n[0]])
+    edges.sort(key=lambda q: float(q@lateral))
+    if abs(float((edges[1]-edges[0])@lateral)-PARKING_GEOMETRY.boundary_spacing) > .07:
+        return None
+    edge = edges[0 if side < 0 else 1]
+    old_edge = np.asarray(stripe['corners'][0 if side < 0 else 1])
+    if np.linalg.norm(edge-old_edge) > .07:
+        return None
+    return angle, edge
 
 
 def find_line(im, gx, gy, roi):

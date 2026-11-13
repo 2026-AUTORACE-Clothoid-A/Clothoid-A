@@ -1,3 +1,11 @@
+Observed road-line heading (2026-11-14)
+--------------------------------------
+Initial registration now requires two parallel, separated measured road lines.
+Their direction sets parking yaw; intersection with the observed transverse
+stripe determines entry position. The stripe remains a consistency check but
+its normal no longer alone sets yaw. Existing multi-frame layout confirmation
+still applies.
+
 Parking stage model and pre-control alignment
 --------------------------------------------
 The RViz model includes the parking-entry stop stripe, both straight road
