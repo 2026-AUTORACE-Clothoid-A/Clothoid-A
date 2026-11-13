@@ -81,6 +81,7 @@ class MissionNode(Node):
         self.declare_parameter('parking_sign_topic', '/parking_sign')
         # one stop line right in front (clothoid_lane stopline node): where parking starts
         self.declare_parameter('parking_line_topic', '/stopline_near')
+        self.declare_parameter('cone_active_topic', '/cone/mission_active')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line / imu older than this are dropped
@@ -120,6 +121,8 @@ class MissionNode(Node):
         self.declare_parameter('fork_left_direction', d.fork_left_direction)
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
+        self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
+        self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.detection_gate = DetectionGate(
@@ -143,12 +146,16 @@ class MissionNode(Node):
             approach_speed=get('approach_speed'),
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction'),
-            parking_at_stopline=get('parking_at_stopline')))
+            parking_at_stopline=get('parking_at_stopline'),
+            require_cone_for_parking=get('require_cone_for_parking'),
+            block_bump_after_cone=get('block_bump_after_cone')))
 
         self.seen, self.seen_time = set(), None
         self.stopline, self.stopline_time = False, None
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
+        self.cone_active = False
+        self.cone_entered_logged = False
         self.sign_time = None            # last /parking_sign true
         self.line, self.line_time = False, None
         self.parking_log = (False, False)
@@ -169,6 +176,7 @@ class MissionNode(Node):
         self.mission_state_pub = self.create_publisher(String, get('state_topic'), 1)
         self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
         self.create_subscription(Bool, get('parking_line_topic'), self.on_parking_line, 1)
+        self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
@@ -351,6 +359,9 @@ class MissionNode(Node):
     def on_parking_done(self, msg: Bool):
         self.parking_done = msg.data
 
+    def on_cone_active(self, msg: Bool):
+        self.cone_active = bool(msg.data)
+
     def _fresh(self, stamp) -> bool:
         return stamp is not None and self.now_sec() - stamp <= self.get_parameter(
             'input_timeout').value
@@ -379,7 +390,11 @@ class MissionNode(Node):
             line_phase=line_phase,
             line_speed=self.line_speed,
             parking_done=self.parking_done,
-            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None))
+            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
+            cone_active=self.cone_active))
+        if self.logic.cone_entered and not self.cone_entered_logged:
+            self.cone_entered_logged = True
+            self.get_logger().info('cone course entered: parking unlocked, bump blocked')
         self.line_speed = self.line_stop_step(now, out.stop_arm)
         armed = [n for n, a in (('pedestrian', self.logic.pedestrian_armed_at),
                                 ('light', self.logic.light_armed_at)) if a is not None]
@@ -387,6 +402,7 @@ class MissionNode(Node):
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
         self.mission_state_pub.publish(String(data=json.dumps({
             'state': out.state, 'armed': armed,
+            'cone_entered': self.logic.cone_entered,
             'seen': sorted(seen),
             'line_phase': None if core is None else LINE_PHASE[core.phase],
             'remaining': None if left is None else round(left, 4),

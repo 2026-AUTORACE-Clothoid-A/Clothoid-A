@@ -15,6 +15,7 @@ def run(logic, now, *seen, stopline=False, line=False, phase=None, speed=None):
 
 def flag_params(**kw):
     """2025 behaviour: stop on the stripe flag (the scenarios below were written for it)."""
+    kw.setdefault('require_cone_for_parking', False)
     return MissionParams(use_stop_line=False, **kw)
 
 
@@ -153,3 +154,23 @@ def test_search_without_a_line_expires():
     logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
     run(logic, 0.0, 'sign_pedestrian')
     assert not run(logic, 9.0, phase='search').stop_arm
+
+
+def test_cone_gate_blocks_parking_before_cone_and_unlocks_after():
+    logic = MissionLogic(MissionParams(parking_at_stopline=False))
+    # Seen near the bump / start before cone course: ignored
+    assert not logic.step(Inputs(now=0.0, seen={'sign_parking'})).parking_flag
+    assert not logic.parking_armed
+    # Enter cone course, then leave cone course: parking stays unlocked
+    logic.step(Inputs(now=1.0, cone_active=True))
+    assert not logic.step(Inputs(now=2.0, cone_active=False)).parking_flag
+    assert logic.step(Inputs(now=3.0, seen={'sign_parking'}, cone_active=False)).parking_flag
+
+
+def test_cone_gate_blocks_bump_after_cone_entry():
+    logic = MissionLogic(MissionParams(slow_speed=0.2))
+    # Before cone: bump arms normally and clears any approaching state when cone starts
+    assert logic.step(Inputs(now=0.0, seen={'sign_bump'})).speed_limit == 0.2
+    assert logic.step(Inputs(now=1.0, cone_active=True)).speed_limit is None
+    # After cone: sign_bump is ignored even after cone_active returns False
+    assert logic.step(Inputs(now=2.0, seen={'sign_bump'}, cone_active=False)).speed_limit is None
