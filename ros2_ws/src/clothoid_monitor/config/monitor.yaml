@@ -1,0 +1,25 @@
+clothoid_monitor_node:
+  ros__parameters:
+    web_host: "0.0.0.0"
+    web_port: 5000
+    page_title: "Clothoid-A Monitor"
+    image_topic: "/camera/color/image_raw"
+    lane_topic: "/lane/debug_image"
+    yolo_topic: "/yolo/debug_image"
+    lidar_topic: "/scan"
+    lidar_max_range: 3.0
+    control_topic: "/cmd_vel_lane"
+    battery_topic: "/battery_state"
+    debug_image: true
+    auto_enable_debug: true
+    auto_debug_nodes:
+      - "lane_main"
+      - "yolo"
+    refresh_interval_ms: 500
+    image_refresh_interval_ms: 100
+    param_target_nodes:
+      - "lane_main"
+      - "clothoid_mission"
+      - "limo_base"
+      - "clothoid_finish"
+      - "yolo"

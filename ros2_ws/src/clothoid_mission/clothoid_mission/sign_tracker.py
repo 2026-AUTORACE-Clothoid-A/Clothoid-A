@@ -48,9 +48,12 @@ class SignTrack:
 class SignTracker:
     def __init__(self, hits=3, window=5, max_age=.5, retention=2., confidence=.6,
                  sign_height=14, light_height=8, edge_margin=2, max_tracks=32,
-                 match_gate=1., scale_ratio=3.):
+                 match_gate=1., scale_ratio=3., class_hits=None):
         if not 1 <= hits <= window or max_age <= 0 or retention < max_age or max_tracks < 1:
             raise ValueError('invalid tracker window, age or capacity')
+        self.class_hits = dict(class_hits or {})
+        if any(not 1 <= value <= window for value in self.class_hits.values()):
+            raise ValueError('invalid per-class hit count')
         self.hits, self.window, self.max_age = hits, window, max_age
         self.retention, self.confidence = retention, confidence
         self.sign_height, self.light_height, self.edge_margin = sign_height, light_height, edge_margin
@@ -82,16 +85,27 @@ class SignTracker:
         dx, dy = abs(ac[0] - bc[0]) / sx, abs(ac[1] - bc[1]) / max(a.height, b.height)
         return dx + dy if dx <= self.match_gate and dy <= self.match_gate else None
 
+    def required(self, name):
+        return self.class_hits.get(name, self.hits)
+
+    def box_reason(self, d, width=640, height=480):
+        minimum = self.light_height if family(d.class_name) == 'traffic_light' else self.sign_height
+        if d.confidence < self.confidence:
+            return f'conf {d.confidence:.2f} < {self.confidence:.2f}'
+        if d.x_max <= d.x_min or d.y_max-d.y_min < minimum:
+            return f'invalid width or h {d.y_max-d.y_min} < {minimum}'
+        if (d.x_min < self.edge_margin or d.y_min < self.edge_margin or
+                d.x_max > width-self.edge_margin or d.y_max > height-self.edge_margin):
+            return 'edge'
+        return None
+
     def _boxes(self, detections, width, height):
         boxes = []
         for d in detections:
             if not (d.class_name.startswith('sign_') or d.class_name.startswith('traffic_light_')):
                 continue
             b = Observation(d.class_name, float(d.confidence), d.x_min, d.y_min, d.x_max, d.y_max)
-            minimum = self.light_height if family(b.class_name) == 'traffic_light' else self.sign_height
-            if (b.confidence >= self.confidence and b.width > 0 and b.height >= minimum and
-                    b.x_min >= self.edge_margin and b.y_min >= self.edge_margin and
-                    b.x_max <= width - self.edge_margin and b.y_max <= height - self.edge_margin):
+            if self.box_reason(b, width, height) is None:
                 boxes.append(b)
         # One physical light may be returned twice with different colours. Conflicting
         # overlapping colours are unknown, rather than a green permission to depart.
@@ -154,7 +168,7 @@ class SignTracker:
             t.box, t.last_seen = b, stamp
             t.hits = sum(name == b.class_name for old, name in t.history
                          if 0 <= stamp - old <= self.max_age)
-            t.confirmed = t.hits >= self.hits and b.class_name != 'traffic_light_unknown'
+            t.confirmed = t.hits >= self.required(b.class_name) and b.class_name != 'traffic_light_unknown'
             if t.confirmed:
                 confirmed.append(t)
         return confirmed

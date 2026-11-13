@@ -40,7 +40,7 @@ class LatencyMonitor(Node):
             '/camera/color/image_raw', '/scan', '/lidar/obstacles', '/detections'])
         self.declare_parameter('cmd_topics', [
             '/cmd_vel_lane=/camera/color/image_raw', '/cmd_vel_state=/camera/color/image_raw',
-            '/cmd_vel_parking=/camera/color/image_raw', '/cmd_vel_avoid=/scan',
+            '/cmd_vel_parking=/camera/color/image_raw', '/cmd_vel_cone=/scan', '/cmd_vel_avoid=/scan',
             '/cmd_vel_teleop='])
         self.declare_parameter('mux_output_topic', '/cmd_vel')
         self.declare_parameter('report_sec', 5.0)

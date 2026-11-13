@@ -23,7 +23,7 @@
   │                         clothoid_mission ── cmd_vel_state ──────────► twist_mux ─ /cmd_vel ─ limo_base
   │                          │  │  /direction_flag, /parking_flag, /speed_limit      ▲   ▲
   │                          │  └──────────────► clothoid_parking ── cmd_vel_parking ┘   │
-라이다 ─ clothoid_lidar ── cmd_vel_avoid ─────────────────────────────────────────────────┘
+라이다 ─ clothoid_lidar ── cmd_vel_cone / cmd_vel_avoid ──────────────────────────────────┘
 ```
 
 ## 패키지별 현황

@@ -11,6 +11,8 @@
 | `fanout.sh <bag> <N> <out> [all]` | 아무것도 안 하는 영상 구독자 N개를 띄워 수신 비용과 받은 Hz를 잰다 |
 | `gaps.py <bag> [--split s ...] [--watch topic]` | **차 bag**의 녹화 시각으로 토픽 주기와 공백을 보고, 한 노드의 공백 동안 다른 토픽이 계속 들어왔는지 본다. `/rosout`도 출력한다 |
 | `micro.py <bag>` | bag 프레임으로 warp, HSV, detect, 역직렬화, OccupancyGrid 대입 같은 연산 하나씩의 단가를 잰다 |
+| `yolo_stages.py <bag> --model <.pt/.engine> [--rate 10] [--half]` | **차에서** yolo 한 프레임의 단계별 시간(역직렬화, BGR 변환, Ultralytics 전처리·추론·후처리)과 predict 중 CPU 시간 대 경과 시간을 잰다. ROS 없이 bag 프레임을 노드와 같은 호출로 넣는다 |
+| `transport.sh <bag> <out> [seconds]` | 형식별 수신 비용을 잰다: raw 30 Hz / 10 Hz / 320x240 / JPEG(+디코딩). `transport_pub.py`가 bag 프레임을 미리 만들어 발행하고, `transport_sub.py`가 형식마다 프로세스 하나로 받는다. **`FASTRTPS_DEFAULT_PROFILES_FILE=scripts/fastdds_local.xml`로 차와 같게 맞춘다** |
 | `env.sh` | 위 셸 스크립트들이 source한다. 경로와 `ROS_DOMAIN_ID`를 정한다 |
 
 ## 실행
@@ -32,6 +34,21 @@ source tools/load_profile/env.sh && python3 tools/load_profile/micro.py <bag>
 
 - `PROFILE_DOMAIN`(기본 77)을 `ROS_DOMAIN_ID`로 쓴다. 차와 같은 네트워크에서는 차와 다른 번호를 쓴다.
 - 측정 대상은 설치본이 아니라 **지금 체크아웃된 소스**다(`PYTHONPATH`를 소스 폴더로 잡는다).
+
+차에서 yolo:
+
+```bash
+source scripts/env_jetson.sh dl_env && source tools/load_profile/env.sh
+python3 tools/load_profile/yolo_stages.py <bag> --model ros2_ws/src/clothoid_yolo/models/best.pt            # 30 Hz처럼 연달아
+python3 tools/load_profile/yolo_stages.py <bag> --model ros2_ws/src/clothoid_yolo/models/best_fp16.engine --rate 10
+# 노드가 실제로 어디서 CPU를 쓰는지 (pip install py-spy)
+py-spy top --pid $(pgrep -f 'lib/clothoid_yolo/yolo')
+```
+
+## 측정 전에
+
+- `scripts/preflight.sh`로 남은 프로세스와 `/dev/shm` 잔여물을 확인한다. 정리는 모든 launch를 끈 뒤 `--kill`, 그다음 `--clean`.
+- **브랜치를 바꿨으면 클린 빌드한다:** `cd ros2_ws && rm -rf build install log && colcon build --symlink-install`. 다른 브랜치가 남긴 `build/` symlink 때문에 colcon이 실패하거나 옛 코드를 잴 수 있다.
 
 ## 결과를 읽을 때
 

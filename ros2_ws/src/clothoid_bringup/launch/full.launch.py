@@ -12,8 +12,17 @@ start the stopline / speed_zone nodes (off by default, see clothoid_lane/launch/
 Each part can be switched off so one person can run their package against a bag or a partial stack.
 `debug`, `backend` and `model_path` are passed on as launch arguments (never put them in a package yaml,
 see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_lidar`, `use_ekf`, `use_joint_states`,
-`require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
+`use_image_10hz`, `require_arm`, `mux_output`, `steering_scale`, `max_inner_angle`, `cmd_timeout`) are forwarded to
 `bringup.launch.py`.
+
+Static obstacle avoidance (`use_avoid`, clothoid_lidar/avoid.launch.py: limo_extractor + static_avoid)
+reads the camera at 10 Hz when `use_image_10hz:=true` (default), else every 3rd raw frame.
+`ignore_cone:=true` keeps it running while the cone course is active (test track only: after the cones
+it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_debug_heavy` are its `reverse` /
+`debug_heavy`. `avoid_course_map` (default true): static_avoid tells the section's start line by its
+place on the /imu + /odom course map, so launch at the race start (false when starting elsewhere).
+Keep `avoid_reverse` off: on the car it backed across the lanes and left the track (2026-11-13);
+the escape paths are off in static_avoid.yaml (`escape: false`) for the same reason.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
@@ -39,9 +48,10 @@ def generate_launch_description():
     def enabled(name):
         return IfCondition(LaunchConfiguration(name))
 
-    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_parking', 'use_finish', 'use_mission']
+    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_avoid', 'use_parking', 'use_finish',
+                'use_mission']
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
-                     'steering_scale', 'max_inner_angle']
+                     'use_image_10hz', 'steering_scale', 'max_inner_angle']
     debug = LaunchConfiguration('debug')
     # defaults must match bringup.launch.py
     mux_args = {'require_arm': 'false', 'mux_output': '/cmd_vel', 'cmd_timeout': '0.5'}
@@ -74,6 +84,18 @@ def generate_launch_description():
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
         DeclareLaunchArgument('use_joint_states', default_value='false'),
+        DeclareLaunchArgument('use_image_10hz', default_value='true',
+                              description='/camera/color/image_10hz (topic_tools throttle); static_avoid reads it'),
+        DeclareLaunchArgument('ignore_cone', default_value='false',
+                              description='static_avoid keeps running while the cone course is active (test track)'),
+        DeclareLaunchArgument('avoid_course_map', default_value='true',
+                              description='static_avoid finds the section start line by its place on the '
+                                          '/imu + /odom course map: launch at the race start; false when '
+                                          'starting elsewhere (then the dashed lane-line pair decides)'),
+        DeclareLaunchArgument('avoid_reverse', default_value='false',
+                              description='static_avoid backs up 0.2 m when every path stays blocked'),
+        DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
+                              description='static_avoid also publishes /avoid/candidates and /avoid/costmap'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869'),
         *[DeclareLaunchArgument(name, default_value=value) for name, value in mux_args.items()],
@@ -93,8 +115,18 @@ def generate_launch_description():
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
-                 'show': LaunchConfiguration('show')}, enabled('use_yolo')),
+                 'show': LaunchConfiguration('show'),
+                 'debug': debug}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
+        # static obstacle (3-lane section): image from the 10 Hz topic when bringup publishes it
+        include('clothoid_lidar', 'avoid.launch.py',
+                {'camera': LaunchConfiguration('camera'),
+                 'image': PythonExpression(["'10hz' if '", LaunchConfiguration('use_image_10hz'),
+                                            "'.lower() == 'true' else 'raw'"]),
+                 'ignore_cone': LaunchConfiguration('ignore_cone'),
+                 'reverse': LaunchConfiguration('avoid_reverse'),
+                 'course_map': LaunchConfiguration('avoid_course_map'),
+                 'debug_heavy': LaunchConfiguration('avoid_debug_heavy')}, enabled('use_avoid')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
         # after /parking_done: left yellow line to the end line (needs the camera)
         include('clothoid_finish', 'finish.launch.py',

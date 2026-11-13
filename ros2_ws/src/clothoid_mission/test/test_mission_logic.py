@@ -15,6 +15,7 @@ def run(logic, now, *seen, stopline=False, line=False, phase=None, speed=None):
 
 def flag_params(**kw):
     """2025 behaviour: stop on the stripe flag (the scenarios below were written for it)."""
+    kw.setdefault('require_cone_for_parking', False)
     return MissionParams(use_stop_line=False, require_scene_confirmation=False, slow_arms_bump=False, **kw)
 
 
@@ -124,7 +125,7 @@ def test_parking_at_the_sign_when_asked():
 def test_sign_arms_stop_line_and_its_arrival_holds_the_car():
     logic = MissionLogic(MissionParams(pedestrian_wait_sec=3.5))
     out = run(logic, 0.0, 'sign_pedestrian')
-    assert out.stop_arm and not out.stop and out.speed_limit is None  # observation, lane still drives
+    assert out.stop_arm and not out.stop and out.speed_limit is None  # observe before committing the line
     assert run(logic, 1.0, phase='search', speed=0.2).stop_arm
     out = run(logic, 2.0, phase='commit', speed=0.09)
     assert out.speed_limit == 0.09 and not out.stop                    # finish's ramp
@@ -153,3 +154,49 @@ def test_search_without_a_line_expires():
     logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
     run(logic, 0.0, 'sign_pedestrian')
     assert not run(logic, 9.0, phase='search').stop_arm
+
+
+def test_cone_gate_blocks_parking_before_cone_and_unlocks_after():
+    logic = MissionLogic(MissionParams(parking_at_stopline=False, cone_confirm_sec=1.5,
+                                       require_scene_confirmation=False))
+    # Seen near the bump / start before cone course: ignored
+    assert not logic.step(Inputs(now=0.0, seen={'sign_parking'})).parking_flag
+    assert not logic.parking_armed
+    # Brief cone_active (< 1.5 s) does not latch, and dropping to False resets the timer
+    logic.step(Inputs(now=1.0, cone_active=True))
+    logic.step(Inputs(now=2.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=2.1, cone_active=False))
+    assert not logic.cone_entered
+    # Sustained cone_active >= 1.5 s latches cone_entered, and it stays unlocked after leaving
+    logic.step(Inputs(now=3.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=4.5, cone_active=True))
+    assert logic.cone_entered
+    assert not logic.step(Inputs(now=5.0, cone_active=False)).parking_flag
+    assert logic.step(Inputs(now=6.0, seen={'sign_parking'}, cone_active=False)).parking_flag
+
+
+def test_cone_gate_blocks_bump_after_cone_entry():
+    logic = MissionLogic(MissionParams(slow_speed=0.2, cone_confirm_sec=1.5))
+    # Before cone: bump arms normally; brief cone_active (< 1.5 s) does not block bump
+    assert logic.step(Inputs(now=0.0, seen={'sign_bump'})).speed_limit == 0.2
+    assert logic.step(Inputs(now=1.0, cone_active=True)).speed_limit == 0.2
+    # Once cone_active holds >= 1.5 s, cone_entered latches and clears/blocks bump
+    assert logic.step(Inputs(now=2.5, cone_active=True)).speed_limit is None
+    assert logic.cone_entered
+    # After cone: sign_bump is ignored even after cone_active returns False
+    assert logic.step(Inputs(now=3.0, seen={'sign_bump'}, cone_active=False)).speed_limit is None
+
+
+def test_cone_gate_keeps_scene_handover_checks_after_unlock():
+    logic = MissionLogic(MissionParams())
+    evidence = dict(seen={'sign_parking'}, parking_line=True, parking_scene=True)
+    assert not logic.step(Inputs(now=0., **evidence)).parking_prepare
+    assert not logic.parking_flag
+    logic.step(Inputs(now=1., cone_active=True))
+    logic.step(Inputs(now=2.5, cone_active=True))
+    out = logic.step(Inputs(now=2.6, seen={'sign_parking'}))
+    assert out.parking_prepare and not out.parking_flag
+    assert not logic.step(Inputs(now=2.7, parking_line=True)).parking_flag
+    assert logic.step(Inputs(now=2.8, parking_line=True, parking_scene=True)).parking_flag

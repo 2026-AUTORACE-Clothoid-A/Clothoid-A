@@ -33,7 +33,7 @@ def test_stale_duplicate_and_inconsistent_lines_do_not_confirm():
 
 
 def test_parking_needs_sign_entry_and_bay_but_no_previous_mission():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     out = logic.step(Inputs(0., seen={'sign_parking'}, parking_line=True))
     assert out.parking_prepare and not out.parking_flag
     assert not logic.step(Inputs(.1, parking_scene=True)).parking_flag
@@ -48,7 +48,7 @@ def test_old_parking_candidate_expires_instead_of_latching_forever():
 
 
 def test_sign_alone_observes_without_reducing_speed_until_line_commit():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     out = logic.step(Inputs(0., seen={'sign_pedestrian'}))
     assert out.stop_arm and out.speed_limit is None and not out.stop
     assert logic.step(Inputs(.1, line_phase='search', line_speed=.2)).speed_limit is None
@@ -56,7 +56,7 @@ def test_sign_alone_observes_without_reducing_speed_until_line_commit():
 
 
 def test_fork_preference_does_not_require_success_of_other_missions():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     assert logic.step(Inputs(0., seen={'sign_left'})).direction == 0
     assert logic.step(Inputs(1.3, seen={'sign_right'})).direction == 1
     out = logic.step(Inputs(1.4, seen={'sign_parking'}, parking_scene=True, parking_line=True))
@@ -64,7 +64,7 @@ def test_fork_preference_does_not_require_success_of_other_missions():
 
 
 def test_conflicting_fork_instructions_do_not_choose_an_arbitrary_side():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     assert logic.step(Inputs(0., seen={'sign_right'})).direction == 1
     assert logic.step(Inputs(.1, seen={'sign_left','sign_right'})).direction == 1
 
@@ -79,7 +79,7 @@ def test_either_warning_prepares_slow_traversal_and_imu_confirms_contact():
 
 
 def test_default_round_slow_warning_expires_without_arming_bump_traversal():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     out = logic.step(Inputs(0., seen={'sign_slow'}, imu_pitch=0.))
     assert out.speed_limit == .2 and logic.bump_state == 'idle'
     out = logic.step(Inputs(5., imu_pitch=-5.))
@@ -88,7 +88,7 @@ def test_default_round_slow_warning_expires_without_arming_bump_traversal():
 
 
 def test_parking_does_not_take_control_while_waiting_at_a_red_signal():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     logic.state = 'stopped_light'
     out = logic.step(Inputs(0., seen={'sign_parking'}, parking_line=True, parking_scene=True))
     assert out.stop and not out.parking_flag

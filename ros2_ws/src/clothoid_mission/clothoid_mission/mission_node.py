@@ -44,6 +44,9 @@ from clothoid_mission.scene_evidence import ParkingEntryEvidence
 from clothoid_mission.sign_tracker import SignTracker
 
 # FinishCore phase -> what mission_logic expects
+FORK_SIGNS = ('sign_left', 'sign_right')
+DIRECTION_NAMES = {0: 'left', 1: 'right', 2: 'both'}
+
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
               Phase.STOP: 'arrived', Phase.ABORT: 'abort'}
 
@@ -86,6 +89,7 @@ class MissionNode(Node):
         self.declare_parameter('parking_sign_topic', '/parking_sign')
         # one stop line right in front (clothoid_lane stopline node): where parking starts
         self.declare_parameter('parking_line_topic', '/stopline_near')
+        self.declare_parameter('cone_active_topic', '/cone/mission_active')
         self.declare_parameter('parking_prepare_topic', '/parking_prepare')
         self.declare_parameter('parking_scene_topic', '/parking/bay_candidate')
         self.declare_parameter('parking_scene_rate_hz', 6.0)
@@ -97,7 +101,7 @@ class MissionNode(Node):
         for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
                             ('sign_min_height', 14), ('light_min_height', 8),
-                            ('detection_edge_margin', 2)]:
+                            ('detection_edge_margin', 2), ('fork_confirm_hits', 2)]:
             self.declare_parameter(name, value)
         self.declare_parameter('scene_sign_candidates', False)
         self.declare_parameter('track_retention_sec', 2.0)
@@ -106,7 +110,7 @@ class MissionNode(Node):
         self.declare_parameter('track_scale_ratio', 3.0)
         self.declare_parameter('light_max_offset_height_ratio', 3.5)
         self.declare_parameter('sign_max_offset_height_ratio', 5.0)
-        self.declare_parameter('fork_max_offset_height_ratio', 10.0)
+        self.declare_parameter('fork_max_offset_height_ratio', 13.0)
         self.declare_parameter('bump_max_offset_height_ratio', 0.0)
         for kind, area, height in [('bump', 0.0, 28.0), ('slow', 2500.0, 40.0),
                                    ('parking', 0.0, 28.0), ('pedestrian', 0.0, 28.0)]:
@@ -134,6 +138,9 @@ class MissionNode(Node):
         self.declare_parameter('require_scene_confirmation', d.require_scene_confirmation)
         self.declare_parameter('parking_enabled', d.parking_enabled)
         self.declare_parameter('slow_arms_bump', d.slow_arms_bump)
+        self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
+        self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
+        self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.sign_tracker = SignTracker(
@@ -142,7 +149,8 @@ class MissionNode(Node):
             sign_height=get('sign_min_height'), light_height=get('light_min_height'),
             edge_margin=get('detection_edge_margin'), retention=get('track_retention_sec'),
             max_tracks=get('track_max_objects'), match_gate=get('track_match_gate'),
-            scale_ratio=get('track_scale_ratio'))
+            scale_ratio=get('track_scale_ratio'),
+            class_hits={name: get('fork_confirm_hits') for name in FORK_SIGNS})
         self.logic = MissionLogic(MissionParams(
             slow_speed=get('slow_speed'),
             slow_hold_sec=get('slow_hold_sec'),
@@ -162,8 +170,15 @@ class MissionNode(Node):
             parking_at_stopline=get('parking_at_stopline'),
             require_scene_confirmation=get('require_scene_confirmation'),
             parking_enabled=get('parking_enabled'),
-            slow_arms_bump=get('slow_arms_bump')))
+            slow_arms_bump=get('slow_arms_bump'),
+            require_cone_for_parking=get('require_cone_for_parking'),
+            block_bump_after_cone=get('block_bump_after_cone'),
+            cone_confirm_sec=get('cone_confirm_sec')))
 
+        self.cone_active = False
+        self.cone_entered_logged = False
+        self.direction_logged = None
+        self.sign_logged = {}
         self.seen, self.seen_time = set(), None
         self.light_target_id = None
         self.confirmed_tracks = []
@@ -201,6 +216,7 @@ class MissionNode(Node):
         self.create_subscription(PoseStamped, get('parking_scene_topic'), self.on_parking_scene, 1)
         self.create_subscription(Bool, '/parking/observing', self.on_parking_observing, 1)
         self.create_subscription(Bool, '/parking/skipped', self.on_parking_skipped, 1)
+        self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
@@ -275,6 +291,46 @@ class MissionNode(Node):
         self.seen = {t.box.class_name for t in tracks if not t.box.class_name.startswith(
             'traffic_light_') or self.light_target_id is None or t.id == self.light_target_id}
         self.seen_time = stamp
+        for d in msg.detections:
+            if d.class_name in filters['min_sizes'] or d.class_name in FORK_SIGNS:
+                self._log_sign(d, now, stamp, any(d is box for box in detections), filters['min_sizes'])
+
+    def _log_sign(self, d, now, stamp, accepted, min_sizes):
+        name = d.class_name
+        w, h = max(0, d.x_max-d.x_min), max(0, d.y_max-d.y_min)
+        area = w*h
+        ratio = abs((d.x_min+d.x_max)/2-self.cam.cx)/h if h else math.inf
+        tracker = self.sign_tracker
+        track = next((t for t in tracker.tracks.values() if t.last_seen == stamp and
+                      t.box.class_name == name and
+                      (t.box.x_min, t.box.y_min, t.box.x_max, t.box.y_max) ==
+                      (d.x_min, d.y_min, d.x_max, d.y_max)), None)
+        minimum_area, minimum_height = min_sizes.get(name, (0., 0.))
+        if not accepted:
+            reason = 'size' if area < minimum_area or h < minimum_height else 'offset'
+            verdict = f'IGNORED: {reason}'
+        else:
+            reason = tracker.box_reason(d, self.warp.width, self.warp.height)
+            if reason:
+                verdict = f'IGNORED: {reason}'
+            elif track is None:
+                verdict = 'IGNORED: association/overlap'
+            else:
+                verdict = 'ARMED' if track.confirmed else 'IGNORED: hits'
+        key = verdict.split(' ')[0] if verdict.startswith('ARMED') else verdict.split(' <')[0]
+        last = self.sign_logged.get(name)
+        if last is not None and now-last[0] < 1. and last[1] == key:
+            return
+        self.sign_logged[name] = (now, key)
+        hits = track.hits if track is not None else 0
+        self.get_logger().info(
+            f'[{name.upper().replace("SIGN_", "")}] {name} {verdict} '
+            f'(hits {hits}/{tracker.required(name)}, conf {d.confidence:.2f}, '
+            f'area {area:.0f}px^2, h {h}px, min_area {minimum_area:.0f}, min_h {minimum_height}, '
+            f'offset {ratio:.1f} x h, box {d.x_min},{d.y_min},{d.x_max},{d.y_max})')
+
+    def on_cone_active(self, msg: Bool):
+        self.cone_active = msg.data
 
     def on_parking_observing(self, msg: Bool):
         self.parking_observing, self.parking_observing_time = msg.data, self.now_sec()
@@ -455,7 +511,11 @@ class MissionNode(Node):
             line_phase=line_phase,
             line_speed=self.line_speed,
             parking_done=self.parking_done,
-            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None))
+            imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
+            cone_active=self.cone_active))
+        if self.logic.cone_entered and not self.cone_entered_logged:
+            self.cone_entered_logged = True
+            self.get_logger().info('cone course entered')
         self.line_speed = self.line_stop_step(now, out.stop_arm)
         self._image_on(out.stop_arm or out.parking_prepare)
         self._publish_changed('parking_prepare', out.parking_prepare,
@@ -477,6 +537,7 @@ class MissionNode(Node):
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
         self.mission_state_pub.publish(String(data=json.dumps({
             'state': out.state, 'armed': armed,
+            'cone_entered': self.logic.cone_entered,
             'seen': sorted(seen),
             'tracks': [{'id': t.id, 'class': t.box.class_name, 'hits': t.hits}
                        for t in self.confirmed_tracks] if self._fresh(self.seen_time) else [],
@@ -510,6 +571,11 @@ class MissionNode(Node):
             self.cmd_pub.publish(Twist())   # zero command
         if out.speed_limit is not None:
             self.limit_pub.publish(Float32(data=float(out.speed_limit)))
+        if out.direction is not None and out.direction != self.direction_logged:
+            sign = next((n for n in FORK_SIGNS if n in self.seen), 'earlier sign')
+            self.get_logger().info(f'fork: direction {out.direction} '
+                                   f'({DIRECTION_NAMES.get(out.direction, "?")}) from {sign}')
+            self.direction_logged = out.direction
         if out.direction is not None:
             self._publish_changed('direction', out.direction,
                                   lambda v: self.direction_pub.publish(Int32(data=int(v))))

@@ -33,7 +33,7 @@ from clothoid_lane.lane_detector import LaneParams, make_warp_matrix
 
 # twist_mux.yaml: name, topic, timeout, highest priority first
 MUX_INPUTS = (('parking', '/cmd_vel_parking', 0.3), ('state', '/cmd_vel_state', 0.3),
-              ('avoid', '/cmd_vel_avoid', 0.3), ('lane', '/cmd_vel_lane', 0.3))
+              ('cone', '/cmd_vel_cone', 0.3), ('avoid', '/cmd_vel_avoid', 0.3), ('lane', '/cmd_vel_lane', 0.3))
 
 def rgba(rgb, a=1.0) -> ColorRGBA:
     return ColorRGBA(r=float(rgb[0]), g=float(rgb[1]), b=float(rgb[2]), a=float(a))

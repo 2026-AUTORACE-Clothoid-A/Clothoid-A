@@ -9,7 +9,7 @@ mission:
     # Values need field calibration for the actual camera and sign dimensions.
     light_max_offset_height_ratio: 3.5
     sign_max_offset_height_ratio: 5.0
-    fork_max_offset_height_ratio: 10.0
+    fork_max_offset_height_ratio: 13.0
     # The valid roadside bump warning is far off centre in this camera.
     bump_max_offset_height_ratio: 0.0 # <=0 disables only the bump lateral gate
     bump_min_area: 0.0
@@ -21,6 +21,7 @@ mission:
     pedestrian_min_area: 0.0
     pedestrian_min_height: 28.0 # 2500 px^2 plus lateral gate rejected the valid warning in the bag
     # Confirm on distinct source images; colours share a traffic-light identity.
+    fork_confirm_hits: 2        # main: smaller fork signs confirm on two distinct frames
     detection_confirm_hits: 3
     detection_window: 5
     detection_max_age: 0.5
@@ -34,7 +35,7 @@ mission:
     track_max_objects: 32      # bounded history and association work
     track_match_gate: 1.0      # centre displacement in object-size units
     track_scale_ratio: 3.0     # symmetric size-change association limit
-    require_scene_confirmation: true  # local evidence, independent for each mission; no route order
+    require_scene_confirmation: true  # local entry/bay evidence still required after the cone gate
     parking_enabled: true      # full.launch overrides with use_parking; no idle P processing when off
     parking_scene_rate_hz: 6.0 # decode/warp cap while only preparing parking; stops use camera rate
     parking_entry_max_travel: 3.0 # entry evidence expires after this measured travel past the line
@@ -53,6 +54,10 @@ mission:
     bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
+    # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.
+    require_cone_for_parking: true
+    block_bump_after_cone: true
+    cone_confirm_sec: 1.5
     slow_arms_bump: false      # round slow warning uses slow_hold_sec, independent of bump traversal
     # missions
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s

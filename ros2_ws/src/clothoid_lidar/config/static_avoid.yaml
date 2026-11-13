@@ -1,0 +1,80 @@
+# Static obstacle mission (3-lane section). Design: docs/STATIC_AVOID.md. Distances in m.
+# Floats need a decimal point. Topic names come from clothoid_bringup/config/topics.yaml.
+static_avoid:
+  ros__parameters:
+    cmd_topic: /cmd_vel_avoid
+    limos_topic: /lidar/limos
+    # camera red share as a 'cone course' sign: OFF. The cone mission (namgyu/cone) starts on the lidar
+    # alone, so only /cone/mission_active is used. To try it: use_red_ratio true and start red_ratio.
+    use_red_ratio: false
+    red_ratio_max: 0.10          # 1105 bags: obstacle zone <= 0.06, cone course >= 0.20
+    debug: true                  # /avoid/path, /avoid/cues
+    # debug_heavy: false           # + /avoid/candidates, /avoid/costmap: slow on the Jetson, rviz only   (launch argument; a value here would override it)
+    # recovery_reverse: false      # every path blocked for 1.5 s: back up 0.2 m (launch argument reverse)   (launch argument; a value here would override it)
+    load_log_period: 5.0         # s, a log line with each callback's run time; 0 = off
+
+    lane_width: 0.50             # line centre to centre on our track; rules 0.55, check at the venue
+    # trigger
+    activate_range: 1.5
+    block_half_width: 0.30
+    activate_scans: 3
+    rearm_clear: 1.0             # s
+    # hand-over to lane_main
+    min_travel: 3.0
+    max_travel: 7.0
+    release_tol: 0.10
+    release_heading_deg: 10.0
+    release_clear: 2.0          # m ahead, all lanes clear
+    # hand over beside the island in lane 1 / 3, handover_past m past its front (lane_main starts on
+    # the A / B road; before the island it turned for lane 2 into the island, 1112 auto 05).
+    # false: the hand-overs before the island (target lane, island close, a clear road)
+    handover_after_island: true
+    handover_past: 0.6
+    handover_heading_deg: 15.0
+    handover_overshoot: 0.6      # m further: hand over whatever the heading
+    one_section_per_run: true    # after that hand-over no new start (restart the node for another run)
+    # every path blocked for stuck_time: one search of curvature-limited three-arc paths (escape_*),
+    # the best free one driven slowly to its end (1113 auto 05: 14 s stopped where only a quick
+    # swerve went through)
+    # OFF since 2026-11-13 until the heading limit along the whole path and a recovery cap land: on the car
+    # (with reverse) an escape path turned the car ~90 deg across the lanes and it left the track. Stuck
+    # now means stop and wait. recovery_reverse stays off too (full.launch avoid_reverse).
+    escape: false
+    escape_margin: 0.03          # m of clearance more than safety for an escape path
+    outside_margin: 0.10         # m past the yellow lines: hits dropped once the lanes are measured
+    # painted island. Fallback when the entry line was not seen, from the point the mission started:
+    # a start just before the entry line (1108 run 1 2 3 10 11) has the front at 4.61~4.74 m. A start
+    # far past the line (run 6~9, first obstacle at 3 m) has it at 2.7 m and gets this wrong.
+    island_s_min: 4.65
+    island_s_max: 6.40
+    fork_commit: 2.0
+    # the island from the white entry line (rule book p.4 drawing at scale); the camera sees the
+    # line, the base crosses it, a start within entry_max_back of that anchors the section
+    island_from_entry_min: 4.40
+    island_from_entry_max: 6.15
+    entry_max_back: 3.0
+    # course_map (launch argument course_map / full.launch avoid_course_map): the section start line by
+    # its place on the /imu + /odom course map from the race start
+    start_line_x: 8.25
+    start_line_y: -4.65
+    start_line_radius: 1.0
+    start_line_heading_deg: 180.0
+    start_line_heading_tol_deg: 35.0
+    # heading snapped to the track axes on straights (not while avoiding); fallback to the lane-line pair
+    course_straight: 1.5
+    course_straight_spread_deg: 6.0
+    course_snap_max_deg: 15.0
+    course_fallback_past: 1.0
+    start_line_odometer: 14.2
+    course_fallback_odometer: 3.0
+    island_handover: 1.0         # handover_after_island false: m before the island front, lane_main enters A / B
+    island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
+    # image_source: 10hz           # 10hz: image_10hz_topic, every frame; raw: image_topic, every image_every-th   (launch argument; a value here would override it)
+    image_every: 3               # raw only: every 3rd camera frame
+    # camera geometry and the paint colours are NOT set here: avoid.launch.py passes the lane
+    # package's camera_<car>.yaml and lane.yaml lane_main white_s_max / white_v_min / hsv_*
+    # control
+    speed: 0.30
+    slow_speed: 0.20
+    lookahead: 0.45
+    max_steer: 0.49

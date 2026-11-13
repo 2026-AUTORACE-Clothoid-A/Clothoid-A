@@ -1,0 +1,89 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Fixed Frame: base_link
+    Frame Rate: 30
+    Background Color: 30; 30; 30
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid (1 m)
+      Enabled: true
+      Reference Frame: <Fixed Frame>
+      Cell Size: 1
+      Plane Cell Count: 30
+      Color: 80; 80; 80
+    - Class: rviz_default_plugins/Map
+      Name: Avoid costmap
+      Enabled: false
+      Topic:
+        Value: /avoid/costmap
+      Color Scheme: costmap
+      Alpha: 0.6
+    - Class: rviz_default_plugins/LaserScan
+      Name: Lidar /scan
+      Enabled: true
+      Topic:
+        Value: /scan
+        Reliability Policy: Best Effort
+      Style: Spheres
+      Size (m): 0.02
+      Color Transformer: FlatColor
+      Color: 255; 60; 60
+      Decay Time: 0
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Avoid candidates
+      Enabled: false
+      Topic:
+        Value: /avoid/candidates
+    - Class: rviz_default_plugins/Path
+      Name: Avoid path
+      Enabled: true
+      Topic:
+        Value: /avoid/path
+      Color: 255; 80; 200
+      Line Style: Billboards
+      Line Width: 0.03
+    - Class: rviz_default_plugins/MarkerArray
+      Name: Avoid cues (lane lines, entry line, island)
+      Enabled: true
+      Topic:
+        Value: /avoid/cues
+    - Class: rviz_default_plugins/PoseArray
+      Name: LIMO clusters /lidar/limos
+      Enabled: true
+      Topic:
+        Value: /lidar/limos
+      Shape: Arrow (Flat)
+      Color: 80; 160; 255
+      Arrow Length: 0.1
+    - Class: rviz_default_plugins/Image
+      Name: Camera image_raw
+      Enabled: true
+      Topic:
+        Value: /camera/color/image_raw
+        Reliability Policy: Best Effort
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive Objects: true
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+      Line color: 128; 128; 0
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Follow car
+      Target Frame: base_link
+      Scale: 150
+      Angle: 0
+      X: 0.0
+      Y: 0.0
+      Invert Z Axis: false
+    Saved: ~
+Window Geometry:
+  Height: 1000
+  Width: 1700

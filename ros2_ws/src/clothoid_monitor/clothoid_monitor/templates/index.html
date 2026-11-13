@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page_title }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  </head>
+  <body>
+    <main class="dashboard">
+      <div class="tab-bar" role="tablist" aria-label="Dashboard sections">
+        <button
+          type="button"
+          class="tab-button is-active"
+          id="tab-button-visual"
+          role="tab"
+          aria-selected="true"
+          aria-controls="tab-panel-visual"
+          data-tab-target="tab-panel-visual"
+        >시각정보</button>
+        <button
+          type="button"
+          class="tab-button"
+          id="tab-button-topics"
+          role="tab"
+          aria-selected="false"
+          aria-controls="tab-panel-topics"
+          data-tab-target="tab-panel-topics"
+        >라이브 토픽 리스트</button>
+        <button
+          type="button"
+          class="tab-button"
+          id="tab-button-params"
+          role="tab"
+          aria-selected="false"
+          aria-controls="tab-panel-params"
+          data-tab-target="tab-panel-params"
+        >파라미터</button>
+      </div>
+
+      <section class="status-grid tab-panel" id="tab-panel-visual" role="tabpanel" aria-labelledby="tab-button-visual">
+        <article class="status-card image-card is-waiting" id="image-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">Image Status</p>
+              <p class="status-card__subtitle">실시간 카메라 스트림</p>
+            </div>
+            <span class="status-chip" id="image-chip">WAITING</span>
+          </div>
+
+          <dl class="status-meta">
+            <div class="status-meta__row">
+              <div class="status-meta__pair">
+                <dt>Frame</dt>
+                <dd id="image-resolution">Waiting for frame</dd>
+              </div>
+              <div class="status-meta__pair">
+                <dt>Updated</dt>
+                <dd id="image-updated">Waiting for message</dd>
+              </div>
+            </div>
+          </dl>
+
+          {% if debug_image %}
+          <div class="debug-grid" id="debug-grid">
+            <article class="debug-panel">
+              <p class="debug-panel__title">Compressed</p>
+              <img id="debug-frame-compressed" class="debug-panel__frame" src="{{ placeholder_url }}" alt="Compressed preview">
+              <p class="debug-panel__topic">{{ image_topic }}</p>
+            </article>
+            <article class="debug-panel">
+              <p class="debug-panel__title">Lane Detection</p>
+              <img id="debug-frame-lane" class="debug-panel__frame" src="{{ placeholder_url }}" alt="Lane detection preview">
+              <p class="debug-panel__topic">{{ lane_topic }}</p>
+            </article>
+            <article class="debug-panel">
+              <p class="debug-panel__title">YOLO Detect</p>
+              <img id="debug-frame-yolo" class="debug-panel__frame" src="{{ placeholder_url }}" alt="YOLO detect preview">
+              <p class="debug-panel__topic">{{ yolo_topic }}</p>
+            </article>
+            <article class="debug-panel">
+              <p class="debug-panel__title">LiDAR Scan (BEV)</p>
+              <img id="debug-frame-lidar" class="debug-panel__frame" src="{{ placeholder_url }}" alt="LiDAR preview">
+              <p class="debug-panel__topic">{{ lidar_topic }}</p>
+            </article>
+          </div>
+          {% endif %}
+        </article>
+
+        <article class="status-card battery-card is-waiting" id="battery-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">Battery Status</p>
+              <p class="status-card__subtitle">실시간 배터리 잔량</p>
+            </div>
+            <span class="status-chip" id="battery-chip">WAITING</span>
+          </div>
+
+          <div class="battery-reading">
+            <p class="battery-reading__value" id="battery-value">--.-%</p>
+            <div class="battery-meter" aria-hidden="true">
+              <div class="battery-meter__fill" id="battery-meter-fill"></div>
+            </div>
+          </div>
+
+          <dl class="status-meta">
+            <div class="status-meta__row">
+              <dt>Topic</dt>
+              <dd>{{ battery_topic }}</dd>
+            </div>
+            <div class="status-meta__row">
+              <dt>Updated</dt>
+              <dd id="battery-updated">Waiting for message</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="status-card control-card is-waiting" id="control-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">Control Status</p>
+              <p class="status-card__subtitle">실시간 제어 값</p>
+            </div>
+            <span class="status-chip" id="control-chip">WAITING</span>
+          </div>
+
+          <div class="control-chart-legend" id="control-legend">
+            <span class="control-chart-legend__item control-chart-legend__item--throttle">
+              <span class="control-chart-legend__swatch" aria-hidden="true"></span>
+              <span class="control-chart-legend__label">Throttle</span>
+              <strong class="control-chart-legend__value" id="throttle-value">--.--</strong>
+            </span>
+            <span class="control-chart-legend__item control-chart-legend__item--steering">
+              <span class="control-chart-legend__swatch" aria-hidden="true"></span>
+              <span class="control-chart-legend__label">Steering</span>
+              <strong class="control-chart-legend__value" id="steering-value">--.--</strong>
+            </span>
+          </div>
+
+          <div class="control-chart" id="control-chart-wrap">
+            <canvas
+              id="control-chart"
+              class="control-chart__canvas"
+              role="img"
+              aria-label="Throttle and steering over time"
+            ></canvas>
+            <p class="control-chart__empty" id="control-chart-empty">Waiting for control data</p>
+            <div class="control-chart__tooltip" id="control-chart-tooltip" hidden></div>
+          </div>
+
+          <dl class="status-meta">
+            <div class="status-meta__row">
+              <div class="status-meta__pair">
+                <dt>Topic</dt>
+                <dd>{{ control_topic }}</dd>
+              </div>
+              <div class="status-meta__pair">
+                <dt>Updated</dt>
+                <dd id="control-updated">Waiting for message</dd>
+              </div>
+            </div>
+          </dl>
+        </article>
+
+        <article class="status-card storage-card is-waiting" id="storage-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">Storage Status</p>
+              <p class="status-card__subtitle">실시간 저장장치 점유율</p>
+            </div>
+            <span class="status-chip" id="storage-chip">WAITING</span>
+          </div>
+
+          <div class="storage-reading">
+            <p class="storage-reading__value" id="storage-value">--.-%</p>
+            <div class="battery-meter storage-meter" aria-hidden="true">
+              <div class="battery-meter__fill" id="storage-meter-fill"></div>
+            </div>
+            <p class="storage-reading__detail" id="storage-detail">-- / -- used</p>
+          </div>
+
+          <dl class="status-meta">
+            <div class="status-meta__row">
+              <dt>Path</dt>
+              <dd>{{ storage_path }}</dd>
+            </div>
+            <div class="status-meta__row">
+              <dt>Updated</dt>
+              <dd id="storage-updated">Waiting for update</dd>
+            </div>
+          </dl>
+        </article>
+      </section>
+
+      <section class="topic-grid tab-panel" id="tab-panel-topics" role="tabpanel" aria-labelledby="tab-button-topics" hidden>
+        <article class="status-card graph-card is-waiting" id="graph-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">ROS Graph</p>
+              <p class="status-card__subtitle">실시간 노드/토픽 연결</p>
+            </div>
+            <span class="status-chip" id="graph-chip">WAITING</span>
+          </div>
+
+          <div class="ros-graph" id="ros-graph-canvas" aria-live="polite"></div>
+
+          <dl class="status-meta">
+            <div class="status-meta__row">
+              <dt>Updated</dt>
+              <dd id="graph-updated">Waiting for graph</dd>
+            </div>
+            <div class="status-meta__row">
+              <dt>Entities</dt>
+              <dd id="graph-summary">0 nodes / 0 edges</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="status-card topic-echo-card is-waiting" id="topic-echo-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">Topic Echo</p>
+              <p class="status-card__subtitle">선택한 토픽의 실시간 메시지</p>
+            </div>
+            <span class="status-chip" id="topic-echo-chip">WAITING</span>
+          </div>
+
+          <div class="topic-echo-controls">
+            <select id="topic-echo-select" class="topic-echo-select" aria-label="Echo할 토픽 선택">
+              <option value="">토픽 선택…</option>
+            </select>
+            <button type="button" id="topic-echo-stop" class="topic-echo-stop-button" disabled>Stop</button>
+          </div>
+
+          <pre class="topic-echo-log" id="topic-echo-log">토픽을 선택하면 메시지가 표시됩니다.</pre>
+        </article>
+      </section>
+
+      <section class="params-grid tab-panel" id="tab-panel-params" role="tabpanel" aria-labelledby="tab-button-params" hidden>
+        <article class="status-card params-card is-waiting" id="params-card">
+          <div class="status-card__header">
+            <div>
+              <p class="status-card__label">Live Parameters</p>
+              <p class="status-card__subtitle">실행 중인 노드 파라미터 즉시 수정</p>
+            </div>
+            <span class="status-chip" id="params-chip">WAITING</span>
+          </div>
+
+          <div class="params-controls">
+            <select id="params-node-select" class="topic-echo-select" aria-label="파라미터를 볼 노드 선택">
+              {% for node_name in param_target_nodes %}
+              <option value="{{ node_name }}">{{ node_name }}</option>
+              {% endfor %}
+            </select>
+            <button type="button" id="params-refresh" class="topic-echo-stop-button">새로고침</button>
+          </div>
+
+          <table class="params-table" id="params-table">
+            <thead>
+              <tr>
+                <th>파라미터</th>
+                <th>값</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="params-table-body">
+              <tr><td colspan="3" class="params-table__empty">노드를 선택하면 파라미터가 표시됩니다.</td></tr>
+            </tbody>
+          </table>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      window.MONITOR_CONFIG = {
+        statusEndpoint: {{ url_for('api_status')|tojson }},
+        graphEndpoint: {{ url_for('api_graph')|tojson }},
+        debugFrameCompressedEndpoint: {{ url_for('api_frame')|tojson }},
+        debugFrameLaneEndpoint: {{ url_for('api_frame_lane')|tojson }},
+        debugFrameYoloEndpoint: {{ url_for('api_frame_yolo')|tojson }},
+        debugFrameLidarEndpoint: {{ url_for('api_frame_lidar')|tojson }},
+        debugFrameArucoEndpoint: {{ url_for('api_frame_lidar')|tojson }},
+        controlHistoryEndpoint: {{ url_for('api_control_history')|tojson }},
+        controlHistoryWindowSec: {{ control_history_window_sec|tojson }},
+        topicEchoEndpoint: {{ url_for('api_topic_echo_get')|tojson }},
+        paramsEndpoint: {{ url_for('api_params_list')|tojson }},
+        debugImageEnabled: {{ debug_image|tojson }},
+        placeholderUrl: {{ placeholder_url|tojson }},
+        refreshIntervalMs: {{ refresh_interval_ms|tojson }},
+        imageRefreshIntervalMs: {{ image_refresh_interval_ms|tojson }}
+      };
+    </script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  </body>
+</html>

@@ -16,7 +16,8 @@ Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking
   * left / right sign -> preferred boundary; lane_main still follows the measured road
   * parking sign     -> prepare passive scene sensing; entry plus bay confirmation transfers control
   * require_scene_confirmation false retains the legacy immediate/timed policy for comparisons
-No mission's success or place in a route is a prerequisite for another mission.
+Cone course entry gates parking preparation and blocks later bump triggers;
+parking still needs its local entry and bay observations.
 Driving nodes keep working underneath: `stop` only means "publish zero on the state input".
 """
 import math
@@ -52,8 +53,10 @@ def quaternion_to_pitch_deg(x: float, y: float, z: float, w: float) -> float:
 class DetectionGate:
     """Confirm spatially consistent boxes on distinct detector frames, not timer ticks."""
     def __init__(self, hits=3, window=5, max_age=0.5, confidence=0.6,
-                 sign_height=14, light_height=8, edge_margin=2):
+                 sign_height=14, light_height=8, edge_margin=2, class_hits=None):
         self.hits, self.window, self.max_age = hits, window, max_age
+        # per-class override of `hits`, e.g. fork signs: small, seen between the static obstacles
+        self.class_hits = dict(class_hits or {})
         self.confidence, self.sign_height = confidence, sign_height
         self.light_height, self.edge_margin = light_height, edge_margin
         self.history = deque(maxlen=window)
@@ -68,22 +71,33 @@ class DetectionGate:
                 abs((a.y_min+a.y_max-b.y_min-b.y_max)/2) <= max(ah, bh) and
                 0.5 <= ah / bh <= 2.0)
 
+    def required(self, name: str) -> int:
+        return self.class_hits.get(name, self.hits)
+
+    def box_reason(self, d, width=640, height=480) -> Optional[str]:
+        """Why the box itself cannot count (None: it can): conf, height or edge."""
+        minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
+        if d.confidence < self.confidence:
+            return 'conf %.2f < %.2f' % (d.confidence, self.confidence)
+        if d.y_max-d.y_min < minimum or d.x_max <= d.x_min:
+            return 'h %d < %d' % (d.y_max-d.y_min, minimum)
+        if (d.x_min < self.edge_margin or d.y_min < self.edge_margin or
+                d.x_max > width-self.edge_margin or d.y_max > height-self.edge_margin):
+            return 'edge'
+        return None
+
+    def count(self, d, now) -> int:
+        """Recent frames (within max_age, this one included) holding a box matching d."""
+        return sum(any(self.matches(d, old) for old in frame)
+                   for stamp, frame in self.history if 0 <= now-stamp <= self.max_age)
+
     def update(self, now, detections, accepted, width=640, height=480):
         if self.history and now < self.history[-1][0]:
             self.history.clear()
-        boxes = []
-        for d in detections:
-            minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
-            if (d.class_name in accepted and d.confidence >= self.confidence and
-                    d.y_max-d.y_min >= minimum and d.x_max > d.x_min and
-                    d.x_min >= self.edge_margin and d.y_min >= self.edge_margin and
-                    d.x_max <= width-self.edge_margin and d.y_max <= height-self.edge_margin):
-                boxes.append(d)
+        boxes = [d for d in detections
+                 if d.class_name in accepted and self.box_reason(d, width, height) is None]
         self.history.append((now, boxes))
-        return {d.class_name for d in boxes if sum(
-            any(self.matches(d, old) for old in frame)
-            for stamp, frame in self.history if 0 <= now-stamp <= self.max_age
-        ) >= self.hits}
+        return {d.class_name for d in boxes if self.count(d, now) >= self.required(d.class_name)}
 
 
 @dataclass
@@ -112,6 +126,10 @@ class MissionParams:
     require_scene_confirmation: bool = True
     parking_enabled: bool = True
     slow_arms_bump: bool = False
+    # Main route policy: latch cone entry before accepting parking signs.
+    require_cone_for_parking: bool = True
+    block_bump_after_cone: bool = True
+    cone_confirm_sec: float = 1.5
 
 
 @dataclass
@@ -124,6 +142,7 @@ class Inputs:
     parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
+    cone_active: bool = False
     parking_scene: bool = False    # fresh, repeated lidar bay observations
     parking_observing: bool = False # bounded approach observation, not permission to turn
     parking_skipped: bool = False   # observation failed; never means parking_done
@@ -150,6 +169,8 @@ class MissionLogic:
         self.parking_flag = False
         self.parking_armed = False
         self.parking_seen_at = None
+        self.cone_entered = False
+        self.cone_active_since: Optional[float] = None
         self.parking_skip_until = -math.inf
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
@@ -167,13 +188,22 @@ class MissionLogic:
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
 
+        if inputs.cone_active:
+            if self.cone_active_since is None:
+                self.cone_active_since = now
+            if now-self.cone_active_since >= p.cone_confirm_sec:
+                self.cone_entered = True
+        else:
+            self.cone_active_since = None
+
         if 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
         self._update_fork(inputs)
         if inputs.parking_skipped and not self.parking_flag:
             self.parking_seen_at = None
             self.parking_skip_until = now+p.cooldown_sec
-        if 'sign_parking' in seen and p.parking_enabled and now >= self.parking_skip_until:
+        if ('sign_parking' in seen and p.parking_enabled and now >= self.parking_skip_until
+                and (self.cone_entered or not p.require_cone_for_parking)):
             self.parking_seen_at = now
         self.parking_armed = (p.parking_enabled and self.parking_seen_at is not None and
                               (now - self.parking_seen_at <= p.arm_timeout_sec or
@@ -218,7 +248,10 @@ class MissionLogic:
         now, seen, pitch, p = inputs.now, inputs.seen, inputs.imu_pitch, self.p
 
         # Both official warning forms can prepare a slow traversal.
-        if 'sign_bump' in seen or (p.slow_arms_bump and 'sign_slow' in seen):
+        if self.cone_entered and p.block_bump_after_cone:
+            if self.bump_state == BUMP_APPROACHING:
+                self.bump_state = BUMP_IDLE
+        elif 'sign_bump' in seen or (p.slow_arms_bump and 'sign_slow' in seen):
             if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
                 self.bump_state = BUMP_IDLE
             if self.bump_state == BUMP_IDLE:

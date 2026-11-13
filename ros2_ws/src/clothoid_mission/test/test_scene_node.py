@@ -15,7 +15,8 @@ def node():
     config = Path(__file__).parents[1] / 'config/mission.yaml'
     # These tests exercise identity and floor evidence with small synthetic boxes.
     # The configured proximity thresholds are tested in test_bump_sign_policy.py.
-    args = ['--ros-args', '--params-file', str(config)]
+    args = ['--ros-args', '--params-file', str(config),
+            '-p', 'require_cone_for_parking:=false']
     for group in ('light', 'sign', 'fork'):
         args += ['-p', group + '_max_offset_height_ratio:=0.0']
     for kind in ('bump', 'slow', 'parking', 'pedestrian'):
@@ -144,7 +145,7 @@ def test_scene_candidate_quality_gates_remain(node):
 
 def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():
     from clothoid_mission.mission_logic import MissionLogic,MissionParams,Inputs
-    m=MissionLogic(MissionParams())
+    m=MissionLogic(MissionParams(require_cone_for_parking=False))
     m.step(Inputs(now=0.,seen={'sign_parking'}))
     assert m.step(Inputs(now=9.,parking_observing=True)).parking_prepare
     out=m.step(Inputs(now=10.,parking_skipped=True,seen={'sign_parking'}))
@@ -153,3 +154,16 @@ def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():
     # A missed parking mission cannot block a subsequent independent pedestrian mission.
     out=m.step(Inputs(now=11.1,seen={'sign_pedestrian'},line_phase='arrived'))
     assert out.state=='stopped_pedestrian'
+
+
+def test_fork_confirms_on_two_frames_while_parking_keeps_three(node):
+    n, clock = node
+    detections(n, clock, 1000., 'sign_left')
+    assert 'sign_left' not in n.seen
+    detections(n, clock, 1000.1, 'sign_left')
+    assert 'sign_left' in n.seen
+    detections(n, clock, 1000.2, 'sign_parking')
+    detections(n, clock, 1000.3, 'sign_parking')
+    assert 'sign_parking' not in n.seen
+    detections(n, clock, 1000.4, 'sign_parking')
+    assert 'sign_parking' in n.seen
