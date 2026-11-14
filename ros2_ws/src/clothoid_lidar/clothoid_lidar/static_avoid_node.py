@@ -31,6 +31,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from sensor_msgs.msg import CompressedImage, Image, Imu, LaserScan
@@ -46,7 +47,7 @@ from clothoid_lidar.static_avoid import (ACTIVE, LETHAL, AvoidParams, Inhibit, L
                                          section_to_base, yaw_from_quaternion)
 
 
-class StaticAvoidNode(Node):
+class StaticAvoidNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('static_avoid')
         topics = {

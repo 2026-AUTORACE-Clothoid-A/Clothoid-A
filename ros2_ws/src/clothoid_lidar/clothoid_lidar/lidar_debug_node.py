@@ -19,6 +19,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import ColorRGBA
 from visualization_msgs.msg import Marker, MarkerArray
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.lidar_debug import FEW, NARROW, OK, WIDE, classify_clusters, summary
 from clothoid_lidar.obstacle_extractor import ExtractorParams
 
@@ -31,7 +32,7 @@ def colour(rgb, a=1.0):
     return ColorRGBA(r=rgb[0], g=rgb[1], b=rgb[2], a=a)
 
 
-class LidarDebugNode(Node):
+class LidarDebugNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('lidar_debug')
         self.declare_parameter('scan_topic', '/scan')

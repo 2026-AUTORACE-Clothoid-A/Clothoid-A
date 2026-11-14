@@ -13,10 +13,11 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.obstacle_extractor import (ExtractorParams, extract_obstacles, transform_points)
 
 
-class ObstacleExtractorNode(Node):
+class ObstacleExtractorNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('obstacle_extractor')
 

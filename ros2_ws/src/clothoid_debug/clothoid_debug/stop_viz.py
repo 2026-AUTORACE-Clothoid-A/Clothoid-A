@@ -22,6 +22,7 @@ from std_msgs.msg import ColorRGBA, String
 from visualization_msgs.msg import Marker, MarkerArray
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.quiet_node import QuietEventsMixin
 
 STALE_SEC = 0.5
 CLASS_COLORS = {   # BGR
@@ -34,7 +35,7 @@ def rgba(r, g, b, a=1.0) -> ColorRGBA:
     return ColorRGBA(r=float(r), g=float(g), b=float(b), a=float(a))
 
 
-class StopViz(Node):
+class StopViz(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('stop_viz')
         self.declare_parameter('image_topic', '/camera/color/image_raw')

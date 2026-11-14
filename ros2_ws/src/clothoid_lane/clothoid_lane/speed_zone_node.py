@@ -14,10 +14,11 @@ from std_msgs.msg import Float32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.speed_zone import (SpeedZoneDetector, SpeedZoneHold, SpeedZoneParams)
 
 
-class SpeedZoneNode(Node):
+class SpeedZoneNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('speed_zone')
 
