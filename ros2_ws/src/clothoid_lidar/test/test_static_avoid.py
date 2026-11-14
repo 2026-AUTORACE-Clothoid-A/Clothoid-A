@@ -1135,3 +1135,24 @@ def test_line_start_dropped_for_another_line_or_far_past():
     assert not avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (4.0, 0.0, 0.0), 3.5,
                               (0.5, 0.0, 0.0), False)
     assert avoid.line_start is None and avoid.state != ACTIVE
+    other = StaticAvoid(AvoidParams())
+    other.request_line_start((0.5, 0.0, 0.0))
+    assert not other.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (0.6, 0.0, 0.0), 0.1,
+                              (2.0, 0.0, 0.0), False)
+    assert other.line_start is None and 'another line' in other.event
+
+
+def test_line_start_waits_for_a_line_not_placed_yet_and_starts_on_one_ahead():
+    """1114 23:39: the start line confirmed on a corner was placed > 1 m ahead of the base, the lookup
+    within 1 m found nothing and the start was dropped (no blocker start at the race start: the car
+    drove into the LIMOs). Unknown: wait; ahead (the node passes the requested line itself): start."""
+    avoid = StaticAvoid(AvoidParams())
+    line = (15.65, -5.0, math.pi)
+    avoid.request_line_start(line)
+    for k in range(5):
+        assert not avoid.on_limos(0.1 * k, np.zeros((0, 2)), Inhibit(), 0.5, (14.3, -5.0, math.pi),
+                                  None, None, False)
+    assert avoid.line_start == line
+    assert avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (14.4, -5.0, math.pi), -1.25, line,
+                          False)
+    assert avoid.state == ACTIVE

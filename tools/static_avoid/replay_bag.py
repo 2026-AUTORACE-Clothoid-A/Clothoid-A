@@ -96,6 +96,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                         lane_fit_give_up=1.0, lane_ref_rate_max_deg=1e9)
     avoid = StaticAvoid(p)
     tracker = PoseTracker()
+    state = {}                      # line_odo: the requested start line; fallback: blocker start allowed
     fitter = LaneFitter(p, cam, ColourParams())
     course = None
     if p.course_map:                       # the bag must start at the race start (as the node then)
@@ -164,6 +165,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                     log_origin(s)
                     if course.origin == 'race':
                         avoid.request_line_start(tracker.line_pose(d.odometer))
+                        state['line_odo'] = d.odometer
             had = avoid.event
             fitter.on_frame(bgr, avoid, tracker, entry)
             if avoid.event != had and 'fit' in avoid.event:
@@ -210,18 +212,24 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                                            else ''),
                                        ahead=float(np.min(np.hypot(*limos.T))) if len(limos) else None,
                                        mission=rec['mission'][-1][1] if rec['mission'] else ''))
+        if avoid.line_start is not None and state.get('line_odo') is not None:   # as the node
+            entry_back, entry_pose = tracker.distance - state['line_odo'], avoid.line_start
         had_line = avoid.line_start is not None
         if (course is not None and course.origin == 'pending' and tracker.distance < p.course_test_start
                 and avoid.blocked(limos)):                                       # as the node
             course.set_origin('elsewhere', 'a LIMO in our lane %.2f m after the launch' % tracker.distance)
             log_origin(s)
-        allowed = course is None or course.origin == 'elsewhere'
+        allowed = course is None or course.origin == 'elsewhere' or state.get('fallback', False)
         approach = avoid.approach
         started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose, allowed)
         if avoid.done and not was_done:
             rec['events'].append((s, 'DONE: ' + avoid.event))
         if had_line and not started and avoid.line_start is None:
             rec['events'].append((s, avoid.event))
+            if not state.get('fallback') and course is not None and course.origin == 'race':
+                state['fallback'] = True
+                rec['events'].append((s, 'course map: race start, but no start on the line; a blocker '
+                                         'starts the mission from here'))
         if started:
             rec['events'].append((s, avoid.event.upper() + f' (odometer {tracker.distance:.2f} m)'))
             on_since = s
