@@ -85,6 +85,7 @@ class MissionNode(Node):
         # one stop line right in front (clothoid_lane stopline node): where parking starts
         self.declare_parameter('parking_line_topic', '/stopline_near')
         self.declare_parameter('cone_active_topic', '/cone/mission_active')
+        self.declare_parameter('avoid_active_topic', '/avoid/active')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line / imu older than this are dropped
@@ -127,6 +128,7 @@ class MissionNode(Node):
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
         self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
+        self.declare_parameter('avoid_release_hold', d.avoid_release_hold)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.detection_gate = DetectionGate(
@@ -154,7 +156,8 @@ class MissionNode(Node):
             parking_at_stopline=get('parking_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
-            cone_confirm_sec=get('cone_confirm_sec')))
+            cone_confirm_sec=get('cone_confirm_sec'),
+            avoid_release_hold=get('avoid_release_hold')))
 
         self.seen, self.seen_time = set(), None
         self.direction_logged = None
@@ -163,6 +166,7 @@ class MissionNode(Node):
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
         self.cone_active = False
+        self.avoid_active, self.avoid_time = False, None
         self.cone_entered_logged = False
         self.sign_time = None            # last /parking_sign true
         self.line, self.line_time = False, None
@@ -186,6 +190,7 @@ class MissionNode(Node):
         self.create_subscription(Bool, get('parking_sign_topic'), self.on_parking_sign, 1)
         self.create_subscription(Bool, get('parking_line_topic'), self.on_parking_line, 1)
         self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
+        self.create_subscription(Bool, get('avoid_active_topic'), self.on_avoid_active, 1)
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
@@ -389,6 +394,9 @@ class MissionNode(Node):
     def on_cone_active(self, msg: Bool):
         self.cone_active = bool(msg.data)
 
+    def on_avoid_active(self, msg: Bool):
+        self.avoid_active, self.avoid_time = bool(msg.data), self.now_sec()
+
     def _fresh(self, stamp) -> bool:
         return stamp is not None and self.now_sec() - stamp <= self.get_parameter(
             'input_timeout').value
@@ -418,7 +426,8 @@ class MissionNode(Node):
             line_speed=self.line_speed,
             parking_done=self.parking_done,
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
-            cone_active=self.cone_active))
+            cone_active=self.cone_active,
+            avoid_active=self.avoid_active and self._fresh(self.avoid_time)))
         if self.logic.cone_entered and not self.cone_entered_logged:
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered: parking unlocked, bump blocked')

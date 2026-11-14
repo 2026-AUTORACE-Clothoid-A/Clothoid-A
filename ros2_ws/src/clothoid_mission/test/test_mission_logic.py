@@ -186,3 +186,21 @@ def test_cone_gate_blocks_bump_after_cone_entry():
     assert logic.cone_entered
     # After cone: sign_bump is ignored even after cone_active returns False
     assert logic.step(Inputs(now=3.0, seen={'sign_bump'}, cone_active=False)).speed_limit is None
+
+
+def test_cone_active_during_and_right_after_avoidance_does_not_latch():
+    """1114_0028: a false cone start during the static avoidance latched cone_entered."""
+    logic = MissionLogic(MissionParams(cone_confirm_sec=1.5, avoid_release_hold=2.0))
+    for t in (0.0, 1.0, 2.0, 3.0):
+        logic.step(Inputs(now=t, cone_active=True, avoid_active=True))
+    assert not logic.cone_entered
+    # avoidance ended at 3.0: cone_active up to 5.0 is still ignored
+    logic.step(Inputs(now=4.0, cone_active=True))
+    logic.step(Inputs(now=4.9, cone_active=True))
+    assert not logic.cone_entered
+    # the real cone course afterwards latches as before (1.5 s from 5.0)
+    logic.step(Inputs(now=5.0, cone_active=True))
+    logic.step(Inputs(now=6.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=6.5, cone_active=True))
+    assert logic.cone_entered
