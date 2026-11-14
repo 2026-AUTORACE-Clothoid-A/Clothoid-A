@@ -47,10 +47,10 @@ mission:
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
     bump_min_area: 0.0          # px^2, minimum bbox area to trigger bump logic
-    bump_min_height: 28.0       # px, minimum bbox height to trigger bump logic
+    bump_min_height: 24.0       # px, minimum bbox height to arm bump before stop line
     # sign bbox size filters (prevent distant premature triggers)
-    slow_min_area: 2500.0       # px^2, minimum bbox area to trigger slow down
-    slow_min_height: 40.0       # px, minimum bbox height to trigger slow down
+    slow_min_area: 0.0          # px^2, minimum bbox area to arm slow down before stop line
+    slow_min_height: 28.0       # px, minimum bbox height to arm slow down before stop line
     parking_min_area: 0.0       # px^2, minimum bbox area to latch parking flag
     parking_min_height: 28.0    # px, minimum bbox height to latch parking flag
     pedestrian_min_area: 0.0    # px^2, minimum bbox area to arm pedestrian stop
