@@ -126,6 +126,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('fork_left_direction', d.fork_left_direction)
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
+        self.declare_parameter('slow_at_stopline', d.slow_at_stopline)
+        self.declare_parameter('bump_at_stopline', d.bump_at_stopline)
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
         self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
@@ -155,6 +157,8 @@ class MissionNode(QuietEventsMixin, Node):
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction'),
             parking_at_stopline=get('parking_at_stopline'),
+            slow_at_stopline=get('slow_at_stopline'),
+            bump_at_stopline=get('bump_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
             cone_confirm_sec=get('cone_confirm_sec'),
@@ -367,10 +371,13 @@ class MissionNode(QuietEventsMixin, Node):
         cv2.putText(img, text, (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         return img
 
-    def line_stop_step(self, now: float, arm: bool):
+    def line_stop_step(self, now: float, arm: bool, require_crosswalk: bool = True):
         """Arm / disarm FinishCore; its speed for lane_main while it runs, else None."""
         if self.core is None:
             return None
+        if arm:
+            self.core.require_crosswalk = bool(
+                self.get_parameter('line_require_crosswalk').value and require_crosswalk)
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
             self._image_on(True)
@@ -432,9 +439,11 @@ class MissionNode(QuietEventsMixin, Node):
         if self.logic.cone_entered and not self.cone_entered_logged:
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered: parking unlocked, bump blocked')
-        self.line_speed = self.line_stop_step(now, out.stop_arm)
+        self.line_speed = self.line_stop_step(now, out.stop_arm, out.stop_require_crosswalk)
         armed = [n for n, a in (('pedestrian', self.logic.pedestrian_armed_at),
-                                ('light', self.logic.light_armed_at)) if a is not None]
+                                ('light', self.logic.light_armed_at),
+                                ('slow', self.logic.slow_armed_at),
+                                ('bump_line', self.logic.bump_line_armed_at)) if a is not None]
         core = self.core
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
         self.mission_state_pub.publish(String(data=json.dumps({

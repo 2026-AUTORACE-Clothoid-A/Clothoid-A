@@ -62,9 +62,10 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
-    # false (2026-11-10): the confirmed YOLO sign_parking raises /parking_flag at once. true needs
-    # /stopline_near from the stopline node, which full.launch does not start (use_stopline:=false)
-    parking_at_stopline: false
+    # true: sign arms LineStopCore (without crosswalk bars) and triggers each mission at its start stop line.
+    parking_at_stopline: true
+    slow_at_stopline: true
+    bump_at_stopline: true
     # cone gate: allow parking and block speed bump only after /cone/mission_active has been true
     require_cone_for_parking: true
     block_bump_after_cone: true

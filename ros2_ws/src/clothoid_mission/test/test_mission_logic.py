@@ -204,3 +204,50 @@ def test_cone_active_during_and_right_after_avoidance_does_not_latch():
     assert not logic.cone_entered
     logic.step(Inputs(now=6.5, cone_active=True))
     assert logic.cone_entered
+
+
+def test_parking_uses_line_stop_without_crosswalk_and_without_slowing():
+    logic = MissionLogic(MissionParams(parking_at_stopline=True, require_cone_for_parking=False))
+    out = run(logic, 0.0, 'sign_parking')
+    assert out.stop_arm and not out.stop_require_crosswalk
+    assert not out.parking_flag and out.speed_limit is None
+    out = run(logic, 1.0, phase='commit', speed=0.1)
+    assert out.stop_arm and not out.parking_flag and out.speed_limit is None
+    out = run(logic, 2.0, phase='arrived', speed=0.0)
+    assert out.parking_flag and not out.stop and not out.stop_arm
+
+
+def test_slow_at_stopline_waits_for_arrival_and_expires_without_line():
+    logic = MissionLogic(MissionParams(slow_at_stopline=True, slow_speed=0.2, slow_hold_sec=4.0,
+                                       arm_timeout_sec=8.0))
+    out = run(logic, 0.0, 'sign_slow')
+    assert out.stop_arm and not out.stop_require_crosswalk and out.speed_limit is None
+    out = run(logic, 1.5, phase='commit', speed=0.1)
+    assert out.stop_arm and out.speed_limit is None
+    out = run(logic, 2.0, phase='arrived', speed=0.0)
+    assert out.speed_limit == 0.2 and not out.stop_arm
+    assert run(logic, 5.9).speed_limit == 0.2
+    assert run(logic, 6.1).speed_limit is None
+
+    # Timeout without seeing a stop line
+    assert run(logic, 7.0, 'sign_slow').stop_arm
+    assert not run(logic, 15.5, phase='search').stop_arm
+    assert run(logic, 15.6, phase='arrived').speed_limit is None
+
+
+def test_bump_at_stopline_waits_for_line_or_pitch_fallback():
+    from clothoid_mission.mission_logic import BUMP_IDLE, BUMP_APPROACHING, BUMP_ON
+    logic = MissionLogic(MissionParams(bump_at_stopline=True, slow_speed=0.2,
+                                       bump_pitch_thresh=3.5, bump_arm_timeout_sec=8.0))
+    out = logic.step(Inputs(now=0.0, seen={'sign_bump'}, imu_pitch=0.0))
+    assert logic.bump_state == BUMP_IDLE and out.stop_arm and not out.stop_require_crosswalk
+    assert out.speed_limit is None
+
+    out = logic.step(Inputs(now=1.5, line_phase='arrived', imu_pitch=0.0))
+    assert logic.bump_state == BUMP_APPROACHING and out.speed_limit == 0.2 and not out.stop_arm
+
+    # Fallback: if stop line is missed but vehicle hits bump, IMU pitch still enters BUMP_ON
+    logic2 = MissionLogic(MissionParams(bump_at_stopline=True, slow_speed=0.2, bump_pitch_thresh=3.5))
+    logic2.step(Inputs(now=0.0, seen={'sign_bump'}, imu_pitch=0.0))
+    out2 = logic2.step(Inputs(now=0.8, line_phase='search', imu_pitch=4.2))
+    assert logic2.bump_state == BUMP_ON and out2.speed_limit == 0.2 and out2.steering_lock

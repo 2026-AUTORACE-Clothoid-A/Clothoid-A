@@ -105,12 +105,14 @@ class MissionParams:
     # slow sign & bump speed
     slow_speed: float = 0.2            # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0         # general slow sign hold timer
+    slow_at_stopline: bool = False     # true: start slow hold when the mission stop line arrives
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
     bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
     bump_level_duration_sec: float = 0.3  # sec, continuous leveling to confirm exit
     bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
+    bump_at_stopline: bool = False      # true: enter BUMP_APPROACHING (slow) at the stop line
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
@@ -154,6 +156,7 @@ class Outputs:
     direction: Optional[int] = None    # None until a fork sign was seen
     parking_flag: bool = False
     stop_arm: bool = False             # run the line stop (FinishCore)
+    stop_require_crosswalk: bool = True
     steering_lock: bool = False        # lock steering during bump traversal
 
 
@@ -162,6 +165,7 @@ class MissionLogic:
         self.p = params
         self.state = DRIVE
         self.slow_until = -1.0
+        self.slow_armed_at: Optional[float] = None
         self.direction: Optional[int] = None
         self.parking_flag = False
         self.parking_armed = False
@@ -176,10 +180,14 @@ class MissionLogic:
         # Bump internal state
         self.bump_state = BUMP_IDLE
         self.bump_armed_at = -1.0
+        self.bump_line_armed_at: Optional[float] = None
         self.bump_level_started_at: Optional[float] = None
         self.bump_cooldown_until = -1.0
         self.bump_entry_sign = 0.
         self.bump_opposite_seen = False
+
+    def _line_arrived(self, inputs: Inputs) -> bool:
+        return inputs.line_phase == 'arrived' if self.p.use_stop_line else inputs.stopline
 
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
@@ -194,7 +202,16 @@ class MissionLogic:
         else:
             self.cone_active_since = None
 
-        if 'sign_slow' in seen:
+        if p.slow_at_stopline:
+            if 'sign_slow' in seen and now >= self.slow_until and self.slow_armed_at is None:
+                self.slow_armed_at = now
+            if self.slow_armed_at is not None:
+                if self._line_arrived(inputs):
+                    self.slow_until = now + p.slow_hold_sec
+                    self.slow_armed_at = None
+                elif inputs.line_phase not in ('commit', 'arrived') and now - self.slow_armed_at > p.arm_timeout_sec:
+                    self.slow_armed_at = None
+        elif 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
         if 'sign_left' in seen:
             self.direction = p.fork_left_direction
@@ -202,7 +219,8 @@ class MissionLogic:
             self.direction = p.fork_right_direction
         if 'sign_parking' in seen and (self.cone_entered or not p.require_cone_for_parking):
             self.parking_armed = True
-        if self.parking_armed and (inputs.parking_line or not p.parking_at_stopline):
+        parking_line_hit = inputs.parking_line or (p.use_stop_line and inputs.line_phase == 'arrived')
+        if self.parking_armed and (parking_line_hit or not p.parking_at_stopline):
             self.parking_flag = True
 
         self._update_stop(inputs)
@@ -213,6 +231,10 @@ class MissionLogic:
         if now < self.slow_until or bump_active:
             limits.append(p.slow_speed)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
+        mission_line_arm = p.use_stop_line and self.state == DRIVE and (
+            (self.parking_armed and not self.parking_flag and p.parking_at_stopline)
+            or self.slow_armed_at is not None
+            or self.bump_line_armed_at is not None)
         if arm:
             limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
         return Outputs(
@@ -221,7 +243,8 @@ class MissionLogic:
             speed_limit=min(limits) if limits else None,
             direction=self.direction,
             parking_flag=self.parking_flag,
-            stop_arm=arm,
+            stop_arm=arm or mission_line_arm,
+            stop_require_crosswalk=arm,
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
@@ -233,8 +256,27 @@ class MissionLogic:
 
         # 1. YOLO trigger
         if bump_blocked:
+            self.bump_line_armed_at = None
             if self.bump_state == BUMP_APPROACHING:
                 self.bump_state = BUMP_IDLE
+        elif p.bump_at_stopline and self.bump_state == BUMP_IDLE:
+            if 'sign_bump' in seen and self.bump_line_armed_at is None:
+                self.bump_line_armed_at = now
+            if self.bump_line_armed_at is not None:
+                if pitch is not None and abs(pitch) >= p.bump_pitch_thresh:
+                    self.bump_line_armed_at = None
+                    self.bump_state = BUMP_ON
+                    self.bump_level_started_at = None
+                    self.bump_entry_sign = math.copysign(1., pitch)
+                    self.bump_opposite_seen = False
+                elif self._line_arrived(inputs):
+                    self.bump_line_armed_at = None
+                    self.bump_state = BUMP_APPROACHING
+                    self.bump_level_started_at = None
+                    self.bump_armed_at = now
+                elif (inputs.line_phase not in ('commit', 'arrived')
+                      and now - self.bump_line_armed_at > p.bump_arm_timeout_sec):
+                    self.bump_line_armed_at = None
         elif 'sign_bump' in seen:
             if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
                 self.bump_state = BUMP_IDLE
