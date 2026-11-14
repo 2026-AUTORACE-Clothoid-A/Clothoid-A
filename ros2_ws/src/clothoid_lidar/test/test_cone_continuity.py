@@ -2,6 +2,8 @@ import numpy as np
 import pytest
 
 from clothoid_lidar.cone_sorter import ConeMission, ConeSorter, SorterParams, SortResult, LEFT
+from clothoid_lidar.cone_corner import endpoint_centerline, _curvature
+from clothoid_lidar.cone_follower import compute_steering, FollowerParams
 
 
 def test_observed_boundary_survives_entry_angle_gate():
@@ -33,3 +35,34 @@ def test_scan_gap_clears_tracking_and_course_end_is_immediate():
     assert not len(mission.update(moved, 1.).left)
     assert mission.update(np.zeros((0, 2)), 1.1) is None
     assert not mission.running and mission.previous is None
+
+
+@pytest.mark.parametrize('sign', [1., -1.])
+def test_one_inner_cone_and_outer_semicircle(sign):
+    anchor = np.array([[.3, .5]])
+    angles = np.linspace(-np.pi/2, np.pi/2, 13)
+    outer = anchor+np.column_stack((np.cos(angles), np.sin(angles)))
+    left, right = (anchor, outer) if sign == 1 else (outer*[1., -1.], anchor*[1., -1.])
+    path = endpoint_centerline(left, right, .05)
+    assert path is not None
+    np.testing.assert_allclose(path[0], (left[0]+right[0])/2)
+    np.testing.assert_allclose(path[-1], (left[-1]+right[-1])/2)
+    assert np.max(_curvature((anchor+outer)/2)) == pytest.approx(2.)
+
+
+def test_single_anchor_rejects_disordered_or_too_tight_outer_wall():
+    anchor = np.array([[.3, .5]])
+    angles = np.linspace(-np.pi/2, 0., 7)
+    outer = anchor+.6*np.column_stack((np.cos(angles), np.sin(angles)))
+    assert endpoint_centerline(anchor, outer, .05) is None
+    outer = anchor+np.column_stack((np.cos(angles), np.sin(angles)))
+    outer[[2, 3]] = outer[[3, 2]]
+    assert endpoint_centerline(anchor, outer, .05) is None
+
+
+def test_legacy_pursuit_keeps_configured_lookahead_for_far_target():
+    params = FollowerParams(lfd=.4)
+    center = np.array([[.1, .1], [.45, .825]])
+    delta = compute_steering(center, params)
+    # Recorded legacy law: the target can be farther than the configured lfd.
+    assert delta == pytest.approx(np.deg2rad(39.76215915180505))

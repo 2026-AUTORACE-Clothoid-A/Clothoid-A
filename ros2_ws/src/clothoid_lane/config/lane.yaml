@@ -12,6 +12,8 @@ lane_main:
     lost_hold_sec: 0.0         # >0 keeps the last heading when the lane is lost
     # the steered-to target moves at most this many warped px per frame (0 = off); see lane_main.py
     target_max_step_px: 8.0
+    # Cone exit: cap speed until consecutive detections and the control target agree.
+    cone_exit_speed: 0.3
     # multiplies the 2025 steering law. The turn rate for a steering angle grows with the speed, so keep
     # speed x steer_gain about the same: 0.8 m/s x 0.33 = 0.26 drove best (2026-11-08 02:27 / 02:55:
     # 0-4 jumps over 8 deg per minute, straight steering sd 1.5-2.2 deg); 0.8 x 0.55 weaved (23:53, 71

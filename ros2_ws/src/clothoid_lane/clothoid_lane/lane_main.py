@@ -22,6 +22,7 @@ from std_msgs.msg import Bool, Float32, Int32
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
+from clothoid_lane.cone_handover import ConeHandover
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
                                     limit_step, steer_angle)
 
@@ -100,6 +101,9 @@ class LaneMainNode(Node):
         # that flipped the steering by up to +-28 deg moved it 29 px (median). 8 px removed 23 of 30
         # jumps over 8 deg and changed the corner steering by 0.4 deg (p95) when replayed.
         self.declare_parameter('target_max_step_px', 8.0)
+        # Low-speed handover until the detected lane and control target agree.
+        self.declare_parameter('cone_active_topic', '/cone/mission_active')
+        self.declare_parameter('cone_exit_speed', 0.3)
 
         # lane following side / width. Widths are real distances, line centre to centre in metres;
         # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
@@ -123,6 +127,7 @@ class LaneMainNode(Node):
 
         self.speed_limit = None
         self.speed_limit_stamp = None
+        self.cone_handover = ConeHandover()
         self.last_cmd = None
         self.last_found_stamp = None
         self.used_target = None       # target point the last command steered to (after limit_step)
@@ -144,6 +149,11 @@ class LaneMainNode(Node):
         self.create_subscription(
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
 
+        self.create_subscription(
+            Bool, self.get_parameter('cone_active_topic').value, self.on_cone_active, 1)
+        self.cone_ready_pub = self.create_publisher(Bool, '/lane/cone_exit_ready', 1)
+        self.create_subscription(Bool, '/cone/exiting',
+                                 lambda msg: self.cone_handover.request_exit(msg.data), 1)
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
 
@@ -164,6 +174,10 @@ class LaneMainNode(Node):
         def value(name):
             return proposed.get(name, self.get_parameter(name).value)
 
+        for name in ('cone_exit_speed',):
+            v = value(name)
+            if not math.isfinite(v) or v < 0:
+                return SetParametersResult(successful=False, reason=f'{name} must be finite and >= 0')
         width = WIDTH_PARAMS & proposed.keys()
         if width and any(value(name) <= 0.0 for name in WIDTH_PARAMS):
             return SetParametersResult(successful=False, reason='lane widths must be > 0')
@@ -178,6 +192,9 @@ class LaneMainNode(Node):
         return SetParametersResult(successful=True)
 
     # --- flags from other nodes -------------------------------------------------
+    def on_cone_active(self, msg: Bool):
+        self.cone_handover.on_cone(msg.data, self.get_clock().now().nanoseconds * 1e-9)
+
     def on_direction(self, msg: Int32):
         # 2025: ignored once the parking mission started
         if not self.parking_started:
@@ -240,6 +257,14 @@ class LaneMainNode(Node):
                                 self.get_parameter('target_max_step_px').value)
             self.used_target = target
 
+        # Reuse the normal filter's pixel step and target freshness interval.
+        # A locked/held command is not evidence of a newly observed lane.
+        self.cone_handover.observe(
+            now.nanoseconds * 1e-9, result.found,
+            (result.target_x, result.target_y), target,
+            self.get_parameter('target_max_step_px').value, TARGET_RESET_SEC)
+        self.cone_ready_pub.publish(Bool(data=self.cone_handover.ready))
+
         if debug and result.debug_image is not None:
             if target is not None:     # yellow ring: the point steered to (green dot: detected)
                 cv2.circle(result.debug_image, (int(round(target[0])), int(round(target[1]))), 7,
@@ -263,6 +288,11 @@ class LaneMainNode(Node):
                     self.get_parameter('zigzag_hold_sec').value:
                 speed = min(speed, zigzag_speed)
             cmd = Twist()
+            # Cap translation after computing steering. Do not double steering gain merely
+            # because recovery is slower; other existing speed limits still apply.
+            speed = self.cone_handover.speed(
+                now.nanoseconds * 1e-9, speed, self.get_parameter('cone_exit_speed').value,
+                TARGET_RESET_SEC)
             cmd.linear.x = speed
             cmd.angular.z = angular_z(speed, steer, self.get_parameter('wheelbase').value)
             self.last_cmd = cmd

@@ -53,3 +53,5 @@ cone_follower:
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
+    corner_endpoint_enabled: true  # straight endpoint / observed outer-turn midpoint path
+    exit_clearance: 0.2      # minimum path distance to current detected obstacle centres

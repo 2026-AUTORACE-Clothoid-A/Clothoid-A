@@ -219,10 +219,12 @@ class ConeSorter:
 
 class ConeMission:
     """IDLE -> RUNNING when the start zone is full and both first cones exist;
-    back to IDLE when the continue zone empties."""
+    With hold_exit, sparse cones enter EXIT until the lane handover is acknowledged."""
 
-    def __init__(self, sorter: ConeSorter):
+    def __init__(self, sorter: ConeSorter, hold_exit: bool = False):
         self.sorter = sorter
+        self.hold_exit = hold_exit
+        self.exiting = False
         self.running = False
         self.previous = None
         self.last_stamp = None
@@ -246,11 +248,22 @@ class ConeMission:
                 self.previous_stamp = stamp
             return None
         if not self.sorter.continue_zone_ok(cones):
+            if self.hold_exit:
+                self.exiting = True
+                return None
             self.running = False
             self.previous = None
             return None
+        self.exiting = False
         result = self.sorter.sort(cones, self.previous)
         self.previous = result
         self.previous_stamp = stamp
         # Host A/B comparison: publish the ordinary trace without bridging inner gaps.
         return result
+
+    def finish_exit(self):
+        if not self.exiting:
+            return False
+        self.running = self.exiting = False
+        self.previous = None
+        return True

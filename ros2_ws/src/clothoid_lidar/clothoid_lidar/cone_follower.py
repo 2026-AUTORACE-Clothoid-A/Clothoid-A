@@ -1,6 +1,7 @@
 """Centre line and pure pursuit for the rubber cone course (2025 `rubber_cone_node.cpp`).
 
-ROS-free. Pipeline unchanged from 2025: Delaunay triangulation of both boundaries -> midpoints of
+ROS-free. An optional observed-endpoint midpoint path handles asymmetric corners.
+Otherwise the 2025 pipeline uses Delaunay triangulation of both boundaries -> midpoints of
 edges that join a left and a right cone -> MST longest path to order them -> local cubic least
 squares smoothing -> cubic spline resampling -> pure pursuit on the look-ahead point.
 Steering is returned in rad, positive = left (the node converts it to a Twist).
@@ -13,6 +14,7 @@ from scipy.interpolate import CubicSpline
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra, minimum_spanning_tree
 from scipy.spatial import Delaunay
+from clothoid_lidar.cone_corner import endpoint_centerline
 
 try:
     from scipy.spatial import QhullError
@@ -23,7 +25,7 @@ except ImportError:  # scipy < 1.8 (older JetPack / apt images)
 @dataclass
 class FollowerParams:
     speed: float = 0.3            # m/s (2025 launch value, node default was 0.4)
-    reverse_speed: float = -0.2   # m/s, used when only one boundary is visible
+    reverse_speed: float = -0.2   # m/s, one boundary only; 0 disables backing off and stops
     # deg, steering while backing off when only one boundary is visible (2025 `max_steer_deg`, 21).
     # Forward pure pursuit is not cut by this; the LIMO hardware limit is 28 deg inner wheel.
     reverse_steer_deg: float = 21.0
@@ -37,6 +39,7 @@ class FollowerParams:
     # s, boundaries older than this are ignored. 2025 used 0.1, but the Tmini Plus scans at 10 Hz
     # and left/right arrive one after the other, so 0.1 would call the other side stale.
     boundary_timeout: float = 0.25
+    corner_endpoint_enabled: bool = True
 
     def __post_init__(self):
         self.lsq_window_size = max(5, self.lsq_window_size)
@@ -136,6 +139,13 @@ def build_center_line(left: np.ndarray, right: np.ndarray, params: FollowerParam
     if len(left) == 0 and len(right) == 0:
         return np.zeros((0, 2))
 
+    if params.corner_endpoint_enabled:
+        # LIMO driver limits the INNER wheel to 28 degrees, with 175 mm track.
+        min_radius = params.wheelbase / np.tan(np.deg2rad(28.)) + .175/2
+        corner = endpoint_centerline(left, right, params.centerline_ds, min_radius)
+        if corner is not None:
+            return corner
+
     points = np.vstack((left, right))
     label = np.r_[np.zeros(len(left), int), np.ones(len(right), int)]
 
@@ -203,6 +213,8 @@ class ConeFollower:
         reverse_steer = np.deg2rad(p.reverse_steer_deg)
         if not left_fresh and not right_fresh:
             return None
+        if (not left_fresh or not right_fresh) and p.reverse_speed >= 0.0:
+            return FollowResult(0.0, 0.0)
         # one boundary only: back off with full lock away from the visible side (2025)
         if not left_fresh:
             return FollowResult(p.reverse_speed, -reverse_steer, reverse=True)
