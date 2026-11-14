@@ -3,6 +3,14 @@
 static_avoid:
   ros__parameters:
     cmd_topic: /cmd_vel_avoid
+    # limo_base's 25 Hz copies (topics.yaml imu_slow_topic / odom_slow_topic): only the yaw and the
+    # driven distance are used, interpolated. Taking /imu 100 Hz + /odom 50 Hz cost this node about
+    # half of its CPU on the car (PC bag replay: 7~9 % + 6 % of a core for empty callbacks); on 10
+    # bags the starts, hand-overs and lanes stay the same at 25 Hz (within 2 cm / 0.1 s). Old bags and
+    # the simulator have no 25 Hz topics: set these back to /imu and /odom in a params file given last
+    # (simul_batch.py does)
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     limos_topic: /lidar/limos
     # camera red share as a 'cone course' sign: OFF. The cone mission (namgyu/cone) starts on the lidar
     # alone, so only /cone/mission_active is used. To try it: use_red_ratio true and start red_ratio.

@@ -83,7 +83,7 @@ def image_bgr(msg):
 
 
 def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stall=False, image_every=3,
-           legacy_odom=False, old_reference=False, overrides=None):
+           legacy_odom=False, old_reference=False, overrides=None, imu_every=1, odom_every=1):
     """Same pieces as static_avoid_node: LIMO trigger, costmap, plans, entry line (camera every
     3rd frame), island from the entry line, hand-over."""
     cam = cam or CameraModel()          # limo2 = car 7, the 11-05 bags
@@ -124,9 +124,14 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         rec['stalls'] = (len(gaps), len(drop))
     topics = ['/scan', '/odom', '/imu', '/camera/color/image_raw', '/camera/color/image_raw/compressed',
               '/camera/color/image_10hz', '/mission/state']
+    kept = {'/imu': 0, '/odom': 0}
     for topic, t, msg in messages(bag, topics):
         if drop and (topic, int(round(t * 1e6))) in drop:      # microseconds: float seconds
             continue
+        if topic in kept:              # --imu-every / --odom-every: a slower topic (e.g. /imu_25hz)
+            kept[topic] += 1
+            if (kept[topic] - 1) % (imu_every if topic == '/imu' else odom_every):
+                continue
         t0 = t if t0 is None else t0
         s = t - t0
         if topic == '/imu':
@@ -437,6 +442,8 @@ def main():
                     help='per start: section / lane frame against the lane (IMU while following it)')
     ap.add_argument('--old-reference', action='store_true',
                     help='before 11-12: the start heading kept, 15 deg limit, fits taken while turning')
+    ap.add_argument('--imu-every', type=int, default=1, help='use every n-th /imu (4: 25 Hz)')
+    ap.add_argument('--odom-every', type=int, default=1, help='use every n-th /odom (2: 25 Hz)')
     ap.add_argument('--legacy-odom', action='store_true',
                     help='the 11-10 odometer: v * dt with gaps capped at 0.1 s, queue depths 20 / 50')
     a = ap.parse_args()
@@ -446,14 +453,16 @@ def main():
     direction = None if a.direction == 'none' else (None if a.direction == 'auto' else int(a.direction))
     rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
                  stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
-                 old_reference=a.old_reference, overrides=overrides)
+                 old_reference=a.old_reference, overrides=overrides, imu_every=a.imu_every,
+                 odom_every=a.odom_every)
     if a.direction == 'auto' and rec['trail']:
         driven = [d for t, s, d, _ in rec['trail'] if s > 0.5 and t <= a.t_to]
         end_lane = lane_of(driven[-1], rec['p']) if driven else 2
         direction = {1: 0, 3: 1}.get(end_lane)
         rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
                      stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
-                 old_reference=a.old_reference, overrides=overrides)
+                 old_reference=a.old_reference, overrides=overrides, imu_every=a.imu_every,
+                 odom_every=a.odom_every)
     if rec.get('stalls'):
         print(f'emulated busy node: {rec["stalls"][0]} stalls, {rec["stalls"][1]} messages dropped'
               f'{" (11-10 odometer)" if a.legacy_odom else ""}')
