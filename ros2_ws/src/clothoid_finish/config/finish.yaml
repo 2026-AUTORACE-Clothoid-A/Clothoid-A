@@ -5,6 +5,10 @@ finish:
     image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame
     compressed: false
     lazy_sensors: true         # imu/odom only from /parking_flag until STOP/ABORT (false: always)
+    # 25 Hz copies from limo_base (rates averaged, so gyro * dt integrates as the full rate; same as
+    # parking). Old bags: back to /imu, /odom (tools/load_profile/run.sh lazy.yaml)
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     rate_hz: 20.0
     speed: 0.2
     lane_offset: 0.25          # m, left line centre from base_link: half the 0.5 m lane

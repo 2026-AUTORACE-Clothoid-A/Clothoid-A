@@ -10,9 +10,9 @@ source "$(dirname "$0")/env.sh"
 mkdir -p "$OUT"
 # LAZY=false: parking / finish subscribe imu/odom(/scan) from the start, as before 2026-11-10.
 # A params file, not -p: the node's own yaml section wins over a command line -p.
-# Bags have /imu and /odom, not limo_base's /imu_25hz and /odom_25hz (lane.yaml, parking.yaml, mission.yaml): point the
+# Bags have /imu and /odom, not limo_base's /imu_25hz and /odom_25hz (lane, parking, mission, finish yaml): point the
 # nodes that read the 25 Hz copies back at the full-rate topics.
-printf 'parking:\n  ros__parameters:\n    lazy_sensors: %s\n    imu_topic: /imu\n    odom_topic: /odom\nfinish:\n  ros__parameters:\n    lazy_sensors: %s\nlane_main:\n  ros__parameters:\n    imu_topic: /imu\n    odom_topic: /odom\nmission:\n  ros__parameters:\n    imu_topic: /imu\n    odom_topic: /odom\n' \
+printf 'parking:\n  ros__parameters:\n    lazy_sensors: %s\n    imu_topic: /imu\n    odom_topic: /odom\nfinish:\n  ros__parameters:\n    lazy_sensors: %s\n    imu_topic: /imu\n    odom_topic: /odom\nlane_main:\n  ros__parameters:\n    imu_topic: /imu\n    odom_topic: /odom\nmission:\n  ros__parameters:\n    imu_topic: /imu\n    odom_topic: /odom\n' \
   "${LAZY:-true}" "${LAZY:-true}" > "$OUT/lazy.yaml"
 SECS=${SECS:-$(python3 "$HERE/gaps.py" --duration "$BAG" | awk '{print int($1)+12}')}
 run() {  # label module:Class [ros args...]

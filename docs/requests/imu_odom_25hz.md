@@ -19,9 +19,9 @@ From: 주영(경량화, 세션 C), 2026-11-15. To: 남규(clothoid_lane, clothoi
 | `scripts/rec_full.sh` | `/imu_25hz`와 `/odom_25hz`도 녹화한다 | |
 | `tools/load_profile/run.sh` | 예전 bag에는 25 Hz 토픽이 없어서, 재생 측정에서는 lane_main·parking을 `/imu`·`/odom`으로 되돌린다 | |
 
-- finish(남규)와 mission(세션 A)은 이 브랜치에서 바꾸지 않았다.
+- finish(남규)와 mission(세션 A)은 `feature/mission-imu-25hz`(이 브랜치 위)에서 세션 A가 바꿨다.
   - mission은 세션 A가 `feature/mission-imu-25hz`(이 브랜치 위)에서 25 Hz로 바꿨다. 방지턱 pitch는 20 Hz 타이머가 최신값을 읽고, 정지선 거리는 25 Hz에서 샘플 간격이 8 mm라 stop_gap 3 cm 안이다.
-  - finish는 parking처럼 주차 뒤에만 구독한다. 같은 이유로 바꿔도 된다고 본다. 남규가 정해 줘.
+  - finish는 parking처럼 주차 뒤에만 구독하고 평균된 gyro를 적분하므로 25 Hz로 충분하다(주영 결정, 남규에게 통지).
 - static_avoid는 세션 B가 파라미터로 바꾼다.
 
 ## 확인한 것
@@ -51,4 +51,4 @@ tools/carmon/carmon.sh         # 바꾸기 전후의 lane_main CPU와 /cmd_vel_l
 ```
 - 방지턱 구간: lane_main의 방지턱 조향 유지(bump gap, steering lock)가 전처럼 동작하는지 본다.
 - 주차: 진입 위치와 자세가 전과 같은지 본다.
-- 예전 bag을 PC에서 재생할 때는 lane_main·parking·mission의 `imu_topic`·`odom_topic`을 `/imu`·`/odom`으로 되돌린 params 파일을 마지막에 준다(`tools/load_profile/run.sh`의 `lazy.yaml` 방식). `ros2 bag play --remap /imu:=/imu_25hz`도 되지만, 그러면 `/imu`가 사라져 아직 `/imu`를 쓰는 노드(static_avoid)가 데이터를 못 받는다.
+- 예전 bag을 PC에서 재생할 때는 lane_main·parking·mission·finish의 `imu_topic`·`odom_topic`을 `/imu`·`/odom`으로 되돌린 params 파일을 마지막에 준다(`tools/load_profile/run.sh`의 `lazy.yaml` 방식). `ros2 bag play --remap /imu:=/imu_25hz`도 되지만, 그러면 `/imu`가 사라져 아직 `/imu`를 쓰는 노드(static_avoid)가 데이터를 못 받는다.
