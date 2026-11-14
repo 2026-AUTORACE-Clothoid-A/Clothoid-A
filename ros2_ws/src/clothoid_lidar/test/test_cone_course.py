@@ -124,6 +124,16 @@ def test_mission_starts_continues_and_ends():
     assert mission.update(np.zeros((0, 2))) is None and not mission.running  # left the course
 
 
+def test_mission_start_held_while_static_avoid_runs_but_a_running_course_goes_on():
+    left, right = gate([0.3, 0.65, 1.0, 1.35, 1.7])
+    cones = np.vstack((left, right))
+    mission = ConeMission(ConeSorter(SorterParams()))
+
+    assert mission.update(cones, may_start=False) is None and not mission.running
+    assert mission.update(cones) is None and mission.running
+    assert mission.update(cones, may_start=False) is not None and mission.running
+
+
 def test_mission_does_not_start_with_too_few_cones_in_zone():
     left, right = gate([0.3, 0.65])  # 4 cones in the start box, 6 needed
     mission = ConeMission(ConeSorter(SorterParams()))
