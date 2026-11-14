@@ -43,11 +43,15 @@ PAGE_MB = os.sysconf('SC_PAGE_SIZE') / 1e6
 
 
 def read(path, default=''):
+    """Text of a /proc or /sys file, `default` when it cannot be read. Binary + decode: some Jetson
+    sysfs files (thermal zones of sensors that are off) fail inside a text-mode read with a
+    TypeError instead of an OSError (limo2, 2026-11-15)."""
     try:
-        with open(path) as f:
-            return f.read()
-    except OSError:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except (OSError, TypeError, ValueError):
         return default
+    return data.decode('utf-8', 'replace') if data is not None else default
 
 
 def run(cmd, timeout=5.0):
@@ -138,8 +142,10 @@ class System:
 
         used, total, swap = meminfo()
         row.update(ram_used_mb=used, ram_total_mb=total, swap_used_mb=swap)
-        temps = thermal()
         ts = self.tegra.last
+        temps = ts.get('temps', {}) if ts else {}
+        if not temps:
+            temps = thermal()          # no tegrastats (PC) or it has not printed yet
         if ts:
             row['gpu_pct'] = ts.get('gpu_pct')
             row['gpu_mhz'] = ts.get('gpu_mhz')
@@ -148,7 +154,6 @@ class System:
             for k in ('ram_used_mb', 'ram_total_mb', 'swap_used_mb'):
                 if k in ts:
                     row[k] = ts[k]
-            temps = ts.get('temps', temps)
         row['temp_max'] = max(temps.values()) if temps else None
         for want in ('cpu', 'gpu', 'tj'):
             row[f'temp_{want}'] = next((v for k, v in temps.items() if k.startswith(want)), None)
