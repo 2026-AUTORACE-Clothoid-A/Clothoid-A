@@ -3,6 +3,10 @@
 mission:
   ros__parameters:
     rate_hz: 20.0
+    # 25 Hz copies from limo_base (topics.yaml imu_slow_topic): the bump logic reads the newest pitch
+    # once per 20 Hz tick, the line stop only the odom distance. Old bags: back to /imu, /odom
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     input_timeout: 0.5          # detections / stop line / imu older than this count as "not seen"
     refresh_sec: 1.0            # direction / parking / steering_lock flag re-sent this often
     # abs(light box centre x - camera principal x) / box height. Start-straight

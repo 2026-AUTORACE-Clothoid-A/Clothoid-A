@@ -9,7 +9,7 @@ NAME="${1:-full}"
 OUT="$HOME/bags/$(date +%m%d_%H%M)_${NAME}"
 mkdir -p "$HOME/bags"
 exec ros2 bag record -o "$OUT" \
-  /scan /odom /imu /tf /tf_static \
+  /scan /odom /imu /odom_25hz /imu_25hz /tf /tf_static \
   /cmd_vel /cmd_vel_lane /cmd_vel_state /cmd_vel_cone /cmd_vel_avoid /cmd_vel_parking /cmd_vel_finish \
   /detections /direction_flag /parking_flag /speed_limit /mission/state \
   /cone/mission_active /lidar/obstacles /lidar/limos \

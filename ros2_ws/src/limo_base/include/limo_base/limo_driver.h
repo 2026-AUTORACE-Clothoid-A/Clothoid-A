@@ -56,6 +56,7 @@
 // #include <limo_base/LimoStatus.h>
 #include "limo_base/serial_port.h"
 #include "limo_base/limo_protocol.h"
+#include "limo_base/slow_topic.hpp"
 
 namespace AgileX {
 
@@ -114,6 +115,11 @@ private:
     // rclcpp::Subscription<scout_msgs::msg::ScoutLightCmd>::SharedPtr
     //   light_cmd_sub_;
     rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_publisher_;
+    // every n-th /imu and /odom with mean rates, for the Python nodes (slow_topic.hpp); null when off
+    rclcpp::Publisher<sensor_msgs::msg::Imu>::SharedPtr imu_slow_publisher_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_slow_publisher_;
+    std::unique_ptr<limo_base::ImuSlow> imu_slow_;
+    std::unique_ptr<limo_base::OdomSlow> odom_slow_;
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
     
     // ros::Publisher odom_publisher_;
