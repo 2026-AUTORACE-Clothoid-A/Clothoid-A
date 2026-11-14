@@ -107,6 +107,16 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                crossings=[], yaw=[], starts=[], mission=[], blocked=[], course=course)
     t0 = None
     on_since, on_total = None, 0.0
+    origin_logged = ['pending']
+
+    def log_origin(s):
+        if course is None or course.origin == origin_logged[0]:
+            return
+        origin_logged[0] = course.origin
+        if course.origin != 'race':
+            entry.start_by_map = None
+        rec['events'].append((s, 'course map: %s (%s)' % (course.origin, course.origin_why)))
+        rec['origin'] = (course.origin, tracker.distance)
     s = 0.0
     drop = set()
     if stall:
@@ -143,10 +153,17 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                 if why:
                     entry.start_by_map = None
                     rec['events'].append((s, 'course map fallback: ' + why))
+                log_origin(s)
             for d in check_start_line(entry, bgr, cam, fitter.colours, tracker.distance, p.lane_width):
                 rec['events'].append((s, 'white line at %.2f m: %s (%s)' % (
                     d.odometer, 'SECTION START LINE' if d.start else 'not the start',
-                    d.where or 'pair ' + d.pairs)))
+                    d.where or 'pair %s' % d.pairs)))
+                if d.start and course is not None and course.corner1 is not None:
+                    course.set_origin('race', 'start line after the right turn at map x %.1f m'
+                                      % course.corner1[1])
+                    log_origin(s)
+                    if course.origin == 'race':
+                        avoid.request_line_start(tracker.line_pose(d.odometer))
             had = avoid.event
             fitter.on_frame(bgr, avoid, tracker, entry)
             if avoid.event != had and 'fit' in avoid.event:
@@ -193,13 +210,26 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                                            else ''),
                                        ahead=float(np.min(np.hypot(*limos.T))) if len(limos) else None,
                                        mission=rec['mission'][-1][1] if rec['mission'] else ''))
-        started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose)
+        had_line = avoid.line_start is not None
+        if (course is not None and course.origin == 'pending' and tracker.distance < p.course_test_start
+                and avoid.blocked(limos)):                                       # as the node
+            course.set_origin('elsewhere', 'a LIMO in our lane %.2f m after the launch' % tracker.distance)
+            log_origin(s)
+        allowed = course is None or course.origin == 'elsewhere'
+        approach = avoid.approach
+        started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose, allowed)
         if avoid.done and not was_done:
             rec['events'].append((s, 'DONE: ' + avoid.event))
+        if had_line and not started and avoid.line_start is None:
+            rec['events'].append((s, avoid.event))
         if started:
             rec['events'].append((s, avoid.event.upper() + f' (odometer {tracker.distance:.2f} m)'))
             on_since = s
-            rec['starts'].append(dict(t=s, odometer=tracker.distance, yaw=avoid.frame.yaw0))
+            rec['starts'].append(dict(t=s, odometer=tracker.distance, yaw=avoid.frame.yaw0,
+                                      line=avoid.approach))
+        elif approach and not avoid.approach:
+            rec['events'].append((s, f'approach ends: LIMO in our lane (odometer {tracker.distance:.2f} m)'))
+            rec['starts'][-1]['slow'] = tracker.distance
         if avoid.state != ACTIVE:
             continue
         ok = np.isfinite(r) & (r > msg.range_min) & (r < msg.range_max)
@@ -207,6 +237,14 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         free = np.column_stack((np.cos(ang[~ok]), np.sin(ang[~ok])))
         avoid.on_scan(hits, np.array([LIDAR_X, 0.0]), pose, tracker.latest(), direction,
                       keep_candidates=True, free_dirs_base=free)
+        if avoid.approach and avoid.plan is not None and avoid.plan.feasible:   # as control()
+            now = avoid.lane_pose(tracker.latest())
+            if abs(avoid.plan.end_offset - now[1]) > 0.10 or avoid.plan.obstacle_cost > p.slow_cost:
+                avoid.approach = False
+                rec['events'].append((s, 'approach ends: %s (odometer %.2f m)' % (
+                    'lane change' if abs(avoid.plan.end_offset - now[1]) > 0.10 else
+                    'obstacle cost %.0f' % avoid.plan.obstacle_cost, tracker.distance)))
+                rec['starts'][-1]['slow'] = tracker.distance
         sec = avoid.lane_pose(tracker.latest())
         if len(limos):
             rec['limos'].extend(base_to_section(limos, avoid.section_pose(pose)).tolist())

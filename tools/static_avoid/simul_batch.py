@@ -284,7 +284,8 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN,
                     open(os.path.join(tmp, 'record.log'), 'w'), env)
     avoid = start(f'source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && '
                   f'ros2 launch clothoid_lidar avoid.launch.py camera:=limo2 use_sim_time:=true '
-                  f'ignore_cone:=true params:={params} image:={"10hz" if image_every else "raw"}',
+                  f'ignore_cone:=true course_map:=false params:={params} '
+                  f'image:={"10hz" if image_every else "raw"}',
                   avoid_log, env)
     relay = None
     if image_every:
