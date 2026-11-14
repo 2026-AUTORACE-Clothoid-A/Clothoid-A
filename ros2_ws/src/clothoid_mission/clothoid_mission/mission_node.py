@@ -56,8 +56,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_done_topic', '/parking_done')
         self.declare_parameter('state_topic', '/mission/state')   # JSON for clothoid_debug stop_viz
         # line stop (FinishCore): camera, intrinsics, gyro, wheel speed
-        self.declare_parameter('image_topic', '/camera/color/image_raw/compressed')
-        self.declare_parameter('compressed', True)
+        self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('compressed', False)
         self.declare_parameter('camera_info_topic', '/camera/color/camera_info')
         self.declare_parameter('imu_topic', '/imu')
         self.declare_parameter('odom_topic', '/odom')

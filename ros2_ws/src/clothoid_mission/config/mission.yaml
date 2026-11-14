@@ -70,7 +70,7 @@ mission:
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true
     approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
-    image_topic: /camera/color/image_raw/compressed   # overrides topics.yaml (raw), as finish
-    compressed: true
+    image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame
+    compressed: false
     white_s_max: 60             # stop line white: S <= 60, V >= 150
     white_v_min: 150

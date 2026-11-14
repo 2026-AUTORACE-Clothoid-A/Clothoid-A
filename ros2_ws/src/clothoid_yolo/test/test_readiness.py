@@ -77,3 +77,40 @@ def test_failed_then_empty_success_and_late_subscriber(running):
     yolo.on_image(frame())
     ex.spin_once(timeout_sec=.1)
     assert received == [False, True]  # one transition, no per-frame readiness traffic
+
+
+def test_10hz_source_processes_every_frame(running):
+    yolo, _, ex, received = running
+    assert yolo.image_source == '10hz'
+    assert yolo.image_topic == '/camera/color/image_10hz'
+    until(ex, lambda: received == [False])
+    calls = 0
+
+    def count_infer(bgr):
+        nonlocal calls
+        calls += 1
+        return []
+
+    yolo.backend = SimpleNamespace(infer=count_infer)
+    for _ in range(5):
+        yolo.on_image(frame())
+    assert calls == 5
+
+
+def test_raw_image_every_skips_frames_after_ready(running):
+    yolo, _, ex, received = running
+    yolo.image_source = 'raw'
+    until(ex, lambda: received == [False])
+    calls = 0
+
+    def count_infer(bgr):
+        nonlocal calls
+        calls += 1
+        return []
+
+    yolo.backend = SimpleNamespace(infer=count_infer)
+    yolo.on_image(frame())  # first frame runs and marks ready
+    until(ex, lambda: received == [False, True])
+    for _ in range(6):     # with default image_every=3, skips 4 of 6 subsequent frames
+        yolo.on_image(frame())
+    assert calls == 3
