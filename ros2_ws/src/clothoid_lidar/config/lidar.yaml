@@ -25,7 +25,7 @@ cone_sorter:
     max_dist_between_cones: 0.4
     max_trace_length: 20
     threshold_directional_angle_deg: 45.0
-    first_step_angle_deg: 90.0   # the corridor can be at an angle to the car at the first cone
+    first_step_angle_deg: 45.0   # greedy tracer's first segment; DFS uses its own turn rules
     angle_from_left_first_cone: 45.0
     dist_from_left_first_cone: 0.7
     dist_from_right_first_cone: 0.7

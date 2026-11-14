@@ -31,6 +31,7 @@ _FIELDS = [
     ('w_angle_cost', float), ('w_residual_dist_cost', float), ('w_num_cones_cost', float),
     ('w_initial_dir_cost', float), ('w_change_dir_cost', float), ('w_wrong_dir_cost', float),
     ('max_search_nodes', int),
+    ('boundary_timeout', float),
 ]
 
 
@@ -89,7 +90,7 @@ class ConeSorterNode(Node):
     def on_obstacles(self, msg: PoseArray):
         cones = np.array([[p.position.x, p.position.y] for p in msg.poses]).reshape(-1, 2)
         was_running = self.mission.running
-        result = self.mission.update(cones)
+        result = self.mission.update(cones, self.get_clock().now().nanoseconds * 1e-9)
         if self.mission.running != was_running:
             self.get_logger().info(
                 'cone course START' if self.mission.running else 'cone course END')
