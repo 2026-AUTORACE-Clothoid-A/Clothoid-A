@@ -41,6 +41,13 @@ cone_sorter:
     ing_y_min: -1.0
     ing_y_max: 1.0
     ing_min_count: 4
+    # no course START while /avoid/active (static_avoid) is true: LIMOs side by side pass the start
+    # test (1112/1113 avoid runs: 1~8 starts each, 1114_0028 aborted the avoidance). An older message
+    # than this is ignored, so without static_avoid the course starts as before.
+    avoid_active_timeout: 0.5
+    # and this long after it ends (11-09 bags: an end among the LIMOs started the course 0~0.14 s
+    # later; 2 s holds all three, the later starts at 4.2 s and more stay)
+    avoid_release_hold: 2.0
 
 cone_follower:
   ros__parameters:
