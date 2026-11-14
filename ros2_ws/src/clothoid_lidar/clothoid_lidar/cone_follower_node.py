@@ -62,6 +62,7 @@ class ConeFollowerNode(Node):
         self.lane_ready_time = None
         self.left = self.right = np.zeros((0, 2))
         self.left_time = self.right_time = None
+        self.left_scan_stamp = self.right_scan_stamp = None
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
         self.center_pub = self.create_publisher(
@@ -102,11 +103,13 @@ class ConeFollowerNode(Node):
         return SetParametersResult(successful=True)
 
     def on_left(self, msg: Path):
+        self.left_scan_stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
         self.left, self.left_time = path_to_array(msg), self.get_clock().now()
         if self.active and not self.exiting:
             self.control()
 
     def on_right(self, msg: Path):
+        self.right_scan_stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
         self.right, self.right_time = path_to_array(msg), self.get_clock().now()
         if self.active and not self.exiting:
             self.control()
@@ -115,16 +118,19 @@ class ConeFollowerNode(Node):
         was_active, self.active = self.active, msg.data
         if self.active and not was_active:
             self.exit_memory.clear()
+            self.follower.reset()
             self.get_logger().info('cone mission START')
             if self.left_time is not None or self.right_time is not None:
                 self.control()
         elif was_active and not self.active:
             self.exiting = False
             self.exit_memory.clear()
+            self.follower.reset()
             self.center_pub.publish(to_path(np.zeros((0, 2)), Header(frame_id='base_link')))
             self.get_logger().info('cone mission END')
             self.left = self.right = np.zeros((0, 2))
             self.left_time = self.right_time = None
+            self.left_scan_stamp = self.right_scan_stamp = None
 
     def on_exiting(self, msg):
         if msg.data and not self.exiting:
@@ -142,10 +148,13 @@ class ConeFollowerNode(Node):
         if not all(math.isfinite(v) for v in pose):
             self.pose_time = None
             self.exit_memory.clear()
+            self.follower.reset()
             return
         if self.pose is not None and math.hypot(pose[0]-self.pose[0], pose[1]-self.pose[1]) > 1.0:
             self.exit_memory.clear()
+            self.follower.reset()
         self.exit_memory.update_pose(pose)
+        self.follower.corridor.update_pose(pose)
         self.pose, self.pose_time = pose, self.get_clock().now()
 
     def on_obstacles(self, msg):
@@ -153,6 +162,10 @@ class ConeFollowerNode(Node):
         self.obstacles_time = self.get_clock().now()
 
     def exit_control(self):
+        if self.active and not self.exiting:
+            if not self._fresh(self.left_time) or not self._fresh(self.right_time):
+                self.control()
+            return
         if not self.active or not self.exiting:
             return
         if self.lane_ready and self._fresh(self.lane_ready_time):
@@ -188,16 +201,23 @@ class ConeFollowerNode(Node):
         if self.left_time is None or self.right_time is None:
             return
         left_fresh, right_fresh = self._fresh(self.left_time), self._fresh(self.right_time)
-        if not left_fresh and not right_fresh:
-            self.get_logger().warn('all boundaries stale, no command', throttle_duration_sec=1.0)
+        if left_fresh and right_fresh and self.left_scan_stamp != self.right_scan_stamp:
+            # Both messages use the same scan header. Do not train width using
+            # one boundary from before the vehicle moved and one from after.
             return
-        result = self.follower.decide(self.left, self.right, left_fresh, right_fresh)
+        pose = self.pose if self._fresh(self.pose_time) else None
+        obstacles = self.obstacles if self._fresh(self.obstacles_time) else None
+        result = self.follower.decide(self.left, self.right, left_fresh, right_fresh,
+                                      pose, obstacles, self.get_parameter('exit_clearance').value)
         if result is None:
+            self.cmd_pub.publish(Twist())
             return
         if result.reverse:
             self.get_logger().warn('one boundary only, reversing', throttle_duration_sec=1.0)
 
-        if not result.reverse and len(result.center) and self.pose is not None and self._fresh(self.pose_time):
+        if result.source != 'observed':
+            self.get_logger().info('cone path continuity: '+result.source, throttle_duration_sec=1.0)
+        if result.source == 'observed' and not result.reverse and len(result.center) and self.pose is not None and self._fresh(self.pose_time):
             self.exit_memory.remember(result.center, self.pose, self.follower.p.lfd,
                                       self.follower.p.centerline_ds)
         self.publish_result(result)

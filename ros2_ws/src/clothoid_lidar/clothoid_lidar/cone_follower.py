@@ -15,6 +15,7 @@ from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra, minimum_spanning_tree
 from scipy.spatial import Delaunay
 from clothoid_lidar.cone_corner import endpoint_centerline
+from clothoid_lidar.cone_corridor import CorridorMemory, usable_path, width_samples
 
 try:
     from scipy.spatial import QhullError
@@ -54,6 +55,7 @@ class FollowResult:
     reverse: bool = False
     center: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)), repr=False)
     target: Optional[np.ndarray] = field(default=None, repr=False)   # look-ahead point, base_link
+    source: str = 'observed'
 
 
 def _arc_length(points: np.ndarray) -> np.ndarray:
@@ -178,6 +180,16 @@ def _pairwise_center(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     return left if len(left) else right
 
 
+def retained_center_line(left, right, params):
+    # A stored wall behind the car must not be joined diagonally to a newly
+    # observed straight wall ahead. Require overlap or an observed corner arc.
+    if width_samples(left, right):
+        return build_center_line(left, right, params)
+    radius = params.wheelbase/np.tan(np.deg2rad(28.))+.175/2
+    corner = endpoint_centerline(left, right, params.centerline_ds, radius)
+    return corner if corner is not None else np.zeros((0, 2))
+
+
 def look_ahead_point(center: np.ndarray, params: FollowerParams) -> Optional[np.ndarray]:
     """The centre line point `lfd` along from the closest one, or its end if the line is shorter."""
     n = len(center)
@@ -205,11 +217,30 @@ def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
 class ConeFollower:
     def __init__(self, params: FollowerParams):
         self.p = params
+        self.corridor = CorridorMemory()
+
+    def reset(self):
+        self.corridor.clear()
 
     def decide(self, left: np.ndarray, right: np.ndarray,
-               left_fresh: bool, right_fresh: bool) -> Optional[FollowResult]:
+               left_fresh: bool, right_fresh: bool, pose=None, obstacles=None,
+               min_clearance: float = .2) -> Optional[FollowResult]:
         """None means "publish nothing" (no fresh boundary, or no centre line)."""
         p = self.p
+        if not left_fresh or not right_fresh:
+            visible_left = left if left_fresh else np.zeros((0, 2))
+            visible_right = right if right_fresh else np.zeros((0, 2))
+            for center, source in self.corridor.candidates(
+                    visible_left, visible_right, pose, p.centerline_ds,
+                    lambda a, b: retained_center_line(a, b, p)):
+                if len(center) < 2:
+                    continue
+                closest = int(np.argmin(np.linalg.norm(center, axis=1)))
+                center = center[closest:]
+                target = look_ahead_point(center, p)
+                if usable_path(center, obstacles, min_clearance, target):
+                    return FollowResult(p.speed, compute_steering(center, p),
+                                        center=center, target=target, source=source)
         reverse_steer = np.deg2rad(p.reverse_steer_deg)
         if not left_fresh and not right_fresh:
             return None
@@ -224,5 +255,8 @@ class ConeFollower:
         center = build_center_line(left, right, p)
         if len(center) == 0:
             return None
+        target = look_ahead_point(center, p)
+        if usable_path(center, obstacles, min_clearance, target):
+            self.corridor.observe(left, right, center, pose, p.lfd)
         return FollowResult(p.speed, compute_steering(center, p), center=center,
-                            target=look_ahead_point(center, p))
+                            target=target)
