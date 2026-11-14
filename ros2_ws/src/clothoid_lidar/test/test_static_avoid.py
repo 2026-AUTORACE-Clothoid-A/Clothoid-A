@@ -15,9 +15,9 @@ import pytest
 
 from clothoid_lidar.obstacle_extractor import ExtractorParams, extract_obstacles, transform_points
 from clothoid_lidar.section_cues import LaneLine, LaneObservation
-from clothoid_lidar.static_avoid import (ACTIVE, IDLE, AvoidParams, Costmap, Inhibit, PoseTracker,
-                                         SectionFrame, StaticAvoid, lane_of, line_residuals,
-                                         plan_paths, pure_pursuit)
+from clothoid_lidar.static_avoid import (ACTIVE, IDLE, AvoidParams, Costmap, Inhibit, Plan,
+                                         PoseTracker, SectionFrame, StaticAvoid, lane_of,
+                                         line_residuals, plan_paths, pure_pursuit)
 
 L, TRACK, SCALE, MAX_INNER = 0.2, 0.175, 1.06, 0.48869
 LIDAR_X = 0.103
@@ -1156,3 +1156,31 @@ def test_line_start_waits_for_a_line_not_placed_yet_and_starts_on_one_ahead():
     assert avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (14.4, -5.0, math.pi), -1.25, line,
                           False)
     assert avoid.state == ACTIVE
+
+
+def test_stuck_logs_where_and_how_far_each_lane_is_free_then_moving_again():
+    a = StaticAvoid(AvoidParams(escape=False))
+    a.activate((0.0, 0.0, 0.0))
+    wall = np.array([[1.0, y] for y in np.linspace(-0.8, 0.8, 41)])        # across the road at 1 m
+    for _ in range(5):
+        a.costmap.update(wall, np.array([0.1, 0.0]), None, None)
+    a.plan = None
+    assert a.control((0.0, 0.0, 0.0), Inhibit(), 1.0) == (0.0, 0.0)
+    assert not a.event.startswith('stuck')                                  # not for a blip
+    a.control((0.05, 0.0, 0.0), Inhibit(), 1.6)
+    assert a.event.startswith('stuck: every path blocked at s 0.00 d +0.00 (lane 2'), a.event
+    assert 'lane 2 0.9' in a.event or 'lane 2 1.0' in a.event, a.event        # where it started
+    a.control((0.0, 0.0, 0.0), Inhibit(), 1.7)
+    assert 'every path blocked' in a.event or 'recovery' in a.event          # once, not per cycle
+    a.plan = Plan(path=np.array([[0.0, 0.0], [1.0, 0.5]]), end_offset=0.5, cost=0.0, obstacle_cost=0.0)
+    a.control((0.0, 0.0, 0.0), Inhibit(), 3.1)
+    assert a.event == 'stuck: moving again after 2.1 s'
+    b = StaticAvoid(AvoidParams(escape=False))                         # a blip: no line at all
+    b.activate((0.0, 0.0, 0.0))
+    for _ in range(5):
+        b.costmap.update(wall, np.array([0.1, 0.0]), None, None)
+    b.plan = None
+    b.control((0.0, 0.0, 0.0), Inhibit(), 1.0)
+    b.plan = Plan(path=np.array([[0.0, 0.0], [1.0, 0.5]]), end_offset=0.5, cost=0.0, obstacle_cost=0.0)
+    b.control((0.0, 0.0, 0.0), Inhibit(), 1.2)
+    assert not b.event.startswith('stuck')

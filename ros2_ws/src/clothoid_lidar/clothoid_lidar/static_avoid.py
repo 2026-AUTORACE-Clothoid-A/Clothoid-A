@@ -187,6 +187,7 @@ class AvoidParams:
     recovery_sharp: bool = False
     recovery_lengths: Tuple[float, ...] = (0.5, 0.8, 1.2)
     stuck_time: float = 0.5           # s with every path blocked
+    stuck_log_after: float = 0.5      # s blocked before the one 'stuck' log line (no line for a blip)
     recovery_until: float = 0.5       # m driven on a plan again: back to the normal candidates
     recovery_reverse: bool = False    # also back up when still stuck (launch argument `reverse`)
     reverse_after: float = 1.5        # s stuck
@@ -622,6 +623,7 @@ class Plan:
     candidates: List[Tuple[np.ndarray, float]] = field(default_factory=list)  # (path, cost) for debug
     feasible: bool = True
     sequence: Optional['Sequence'] = None     # lane-sequence plan, if that planner made it
+    blocked: Optional[dict] = None    # candidates out per reason (local candidates), for the stuck log
 
 
 def lane_centres(p: AvoidParams) -> np.ndarray:
@@ -760,7 +762,10 @@ def _score(s0, d0, psi, ds, E, Lt, d, slope, costmap, travelled, direction, last
         bad |= island_hit
     if route:       # only a way that is clear all the way to the island: else wait as one-stage
         bad |= hit.any(axis=1)
-    return np.where(bad, np.inf, cost), obstacle, s
+    # why candidates are out, for the stuck log (a candidate can count more than once)
+    blocked = {'obstacle margin': int(lethal.sum()), 'yellow line': int(out_of_road.sum()),
+               'island': int((bad & island_hit).sum()), 'of': int(len(E))}
+    return np.where(bad, np.inf, cost), obstacle, s, blocked
 
 
 def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Costmap,
@@ -803,17 +808,17 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
         cands = _route_candidates(ds, d0, m0, s0, tc, front, p)
         if cands is not None:
             E, Lt, d, slope = cands
-            cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=True)
+            cost, obstacle, s, blocked = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=True)
             if np.isfinite(cost).any():
-                return _plan(s, d, E, cost, obstacle, keep_candidates)
+                return _plan(s, d, E, cost, obstacle, keep_candidates, blocked)
 
     ends = np.arange(-p.end_span * w, p.end_span * w + 1e-9, p.end_step)
     E, Lt = np.meshgrid(ends, np.asarray(p.transition_lengths), indexing='ij')
     E, Lt = E.ravel(), Lt.ravel()                                   # (P,)
     ds = np.arange(p.path_ds, p.horizon + 1e-9, p.path_ds)          # (S,)
     d, slope = _hermite(ds, d0, m0, E, Lt)
-    cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=False)
-    return _plan(s, d, E, cost, obstacle, keep_candidates)
+    cost, obstacle, s, blocked = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=False)
+    return _plan(s, d, E, cost, obstacle, keep_candidates, blocked)
 
 
 def _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep) -> Optional[Plan]:
@@ -872,7 +877,7 @@ def _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep) -
                 sequence=seq)
 
 
-def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
+def _plan(s, d, E, cost, obstacle, keep_candidates, blocked=None) -> Plan:
     best = int(np.argmin(cost))
     feasible = bool(np.isfinite(cost[best]))
     cands = []
@@ -882,7 +887,7 @@ def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
             cands.append((np.column_stack((s[k], d[k])), float(cost[k])))
     return Plan(path=np.column_stack((s[best], d[best])), end_offset=float(E[best]),
                 cost=float(cost[best]), obstacle_cost=float(obstacle[best]), candidates=cands,
-                feasible=feasible)
+                feasible=feasible, blocked=blocked)
 
 
 class CourseMap:
@@ -1550,6 +1555,7 @@ class StaticAvoid:
         self.recovered_from: Optional[float] = None   # s where a plan was found again
         self.backing_from: Optional[float] = None     # s where the back-up started
         self.reversed = 0.0
+        self.stuck_log = None           # (t, where, logged) since every path got blocked (for the log)
 
     def _stuck(self, t: Optional[float], s: float) -> Tuple[float, float]:
         """Every path blocked: stop; after stuck_time plan with the sharper recovery candidates; after
@@ -1617,7 +1623,17 @@ class StaticAvoid:
         if esc is None and (self.plan is None or not self.plan.feasible):
             esc = self._escape(t, pose)
             if esc is None:
-                return self._stuck(t, pose[0])
+                # one log line when it lasts stuck_log_after s (blocked for a scan or two is normal),
+                # with where it started and how far each lane was free then (see stuck_report)
+                if self.stuck_log is None:
+                    self.stuck_log = (t if t is not None else 0.0, self.stuck_report(pose), False)
+                cmd = self._stuck(t, pose[0])
+                t0, where, logged = self.stuck_log
+                if not logged and (t is None or t - t0 >= p.stuck_log_after):
+                    self.stuck_log = (t0, where, True)
+                    self.event = ('stuck: every path blocked at ' + where
+                                  + ('; recovery candidates' if self.recovering else ''))
+                return cmd
         if esc is not None:
             delta = pure_pursuit(esc.path, pose, replace(p, lookahead=p.escape_lookahead))
             return p.escape_speed, p.escape_speed * math.tan(delta) / p.wheelbase
@@ -1625,6 +1641,11 @@ class StaticAvoid:
             self.reversed += max(self.backing_from - pose[0], 0.0)
             self.backing_from = None
         self.stuck_since = None
+        if self.stuck_log is not None:
+            if self.stuck_log[2]:
+                self.event = ('stuck: moving again after %.1f s' % (t - self.stuck_log[0])
+                              if t is not None else 'stuck: moving again')
+            self.stuck_log = None
         if self.recovering:
             if self.recovered_from is None:
                 self.recovered_from = pose[0]
@@ -1638,6 +1659,35 @@ class StaticAvoid:
         if self.approach:
             v = p.approach_speed
         return v, v * math.tan(delta) / p.wheelbase
+
+    def free_ahead(self, s: float, reach: float = 2.0) -> List[Optional[float]]:
+        """Per lane (1, 2, 3): m along its centre from s to the first occupied costmap cell, None if
+        none within reach."""
+        p = self.p
+        steps = np.arange(0.0, reach, p.resolution)
+        rel = self.lane_in_costmap()
+        out = []
+        for c in lane_centres(p):
+            pts = np.column_stack((s + steps, np.full(len(steps), c)))
+            occ = self.costmap.occupied_at(pts if rel is None else rel.points_from(pts))
+            out.append(float(steps[np.argmax(occ)]) if occ.any() else None)
+        return out
+
+    def stuck_report(self, pose) -> str:
+        """Where the car stands and how far each lane is free ahead, for the log."""
+        s, d, psi = pose
+        free = self.free_ahead(s) if self.costmap is not None else [None] * 3
+        lanes = ', '.join('lane %d %s' % (k + 1, '>2.0 m' if f is None else '%.2f m' % f)
+                          for k, f in enumerate(free))
+        why = ''
+        b = self.plan.blocked if self.plan is not None else None
+        if b:
+            # 'obstacle margin': within the distance a full-lock swerve needs, every way passes too
+            # close to an obstacle (1114_0028: 0.32 m behind a LIMO, lane 1 free but out of reach)
+            why = '; %d paths blocked by: obstacle margin %d, yellow line %d, island %d' % (
+                b['of'], b['obstacle margin'], b['yellow line'], b['island'])
+        return ('s %.2f d %+.2f (lane %d, heading %+.0f deg); free ahead: %s%s'
+                % (s, d, lane_of(d, self.p), math.degrees(psi), lanes, why))
 
     def release_target(self, d: float) -> float:
         """Centre of the lane the car is in: any lane, lane_main picks A/B at the island."""
