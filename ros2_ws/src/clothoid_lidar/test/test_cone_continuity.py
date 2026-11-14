@@ -60,9 +60,10 @@ def test_single_anchor_rejects_disordered_or_too_tight_outer_wall():
     assert endpoint_centerline(anchor, outer, .05) is None
 
 
-def test_legacy_pursuit_keeps_configured_lookahead_for_far_target():
+def test_far_target_uses_its_actual_rear_axle_distance():
     params = FollowerParams(lfd=.4)
     center = np.array([[.1, .1], [.45, .825]])
     delta = compute_steering(center, params)
-    # Recorded legacy law: the target can be farther than the configured lfd.
-    assert delta == pytest.approx(np.deg2rad(39.76215915180505))
+    # The selected target is (.45,.825); it is almost a metre from the rear
+    # axle, rather than the configured .4 m of path used to select it.
+    assert delta == pytest.approx(np.arctan2(.4*.825, .55**2+.825**2))

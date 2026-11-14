@@ -161,9 +161,9 @@ def test_pure_pursuit_uses_rear_axle_offset_and_wheelbase_separately():
     center = np.array([[0.1 * i, 0.05 * i] for i in range(8)])
     target = np.array([0.3, 0.15])
 
-    def expected(rear_axle_x, wheelbase, lfd=0.3):
-        theta = np.arctan2(target[1], target[0] + rear_axle_x)
-        return np.arctan2(2.0 * wheelbase * np.sin(theta), lfd)
+    def expected(rear_axle_x, wheelbase):
+        distance_squared = (target[0] + rear_axle_x)**2 + target[1]**2
+        return np.arctan2(2.0 * wheelbase * target[1], distance_squared)
 
     base = FollowerParams(rear_axle_x=0.1, wheelbase=0.2)
     assert compute_steering(center, base) == pytest.approx(expected(0.1, 0.2))

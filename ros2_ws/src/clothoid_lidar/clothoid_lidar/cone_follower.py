@@ -209,12 +209,20 @@ def look_ahead_point(center: np.ndarray, params: FollowerParams) -> Optional[np.
 
 
 def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
-    """Pure pursuit steering (rad, + left) towards the look-ahead point of the centre line."""
+    """Pure pursuit using the target's actual distance from the rear axle.
+
+    lfd selects the target along the path. It is not generally the distance
+    from the rear axle to that target, especially with a lateral tracking error.
+    tan(delta) = wheelbase * gain * 2*y/(x*x+y*y), in rear-axle coordinates.
+    """
     target = look_ahead_point(center, params)
     if target is None:
         return 0.0
-    theta = np.arctan2(target[1], target[0] + params.rear_axle_x)
-    return float(np.arctan2(2.0 * params.wheelbase * params.steering_gain * np.sin(theta), params.lfd))
+    x, y = float(target[0]) + params.rear_axle_x, float(target[1])
+    distance_squared = x*x + y*y
+    if not np.isfinite(distance_squared) or distance_squared <= 1e-12:
+        return 0.0
+    return float(np.arctan2(2.0 * params.wheelbase * params.steering_gain * y, distance_squared))
 
 
 class ConeFollower:
