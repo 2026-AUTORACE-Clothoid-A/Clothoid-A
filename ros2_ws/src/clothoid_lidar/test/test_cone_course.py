@@ -157,13 +157,12 @@ def test_left_curve_steers_left_and_right_curve_steers_right():
 
 
 def test_pure_pursuit_uses_rear_axle_offset_and_wheelbase_separately():
-    # straight diagonal line; the look-ahead (0.3 m of path) lands on (0.3, 0.15)
+    # On y=.5*x, solve the rear-axle circle intersection analytically.
     center = np.array([[0.1 * i, 0.05 * i] for i in range(8)])
-    target = np.array([0.3, 0.15])
 
     def expected(rear_axle_x, wheelbase):
-        distance_squared = (target[0] + rear_axle_x)**2 + target[1]**2
-        return np.arctan2(2.0 * wheelbase * target[1], distance_squared)
+        x = (-rear_axle_x+np.sqrt(1.25*.3**2-.25*rear_axle_x**2))/1.25
+        return np.arctan2(wheelbase*x, .3**2)
 
     base = FollowerParams(rear_axle_x=0.1, wheelbase=0.2)
     assert compute_steering(center, base) == pytest.approx(expected(0.1, 0.2))
@@ -225,7 +224,7 @@ def test_first_step_limit_is_separate_from_the_segment_limit():
 def test_look_ahead_point_matches_the_steering_target():
     params = FollowerParams(lfd=0.3)
     center = np.column_stack((np.arange(0.0, 1.0, 0.05), np.zeros(20)))
-    assert look_ahead_point(center, params)[0] == pytest.approx(0.3)
+    assert look_ahead_point(center, params)[0] == pytest.approx(0.2)
     assert look_ahead_point(np.zeros((0, 2)), params) is None
 
 

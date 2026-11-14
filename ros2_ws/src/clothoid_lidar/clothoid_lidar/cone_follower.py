@@ -34,7 +34,7 @@ class FollowerParams:
     # base_link sits midway between the axles (URDF wheels at x = +-wheelbase/2).
     wheelbase: float = 0.2        # m, front to rear axle (steering gain of pure pursuit)
     rear_axle_x: float = 0.1      # m, rear axle behind base_link (origin of the look-ahead angle)
-    lfd: float = 0.3              # m, look-ahead distance
+    lfd: float = 0.3              # m, look-ahead circle radius from the rear axle
     steering_gain: float = 1.0    # forward curvature multiplier; target/lfd stay unchanged
     centerline_ds: float = 0.05   # m, resampling step
     lsq_window_size: int = 9      # odd, >= 5
@@ -44,6 +44,8 @@ class FollowerParams:
     corner_endpoint_enabled: bool = True
 
     def __post_init__(self):
+        if not np.isfinite(self.lfd) or self.lfd <= 0.0:
+            raise ValueError('lfd must be finite and positive')
         if not np.isfinite(self.steering_gain) or self.steering_gain <= 0.0:
             raise ValueError('steering_gain must be finite and positive')
         self.lsq_window_size = max(5, self.lsq_window_size)
@@ -194,25 +196,64 @@ def retained_center_line(left, right, params):
 
 
 def look_ahead_point(center: np.ndarray, params: FollowerParams) -> Optional[np.ndarray]:
-    """The centre line point `lfd` along from the closest one, or its end if the line is shorter."""
-    n = len(center)
-    if n == 0:
-        return None
-    closest = int(np.argmin(np.sum(center ** 2, axis=1)))
+    """First forward outward crossing of the rear-axle lookahead circle.
 
-    acc = 0.0
-    for i in range(closest + 1, n):
-        acc += float(np.linalg.norm(center[i] - center[i - 1]))
-        if acc >= params.lfd:
-            return center[i]
-    return center[-1] if n > closest + 1 else None
+    Start at the closest projection onto the ordered path and interpolate the
+    crossing inside a segment. A short remaining path uses its endpoint. If the
+    path lies outside the circle, retain its nearest forward point instead of
+    treating the missing intersection as missing boundary geometry.
+    """
+    points = np.asarray(center, dtype=float)
+    if (points.ndim != 2 or points.shape[1] != 2 or len(points) < 2
+            or not np.isfinite(points).all() or not np.isfinite(params.rear_axle_x)):
+        return None
+    # Duplicate vertices are not a path segment (two isolated cone seeds can
+    # produce a single midpoint, which must still use the existing recovery).
+    points = points[np.r_[True, np.sum(np.diff(points, axis=0)**2, axis=1) > 1e-12]]
+    if len(points) < 2:
+        return None
+    rear = np.array([-params.rear_axle_x, 0.])
+    steps = np.diff(points, axis=0)
+    lengths_squared = np.sum(steps*steps, axis=1)
+    fractions = np.clip(np.sum((rear-points[:-1])*steps, axis=1)/lengths_squared, 0., 1.)
+    projections = points[:-1]+fractions[:, None]*steps
+    closest = int(np.argmin(np.sum((projections-rear)**2, axis=1)))
+    remaining = np.vstack((projections[closest], points[closest+1:]))
+    if np.sum(np.diff(remaining, axis=0)**2) <= 1e-12:
+        return None  # the ordered path has already ended
+
+    radius_squared = params.lfd**2
+    for start, end in zip(remaining, remaining[1:]):
+        step, local = end-start, start-rear
+        length_squared = float(step@step)
+        if length_squared <= 1e-12:
+            continue
+        projection = -float(local@step)/length_squared
+        perpendicular_squared = max(0., float(local@local)-projection**2*length_squared)
+        gap = radius_squared-perpendicular_squared
+        if gap < -1e-12:
+            continue
+        # The positive root is the outward crossing, following path order.
+        fraction = projection+np.sqrt(max(0., gap)/length_squared)
+        if -1e-9 <= fraction <= 1.+1e-9:
+            target = start+np.clip(fraction, 0., 1.)*step
+            if target[0] > 0.:
+                return target
+
+    distances_squared = np.sum((remaining-rear)**2, axis=1)
+    if np.all(distances_squared <= radius_squared+1e-12):
+        return remaining[-1].copy() if remaining[-1, 0] > 0. else None
+    forward = np.flatnonzero(remaining[:, 0] > 0.)
+    if not len(forward):
+        return None
+    return remaining[forward[np.argmin(distances_squared[forward])]].copy()
 
 
 def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
     """Pure pursuit using the target's actual distance from the rear axle.
 
-    lfd selects the target along the path. It is not generally the distance
-    from the rear axle to that target, especially with a lateral tracking error.
+    The circle normally sets the target distance to lfd. Short-path and
+    outside-circle fallbacks still use their actual rear-axle distance.
     tan(delta) = wheelbase * gain * 2*y/(x*x+y*y), in rear-axle coordinates.
     """
     target = look_ahead_point(center, params)

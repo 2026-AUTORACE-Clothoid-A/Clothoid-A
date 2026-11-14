@@ -49,7 +49,7 @@ cone_follower:
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
     wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
     rear_axle_x: 0.1         # rear axle behind base_link (base_link is midway between the axles)
-    lfd: 0.3                 # bag-based tuning candidate: closer tracking with less jitter than 0.25
+    lfd: 0.3                 # rear-axle lookahead circle radius, metres
     steering_gain: 1.1       # forward curvature x1.1; does not move the lookahead target
     centerline_ds: 0.05
     lsq_window_size: 9

@@ -60,10 +60,10 @@ def test_single_anchor_rejects_disordered_or_too_tight_outer_wall():
     assert endpoint_centerline(anchor, outer, .05) is None
 
 
-def test_far_target_uses_its_actual_rear_axle_distance():
+def test_outside_circle_fallback_uses_its_actual_rear_axle_distance():
     params = FollowerParams(lfd=.4)
-    center = np.array([[.1, .1], [.45, .825]])
+    center = np.array([[.4, .1], [.45, .825]])
     delta = compute_steering(center, params)
-    # The selected target is (.45,.825); it is almost a metre from the rear
-    # axle, rather than the configured .4 m of path used to select it.
-    assert delta == pytest.approx(np.arctan2(.4*.825, .55**2+.825**2))
+    # The entire path is outside the circle. Its nearest forward point is
+    # (.4,.1), over .5 m from the rear axle, so the denominator remains actual.
+    assert delta == pytest.approx(np.arctan2(.4*.1, .5**2+.1**2))
