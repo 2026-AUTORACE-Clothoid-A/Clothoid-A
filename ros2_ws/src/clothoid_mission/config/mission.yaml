@@ -64,6 +64,7 @@ mission:
     # cone gate: allow parking and block speed bump only after /cone/mission_active has been true
     require_cone_for_parking: true
     block_bump_after_cone: true
+    avoid_release_hold: 2.0     # s: cone_active does not count while /avoid/active and this long after
     cone_confirm_sec: 1.5       # consecutive seconds of cone_active before latching cone_entered
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
