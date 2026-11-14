@@ -10,7 +10,9 @@ source "$(dirname "$0")/env.sh"
 mkdir -p "$OUT"
 # LAZY=false: parking / finish subscribe imu/odom(/scan) from the start, as before 2026-11-10.
 # A params file, not -p: the node's own yaml section wins over a command line -p.
-printf 'parking:\n  ros__parameters:\n    lazy_sensors: %s\nfinish:\n  ros__parameters:\n    lazy_sensors: %s\n' \
+# Bags have /imu and /odom, not limo_base's /imu_25hz and /odom_25hz (lane.yaml, parking.yaml): point the
+# nodes that read the 25 Hz copies back at the full-rate topics.
+printf 'parking:\n  ros__parameters:\n    lazy_sensors: %s\n    imu_topic: /imu\n    odom_topic: /odom\nfinish:\n  ros__parameters:\n    lazy_sensors: %s\nlane_main:\n  ros__parameters:\n    imu_topic: /imu\n    odom_topic: /odom\n' \
   "${LAZY:-true}" "${LAZY:-true}" > "$OUT/lazy.yaml"
 SECS=${SECS:-$(python3 "$HERE/gaps.py" --duration "$BAG" | awk '{print int($1)+12}')}
 run() {  # label module:Class [ros args...]
@@ -18,7 +20,7 @@ run() {  # label module:Class [ros args...]
   python3 "$HERE/harness.py" "$spec" "$label" "$SECS" --ros-args -p use_sim_time:=true "$@" \
     > "$OUT/$label.log" 2>&1 &
 }
-run lane_main clothoid_lane.lane_main:LaneMainNode --params-file $TOP --params-file $MAIN/clothoid_lane/config/lane.yaml --params-file $CAM -p debug:=$LDBG
+run lane_main clothoid_lane.lane_main:LaneMainNode --params-file $TOP --params-file $MAIN/clothoid_lane/config/lane.yaml --params-file $CAM --params-file $OUT/lazy.yaml -p debug:=$LDBG
 [ "${USE_STOPLINE:-false}" = true ] && run stopline clothoid_lane.stopline_node:StopLineNode --params-file $TOP --params-file $MAIN/clothoid_lane/config/stopline.yaml --params-file $CAM
 [ "${USE_SPEED_ZONE:-false}" = true ] && run speed_zone clothoid_lane.speed_zone_node:SpeedZoneNode --params-file $TOP --params-file $MAIN/clothoid_lane/config/speed_zone.yaml --params-file $CAM
 run yolo_none clothoid_yolo.yolo_node:YoloNode --params-file $TOP -p backend:=none
