@@ -26,7 +26,7 @@ except ImportError:  # scipy < 1.8 (older JetPack / apt images)
 @dataclass
 class FollowerParams:
     speed: float = 0.3            # m/s (2025 launch value, node default was 0.4)
-    reverse_speed: float = -0.2   # m/s, one boundary only; 0 disables backing off and stops
+    reverse_speed: float = -0.2   # m/s, boundary recovery only; 0 disables recovery
     # deg, steering while backing off when only one boundary is visible (2025 `max_steer_deg`, 21).
     # Forward pure pursuit is not cut by this; the LIMO hardware limit is 28 deg inner wheel.
     reverse_steer_deg: float = 21.0
@@ -35,6 +35,7 @@ class FollowerParams:
     wheelbase: float = 0.2        # m, front to rear axle (steering gain of pure pursuit)
     rear_axle_x: float = 0.1      # m, rear axle behind base_link (origin of the look-ahead angle)
     lfd: float = 0.3              # m, look-ahead distance
+    steering_gain: float = 1.0    # forward curvature multiplier; target/lfd stay unchanged
     centerline_ds: float = 0.05   # m, resampling step
     lsq_window_size: int = 9      # odd, >= 5
     # s, boundaries older than this are ignored. 2025 used 0.1, but the Tmini Plus scans at 10 Hz
@@ -43,6 +44,8 @@ class FollowerParams:
     corner_endpoint_enabled: bool = True
 
     def __post_init__(self):
+        if not np.isfinite(self.steering_gain) or self.steering_gain <= 0.0:
+            raise ValueError('steering_gain must be finite and positive')
         self.lsq_window_size = max(5, self.lsq_window_size)
         if self.lsq_window_size % 2 == 0:
             self.lsq_window_size += 1
@@ -211,25 +214,68 @@ def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
     if target is None:
         return 0.0
     theta = np.arctan2(target[1], target[0] + params.rear_axle_x)
-    return float(np.arctan2(2.0 * params.wheelbase * np.sin(theta), params.lfd))
+    return float(np.arctan2(2.0 * params.wheelbase * params.steering_gain * np.sin(theta), params.lfd))
 
 
 class ConeFollower:
     def __init__(self, params: FollowerParams):
         self.p = params
         self.corridor = CorridorMemory()
+        self.last_forward_steering = None
+        self.reverse_start_travel = None
 
     def reset(self):
         self.corridor.clear()
+        self.last_forward_steering = None
+        self.reverse_start_travel = None
+
+    def _forward(self, center, source='observed'):
+        self.last_forward_steering = compute_steering(center, self.p)
+        self.reverse_start_travel = None
+        return FollowResult(self.p.speed, self.last_forward_steering, center=center,
+                            target=look_ahead_point(center, self.p), source=source)
+
+    def _recover(self, left, right, pose, obstacles, allow_reverse):
+        p = self.p
+        if obstacles is None:
+            return FollowResult(0., 0., source='stale_obstacles')
+        if not len(obstacles):
+            return FollowResult(0., 0., source='no_cones')
+        if pose is None:
+            return FollowResult(0., 0., source='stale_pose')
+        if not allow_reverse or p.reverse_speed >= 0.:
+            return FollowResult(0., 0., source='no_boundary_path')
+        self.corridor.update_pose(pose)
+        if self.reverse_start_travel is None:
+            self.reverse_start_travel = self.corridor.travelled
+        if self.corridor.travelled-self.reverse_start_travel >= p.lfd:
+            return FollowResult(0., 0., source='recovery_limit')
+        lock = np.deg2rad(p.reverse_steer_deg)
+        steering = self.last_forward_steering
+        if steering is None:
+            steering = lock if len(left) and not len(right) else -lock if len(right) and not len(left) else 0.
+        # Same steering and negative velocity retrace the most recent turn.
+        return FollowResult(p.reverse_speed, float(np.clip(steering, -lock, lock)),
+                            reverse=True, source='boundary_recovery')
 
     def decide(self, left: np.ndarray, right: np.ndarray,
                left_fresh: bool, right_fresh: bool, pose=None, obstacles=None,
-               min_clearance: float = .2) -> Optional[FollowResult]:
+               min_clearance: float = .2, allow_reverse: bool = False) -> Optional[FollowResult]:
         """None means "publish nothing" (no fresh boundary, or no centre line)."""
         p = self.p
-        if not left_fresh or not right_fresh:
-            visible_left = left if left_fresh else np.zeros((0, 2))
-            visible_right = right if right_fresh else np.zeros((0, 2))
+        visible_left = left if left_fresh else np.zeros((0, 2))
+        visible_right = right if right_fresh else np.zeros((0, 2))
+        center = np.zeros((0, 2))
+        if left_fresh and right_fresh and len(left) and len(right):
+            center = build_center_line(left, right, p)
+            target = look_ahead_point(center, p)
+            if target is not None and np.isfinite(target).all() and target[0] > 0.:
+                if usable_path(center, obstacles, min_clearance, target):
+                    self.corridor.observe(left, right, center, pose, p.lfd)
+                return self._forward(center)
+        # An empty/one-point centre is not a steerable path, even if both
+        # boundary messages are fresh. Try retained/width paths before recovery.
+        if pose is not None:
             for center, source in self.corridor.candidates(
                     visible_left, visible_right, pose, p.centerline_ds,
                     lambda a, b: retained_center_line(a, b, p)):
@@ -239,24 +285,5 @@ class ConeFollower:
                 center = center[closest:]
                 target = look_ahead_point(center, p)
                 if usable_path(center, obstacles, min_clearance, target):
-                    return FollowResult(p.speed, compute_steering(center, p),
-                                        center=center, target=target, source=source)
-        reverse_steer = np.deg2rad(p.reverse_steer_deg)
-        if not left_fresh and not right_fresh:
-            return None
-        if (not left_fresh or not right_fresh) and p.reverse_speed >= 0.0:
-            return FollowResult(0.0, 0.0)
-        # one boundary only: back off with full lock away from the visible side (2025)
-        if not left_fresh:
-            return FollowResult(p.reverse_speed, -reverse_steer, reverse=True)
-        if not right_fresh:
-            return FollowResult(p.reverse_speed, +reverse_steer, reverse=True)
-
-        center = build_center_line(left, right, p)
-        if len(center) == 0:
-            return None
-        target = look_ahead_point(center, p)
-        if usable_path(center, obstacles, min_clearance, target):
-            self.corridor.observe(left, right, center, pose, p.lfd)
-        return FollowResult(p.speed, compute_steering(center, p), center=center,
-                            target=target)
+                    return self._forward(center, source)
+        return self._recover(visible_left, visible_right, pose, obstacles, allow_reverse)

@@ -184,19 +184,21 @@ def test_decide_drives_when_both_boundaries_are_fresh():
     assert len(result.center) > 0
 
 
-def test_decide_reverses_with_full_lock_when_one_boundary_is_missing():
+def test_decide_reverses_only_after_explicit_boundary_recovery_confirmation():
     left, right = gate([0.3, 0.65, 1.0])
     follower = ConeFollower(FollowerParams(reverse_speed=-0.2, reverse_steer_deg=21.0))
-    only_right = follower.decide(left, right, False, True)
-    only_left = follower.decide(left, right, True, False)
+    only_right = follower.decide(left, right, False, True, (0.,0.,0.), right, allow_reverse=True)
+    follower.reset()
+    only_left = follower.decide(left, right, True, False, (0.,0.,0.), left, allow_reverse=True)
     assert only_right.reverse and only_right.speed == -0.2
     assert only_right.steering == pytest.approx(-np.deg2rad(21.0))
     assert only_left.steering == pytest.approx(np.deg2rad(21.0))
 
 
-def test_decide_publishes_nothing_when_all_boundaries_are_stale():
+def test_decide_stops_when_all_boundaries_are_stale_and_no_recovery_is_confirmed():
     left, right = gate([0.3, 0.65, 1.0])
-    assert ConeFollower(FollowerParams()).decide(left, right, False, False) is None
+    result = ConeFollower(FollowerParams()).decide(left, right, False, False)
+    assert result.speed == 0. and not result.reverse
 
 
 def test_collinear_cones_do_not_crash():
