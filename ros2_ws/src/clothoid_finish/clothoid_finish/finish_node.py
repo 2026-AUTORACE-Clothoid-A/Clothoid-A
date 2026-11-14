@@ -1,6 +1,6 @@
 """ROS wiring for FinishCore: after /parking_done, yellow-line follow to the end line and stop.
 
-Inputs: colour image (compressed by default), camera_info (intrinsics), /imu, /odom, /parking_done.
+Inputs: colour image (raw by default), camera_info (intrinsics), /imu, /odom, /parking_done.
 The camera is subscribed only while following; with lazy_sensors (default) /imu and /odom only from
 /parking_flag (parking starts, seconds before /parking_done) until STOP/ABORT.
 Output: /cmd_vel_finish (twist_mux, same priority as parking), /finish_done, /finish/state,
@@ -32,7 +32,7 @@ STALE_SEC = 0.5
 class FinishNode(Node):
     def __init__(self):
         super().__init__('finish')
-        for name, default in (('image_topic', '/camera/color/image_raw/compressed'),
+        for name, default in (('image_topic', '/camera/color/image_raw'),
                               ('camera_info_topic', '/camera/color/camera_info'),
                               ('imu_topic', '/imu'), ('odom_topic', '/odom'),
                               ('start_topic', '/parking_done'), ('arm_topic', '/parking_flag'),
@@ -40,7 +40,7 @@ class FinishNode(Node):
                               ('done_topic', '/finish_done'), ('state_topic', '/finish/state'),
                               ('debug_topic', '/finish/debug_image')):
             self.declare_parameter(name, default)
-        self.declare_parameter('compressed', True)
+        self.declare_parameter('compressed', False)
         # /imu (100 Hz) + /odom (50 Hz) cost ~20 % of an Orin core just to receive; finish only needs
         # them from the parking run on, so they are subscribed on arm_topic true (false: always)
         self.declare_parameter('lazy_sensors', True)
