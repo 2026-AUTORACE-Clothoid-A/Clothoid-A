@@ -269,7 +269,11 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                                  lane=avoid.lane(tracker.latest()),
                                  limos=base_to_section(limos, avoid.section_pose(pose))
                                  if len(limos) else limos))
-        if avoid.control(tracker.latest(), inh) is None:
+        had = avoid.event
+        ended = avoid.control(tracker.latest(), inh) is None
+        if avoid.event != had and avoid.event.startswith('sign look'):      # as the node logs it
+            rec['events'].append((s, avoid.event))
+        if ended:
             rec['events'].append((s, 'END ' + avoid.event))
             sec = avoid.lane_pose(tracker.latest())
             rec['handover'] = dict(t=s, s=sec[0], d=sec[1], island=avoid.island,
