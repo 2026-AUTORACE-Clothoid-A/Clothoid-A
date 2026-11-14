@@ -83,6 +83,10 @@ class YoloNode(Node):
         super().__init__('yolo')
 
         self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('image_10hz_topic', '/camera/color/image_10hz')
+        # '10hz': image_10hz_topic every frame (avoids 30 Hz raw deserialization in Python);
+        # 'raw': image_topic every image_every-th frame.
+        self.declare_parameter('image_source', '10hz')
         self.declare_parameter('detections_topic', '/detections')
         self.declare_parameter('debug_image_topic', '/yolo/debug_image')
         self.declare_parameter('backend', 'ultralytics')   # ultralytics | none
@@ -93,7 +97,7 @@ class YoloNode(Node):
         self.declare_parameter('min_confidence', 0.5)      # threshold for what is published
         # model class name -> message class name, as "model_name:message_name" strings
         self.declare_parameter('class_aliases', [''])
-        self.declare_parameter('image_every', 2)           # 30 Hz camera -> every 2nd frame (~15 Hz)
+        self.declare_parameter('image_every', 3)           # 30 Hz raw camera -> every 3rd frame (~10 Hz)
         self.declare_parameter('debug', False)
         self.declare_parameter('show', False)
 
@@ -124,11 +128,15 @@ class YoloNode(Node):
 
         self.pub = self.create_publisher(DetectionArray, get('detections_topic'), 1)
         self.debug_pub = self.create_publisher(Image, get('debug_image_topic'), 1)
-        self.create_subscription(Image, get('image_topic'), self.on_image, IMAGE_QOS)
-        self.get_logger().info(f"yolo started (backend={get('backend')}, image_every={get('image_every')})")
+        self.image_source = get('image_source')
+        self.image_topic = get('image_10hz_topic') if self.image_source == '10hz' else get('image_topic')
+        self.create_subscription(Image, self.image_topic, self.on_image, IMAGE_QOS)
+        self.get_logger().info(
+            f"yolo started (backend={get('backend')}, image_source={self.image_source}, "
+            f"topic={self.image_topic}, image_every={get('image_every')})")
 
     def on_image(self, msg: Image):
-        every = max(1, int(self.get_parameter('image_every').value))
+        every = 1 if self.image_source == '10hz' else max(1, int(self.get_parameter('image_every').value))
         if self.ready and every > 1:
             self._frame_count += 1
             if self._frame_count % every != 0:
