@@ -9,6 +9,7 @@ yolo:
     device: ''               # '' = auto, 'cuda:0', 'cpu'
     model_conf: 0.25         # threshold inside the model
     min_confidence: 0.5      # threshold for what is published
+    image_every: 2           # process every Nth frame after ready (2 on 30 Hz camera -> ~15 Hz)
     # rename model classes to Detection.msg names, e.g. ['red:traffic_light_red']
     class_aliases: ['']
     # debug (default false): `ros2 param set /yolo debug true` publishes /yolo/debug_image

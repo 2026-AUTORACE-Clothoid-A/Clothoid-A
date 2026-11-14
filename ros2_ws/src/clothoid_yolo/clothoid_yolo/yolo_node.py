@@ -6,16 +6,17 @@
 import os
 from pathlib import Path
 
+import cv2
 import numpy as np
 import rclpy
 from clothoid_interfaces.msg import Detection, DetectionArray
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
 
 
@@ -92,6 +93,7 @@ class YoloNode(Node):
         self.declare_parameter('min_confidence', 0.5)      # threshold for what is published
         # model class name -> message class name, as "model_name:message_name" strings
         self.declare_parameter('class_aliases', [''])
+        self.declare_parameter('image_every', 2)           # 30 Hz camera -> every 2nd frame (~15 Hz)
         self.declare_parameter('debug', False)
         self.declare_parameter('show', False)
 
@@ -114,6 +116,7 @@ class YoloNode(Node):
         # Initial false is published before loading the first image. backend=none
         # deliberately never signals successful inference.
         self.ready = False
+        self._frame_count = 0
         self.ready_pub = self.create_publisher(Bool, '/yolo/ready', QoSProfile(
             depth=1, reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL))
@@ -121,10 +124,15 @@ class YoloNode(Node):
 
         self.pub = self.create_publisher(DetectionArray, get('detections_topic'), 1)
         self.debug_pub = self.create_publisher(Image, get('debug_image_topic'), 1)
-        self.create_subscription(Image, get('image_topic'), self.on_image, qos_profile_sensor_data)
-        self.get_logger().info(f"yolo started (backend={get('backend')})")
+        self.create_subscription(Image, get('image_topic'), self.on_image, IMAGE_QOS)
+        self.get_logger().info(f"yolo started (backend={get('backend')}, image_every={get('image_every')})")
 
     def on_image(self, msg: Image):
+        every = max(1, int(self.get_parameter('image_every').value))
+        if self.ready and every > 1:
+            self._frame_count += 1
+            if self._frame_count % every != 0:
+                return
         out = DetectionArray()
         out.header = msg.header
         boxes = []
@@ -177,13 +185,15 @@ class YoloNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = YoloNode()
+    threads = node.declare_parameter('opencv_threads', 1).value
+    if threads:
+        cv2.setNumThreads(threads)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
         try:
-            import cv2
             cv2.destroyAllWindows()
         except Exception:
             pass
