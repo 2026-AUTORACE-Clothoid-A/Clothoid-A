@@ -111,6 +111,8 @@ class StaticAvoidNode(Node):
         self.course = None
         self.snaps_logged = 0
         self.origin_logged = 'pending'
+        self.line_start_odo = None          # odometer of the requested section start line
+        self.blocker_fallback = False       # race start, the line start dropped: a blocker starts it
         if self.p.course_map:
             self.course = CourseMap(self.p)
             self.tracker.course = self.course
@@ -334,6 +336,7 @@ class StaticAvoidNode(Node):
                 self.log_origin()
                 if self.course.origin == 'race':
                     self.avoid.request_line_start(self.tracker.line_pose(c.odometer))
+                    self.line_start_odo = c.odometer
         had_event = self.avoid.event
         self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry, t_img)
         if self.avoid.event != had_event and 'fit' in self.avoid.event:
@@ -379,6 +382,9 @@ class StaticAvoidNode(Node):
         c = self.entry.recent(self.tracker.distance, self.p.island_from_entry_max + 1.0, start_only=True)
         entry_back = self.tracker.distance - c.odometer if c is not None else None
         entry_pose = self.tracker.line_pose(c.odometer) if c is not None else None
+        if self.avoid.line_start is not None and self.line_start_odo is not None:
+            # the requested line itself, not looked up again (it may lie more than 1 m ahead)
+            entry_back, entry_pose = self.tracker.distance - self.line_start_odo, self.avoid.line_start
         was_done = self.avoid.done
         had_line = self.avoid.line_start is not None
         # course map: a blocker starts the mission only away from the race start (see CourseMap); one
@@ -388,13 +394,18 @@ class StaticAvoidNode(Node):
             self.course.set_origin('elsewhere', f'a LIMO in our lane {self.tracker.distance:.2f} m after '
                                    'the launch')
             self.log_origin()
-        allowed = self.course is None or self.course.origin == 'elsewhere'
+        allowed = self.course is None or self.course.origin == 'elsewhere' or self.blocker_fallback
         started = self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
                                       entry_back, entry_pose, allowed)
         if self.avoid.done and not was_done:
             self.get_logger().info(f'static obstacle DONE: {self.avoid.event}')
         if had_line and not started and self.avoid.line_start is None:
             self.get_logger().warn(f'static obstacle: {self.avoid.event}')
+            # never left with no way to start (1114 23:39: the line start dropped, no blocker start)
+            if not self.blocker_fallback and self.course is not None and self.course.origin == 'race':
+                self.blocker_fallback = True
+                self.get_logger().warn('course map: race start, but no start on the line; a blocker '
+                                       'starts the mission from here')
         if started:
             how = ('section start line, at approach speed until a blocker'
                    if self.avoid.approach else 'blocked ahead')

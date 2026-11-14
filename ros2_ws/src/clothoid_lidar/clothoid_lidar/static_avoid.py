@@ -1252,13 +1252,21 @@ class StaticAvoid:
             self.line_start = line_pose
 
     def _line_start(self, inhibit: Inhibit, pose_world, entry_back, entry_pose) -> bool:
+        """entry_back / entry_pose: of the requested line itself (the node keeps its odometer). A line
+        still ahead of the base waits: on a corner the line leaves the view sideways and is placed up
+        to 1.5 m ahead; looking it up again within 1 m dropped the start (1114 23:39, no start at
+        all, the car drove into the LIMOs). Dropped only once the base is entry_max_back past it."""
         p = self.p
-        same = (entry_pose is not None
-                and math.hypot(entry_pose[0] - self.line_start[0], entry_pose[1] - self.line_start[1]) < 0.1)
-        if not same or entry_back is None or entry_back > p.entry_max_back:
-            self.line_start = None          # another line, or too far past it: no start from it
-            self.event = 'section start line: no start (another line or %s m past it)' % (
-                'unknown' if entry_back is None else '%.2f' % entry_back)
+        if entry_back is not None and entry_back > p.entry_max_back:
+            self.line_start = None          # too far past it: no start from it
+            self.event = 'section start line: no start (%.2f m past it)' % entry_back
+            return False
+        if entry_back is None or entry_pose is None:
+            return False                    # not known yet: wait
+        same = math.hypot(entry_pose[0] - self.line_start[0], entry_pose[1] - self.line_start[1]) < 0.1
+        if not same:
+            self.line_start = None
+            self.event = 'section start line: no start (another line)'
             return False
         if inhibit.reason(p) or pose_world is None:
             return False
