@@ -15,9 +15,9 @@ import pytest
 
 from clothoid_lidar.obstacle_extractor import ExtractorParams, extract_obstacles, transform_points
 from clothoid_lidar.section_cues import LaneLine, LaneObservation
-from clothoid_lidar.static_avoid import (ACTIVE, IDLE, AvoidParams, Costmap, Inhibit, PoseTracker,
-                                         SectionFrame, StaticAvoid, lane_of, line_residuals,
-                                         plan_paths, pure_pursuit)
+from clothoid_lidar.static_avoid import (ACTIVE, IDLE, AvoidParams, Costmap, Inhibit, Plan,
+                                         PoseTracker, SectionFrame, StaticAvoid, lane_of,
+                                         line_residuals, plan_paths, pure_pursuit)
 
 L, TRACK, SCALE, MAX_INNER = 0.2, 0.175, 1.06, 0.48869
 LIDAR_X = 0.103
@@ -108,7 +108,9 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         seed=1, t_max=45.0, params=None, see_entry=True, skew_deg=None, start_fit=False, steer_gain=1.0,
         control_every=1, track=None, line_start=False, lane_speed=0.3):
     """Drive the section once. Returns a dict of what happened.
-    direction: 0 / 1 / None, or (value, x) for a fork sign first seen when the car passes x.
+    direction: 0 / 1 / None, or (value, x) for a fork sign first seen when the car passes x, or
+    ('view', value, half_deg, range) for a sign on the island front read once it is within range m and
+    half_deg of the camera axis (kept from then on, as the mission keeps the direction).
     skew_deg: the section frame is wrong by this much until the camera lane fit, 0.5 m past the entry
     line (a start while leaving the corner). start_fit: corrected 0.3 s after the start instead, as the
     camera start fit does (the entry-line fit stands for a start fit that failed).
@@ -128,6 +130,7 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
     out = dict(min_gap=np.inf, max_abs_y=0.0, island_ok=True, activated=False, events=[],
                stops=0)
     released = False
+    sign_read = False
     entry_odo = None
     cmd = (0.3, 0.0)
     while t < t_max:
@@ -147,7 +150,15 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         entry_back = tracker.distance - entry_odo if entry_odo is not None else None
         inh = inhibit or Inhibit()
         flag = direction
-        if isinstance(direction, tuple):
+        if isinstance(direction, tuple) and direction[0] == 'view':
+            if not sign_read:
+                bearing = math.atan2(-by, ISLAND[0] - bx) - th
+                sign_read = (math.hypot(ISLAND[0] - bx, by) <= direction[3]
+                             and abs(math.remainder(bearing, 2 * math.pi)) <= math.radians(direction[2]))
+                if sign_read:
+                    out['sign_read_x'] = round(bx, 2)
+            flag = direction[1] if sign_read else None
+        elif isinstance(direction, tuple):
             flag = direction[0] if bx >= direction[1] else None
         if int(round(t / dt)) % 2 == 0:                       # 10 Hz scan
             ox, oy = bx + LIDAR_X * math.cos(th), by + LIDAR_X * math.sin(th)
@@ -175,7 +186,10 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         if int(round(t / dt)) % control_every:
             res = 'hold'
         else:
+            had_event = avoid.event
             res = avoid.control(tracker.latest(), inh, t)
+            if avoid.event != had_event and avoid.event.startswith('sign look'):
+                out['events'].append((round(t, 2), avoid.event, round(bx, 2)))
         if res == 'hold':
             pass
         elif res is None:
@@ -203,6 +217,10 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         yr += cmd[0] * math.sin(th) * dt
         th += cmd[0] * math.tan(delta) / L * dt
         t += dt
+        if not released:
+            out['max_heading'] = max(out.get('max_heading', 0.0), abs(math.degrees(th)))
+        out['min_x_back'] = max(out.get('min_x_back', 0.0), out.get('x_max', bx) - bx)
+        out['x_max'] = max(out.get('x_max', bx), bx)
         car = rect(bx, by, th, 0.32, 0.22)
         out['min_gap'] = min(out['min_gap'], min_gap(car, limos) if limos else np.inf)
         out['max_abs_y'] = max(out['max_abs_y'], float(np.abs(car[:, 1]).max()))
@@ -214,6 +232,7 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
                 out['island_ok'] = False
             else:
                 out['island_tip'] = True
+    out.update(look_cycles=avoid.look_cycle, look_backed=avoid.look_backed)
     out.update(final_y=by, final_lane=lane_of(by, p), x=bx, released=released, t=t,
                state=avoid.state, island_source_end=avoid.island_source)
     return out
@@ -1156,3 +1175,110 @@ def test_line_start_waits_for_a_line_not_placed_yet_and_starts_on_one_ahead():
     assert avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (14.4, -5.0, math.pi), -1.25, line,
                           False)
     assert avoid.state == ACTIVE
+
+
+# --- sign look (AvoidParams.sign_look) -----------------------------------------------------------
+
+def _look_drive(pose0, behind=None, steer_gain=1.0, steps=600):
+    """Kinematic car from pose0 (lane frame) under control() with the island anchored, no
+    direction and no plan; behind = m behind the car of a LIMO-wide wall in its lane."""
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    a.island, a.island_source = (4.35, 6.10), 'entry line'
+    if behind is not None:
+        wall = np.array([[pose0[0] - behind, pose0[1] + dy] for dy in np.linspace(-0.12, 0.12, 7)])
+        for _ in range(5):
+            a.costmap.update(wall, np.array([pose0[0] + 0.1, pose0[1]]), None, None)
+    s, d, h = pose0
+    a.plan = Plan(path=np.array([[s, d], [s + 1.0, d]]), end_offset=d, cost=0.0, obstacle_cost=0.0)
+    dt, events, ss, dd = 0.05, [], [s], [abs(d)]
+    for k in range(steps):
+        had = a.event
+        cmd = a.control((s, d, h), Inhibit(), k * dt)
+        if a.event != had:
+            events.append(a.event)
+        if cmd is None or not a.look:
+            break
+        v, wz = cmd
+        delta = steer_gain * math.atan(L * wz / v) if abs(v) > 1e-6 else 0.0
+        s += v * math.cos(h) * dt
+        d += v * math.sin(h) * dt
+        h += v * math.tan(delta) / L * dt
+        ss.append(s)
+        dd.append(abs(d))
+    return a, (s, d, h), events, (min(ss), max(ss)), min(dd)
+
+
+def test_sign_look_heading_only_as_far_as_needed():
+    a = StaticAvoid(AvoidParams())
+    assert a.look_heading(0.5, 3.0) == 0.0                 # the sign 9.5 deg off: in view already
+    psi = a.look_heading(0.5, 0.7)                         # 35.5 deg off: turn right, towards it
+    assert -math.radians(20.0) < psi < 0.0                 # capped by the room to lane 2 (look_inner)
+    assert a.look_heading(-0.5, 0.7) == pytest.approx(-psi)
+    assert a.look_heading(0.40, 0.7) == 0.0                # no room left in the lane
+
+
+def test_sign_look_not_with_the_direction_known():
+    out = run([(1.2, 0.0)], direction=1)
+    assert not any('sign look' in e[1] for e in out['events']), out['events']
+    check(out, 0.50, 3)
+
+
+@pytest.mark.parametrize('flag, lane', [(0, 1), (1, 3)])
+def test_sign_look_reads_a_sign_out_of_view_and_takes_its_lane(flag, lane):
+    # the sign is read within 13 deg of the camera axis and 1.6 m: straight on in lane 1 it is not
+    sign = ('view', flag, 13.0, 1.6)
+    out = run([(1.2, 0.0)], direction=sign)
+    assert out.get('sign_read_x') is not None, out['events']
+    assert any(e[1] == 'sign look end: direction %d' % flag for e in out['events']), out['events']
+    check(out, 0.50, lane)
+    if flag == 1:
+        off = run([(1.2, 0.0)], direction=sign, params=replace(AvoidParams(), sign_look=False))
+        assert off.get('sign_read_x') is None and off['final_lane'] == 1
+
+
+def test_sign_look_never_read_ends_straight_beside_the_island():
+    out = run([(1.2, 0.0)], direction=('view', 1, 0.0, 0.0), steer_gain=0.55)
+    assert any(e[1].startswith('sign look end: island front') for e in out['events']), out['events']
+    check(out, 0.50, 1)
+    assert not out.get('island_tip'), out
+
+
+@pytest.mark.parametrize('steer_gain', [1.0, 0.55])
+def test_sign_look_turns_on_the_spot_when_close(steer_gain):
+    # lane 1, island front 1.0 m ahead, turned 25 deg away (outwards): no room to turn forward
+    a, end, events, (s_lo, s_hi), d_min = _look_drive((3.35, 0.5, math.radians(25.0)),
+                                                      steer_gain=steer_gain)
+    assert any(e.startswith('sign look: turning on the spot') for e in events), events
+    assert 1 <= a.look_cycle <= 2 and 0.0 < a.look_backed <= 0.40
+    assert end[2] < 0.0                                     # now turned towards the sign
+    assert s_hi < 4.35 - 0.55 and s_lo > 3.35 - 0.10        # kept before look_end, little backing
+    assert d_min > 0.40 - 0.05                              # stayed in lane 1
+
+
+def test_sign_look_does_not_back_into_what_is_behind():
+    pose = (3.35, 0.5, math.radians(25.0))
+    for behind, blocked in ((0.50, False), (0.30, True)):
+        a = StaticAvoid(AvoidParams())
+        a.activate((0.0, 0.0, 0.0))
+        a.island, a.island_source = (4.35, 6.10), 'entry line'
+        wall = np.array([[pose[0] - behind, pose[1] + dy] for dy in np.linspace(-0.12, 0.12, 7)])
+        for _ in range(5):
+            a.costmap.update(wall, np.array([pose[0] + 0.1, pose[1]]), None, None)
+        assert a._arc_blocked(pose, False, -1.0) is blocked
+        assert not a._arc_blocked(pose, True, -1.0)
+    # driven: the backing only takes back the forward step, never past where the turn began
+    a, end, events, (s_lo, _), _ = _look_drive(pose, behind=0.30)
+    assert s_lo >= pose[0] - 1e-6
+
+
+def test_sign_look_needs_a_clear_road_to_the_island():
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    a.island, a.island_source = (4.35, 6.10), 'entry line'
+    limo = np.array([[3.9, 0.0 + dy] for dy in np.linspace(-0.1, 0.1, 6)])  # lane 2, before the island
+    for _ in range(5):
+        a.costmap.update(limo, np.array([3.0, 0.5]), None, None)
+    a.plan = None
+    a._sign_look((3.0, 0.5, 0.0))
+    assert not a.look

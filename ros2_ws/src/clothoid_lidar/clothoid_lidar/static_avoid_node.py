@@ -457,7 +457,10 @@ class StaticAvoidNode(QuietEventsMixin, Node):
             self.lane_pub.publish(Int32(data=0))
             return
         pose = self.tracker.latest()
+        had_event = self.avoid.event
         cmd = self.avoid.control(pose, self.inhibit(), self.now())
+        if self.avoid.event != had_event and self.avoid.event.startswith('sign look'):
+            self.get_logger().info(self.avoid.event)
         if cmd is None:   # ended this cycle: one stop, then silence (lane_main / others take over)
             self.cmd_pub.publish(Twist())
             self.active_pub.publish(Bool(data=False))
