@@ -119,6 +119,8 @@ def generate_launch_description():
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
+                 'image': PythonExpression(["'10hz' if '", LaunchConfiguration('use_image_10hz'),
+                                            "'.lower() == 'true' else 'raw'"]),
                  'show': LaunchConfiguration('show'),
                  'debug': debug}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),
