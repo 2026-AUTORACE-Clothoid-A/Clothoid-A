@@ -2,7 +2,8 @@
 # Warp and camera pose come from clothoid_lane config/camera_<car>.yaml (launch argument camera:=).
 finish:
   ros__parameters:
-    compressed: true
+    image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame
+    compressed: false
     lazy_sensors: true         # imu/odom only from /parking_flag until STOP/ABORT (false: always)
     rate_hz: 20.0
     speed: 0.2

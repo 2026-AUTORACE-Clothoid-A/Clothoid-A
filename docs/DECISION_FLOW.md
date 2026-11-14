@@ -53,7 +53,7 @@ limo2 `~/2026-autorace-namgyu/Clothoid-A`와의 차이는 [9장](#9-limo2와-다
 | `/imu` | Imu | limo_base | 100 Hz, `angular_velocity.z` 사용 |
 | `/odom` | Odometry | limo_base (우리 패치 버전) | 50 Hz, Ackermann 모드에서 후축 속도 |
 | `/camera/color/image_raw` | Image | orbbec (DaBai) | 640×480, lane·stopline·speed_zone 입력 |
-| `/camera/color/image_raw/compressed` | CompressedImage | image_transport | finish 입력, bag 녹화용 |
+| `/camera/color/image_raw/compressed` | CompressedImage | image_transport | bag 녹화용 (mission·finish는 raw) |
 | `/camera/color/camera_info` | CameraInfo | orbbec | fx = fy = 489.5, cx 319.9, cy 214.6 |
 | `/limo_status` | LimoStatus | limo_base | `control_mode` 1이어야 명령을 받음 |
 
@@ -66,9 +66,9 @@ limo2 `~/2026-autorace-namgyu/Clothoid-A`와의 차이는 [9장](#9-limo2와-다
 | lane_main (lane) | `/camera/color/image_raw`, `/direction_flag`, `/parking_flag`, `/speed_limit` | `/cmd_vel_lane`, `/lane/debug_image`, `/lane/target_warp`, `/lane/left_warp`, `/lane/right_warp` |
 | stopline (lane) | `/camera/color/image_raw` | `/stopline_detected` (Bool, 횡단보도 줄무늬), `/stopline_near` (Bool, 정지선 한 줄), `/stopline/debug_image` |
 | speed_zone (lane) | `/camera/color/image_raw` | `/speed_limit` (Float32) |
-| mission (mission) | `/detections`, `/stopline_detected`, `/stopline_near`, `/parking_done`, `/parking_sign` | `/cmd_vel_state`, `/speed_limit`, `/direction_flag` (Int32), `/parking_flag` (Bool) |
+| mission (mission) | `/detections`, `/camera/color/image_raw` (신호등·횡단보도 무장 중에만), `/stopline_detected`, `/stopline_near`, `/parking_done`, `/parking_sign` | `/cmd_vel_state`, `/speed_limit`, `/direction_flag` (Int32), `/parking_flag` (Bool) |
 | parking (parking) | `/scan`, `/imu`, `/odom`, `/parking_flag` | `/cmd_vel_parking`, `/parking_done`, `/parking/state` (String), `/parking/markers` (debug) |
-| finish (finish) | `/camera/color/image_raw/compressed`, `/camera/color/camera_info`, `/imu`, `/odom`, `/parking_done` | `/cmd_vel_finish`, `/finish_done`, `/finish/state`, `/finish/debug_image` (debug) |
+| finish (finish) | `/camera/color/image_raw`, `/camera/color/camera_info`, `/imu`, `/odom`, `/parking_done` | `/cmd_vel_finish`, `/finish_done`, `/finish/state`, `/finish/debug_image` (debug) |
 | twist_mux | `/cmd_vel_*` | `/cmd_vel` |
 
 `/detections`는 YOLO(`clothoid_yolo`)가 보내지만 limo2에서는 아직 YOLO가 돌지 않는다 (ultralytics 없음).
