@@ -16,6 +16,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
 
 
@@ -77,7 +78,7 @@ def resolve_model_path(path_str: str) -> str:
     return path_str
 
 
-class YoloNode(Node):
+class YoloNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('yolo')
 

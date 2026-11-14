@@ -28,6 +28,7 @@ from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_debug.geometry import GroundProjection, arc_points
 from clothoid_lane.lane_detector import LaneParams, make_warp_matrix
 
@@ -39,7 +40,7 @@ def rgba(rgb, a=1.0) -> ColorRGBA:
     return ColorRGBA(r=float(rgb[0]), g=float(rgb[1]), b=float(rgb[2]), a=float(a))
 
 
-class DecisionViz(Node):
+class DecisionViz(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('decision_viz')
         d = LaneParams()

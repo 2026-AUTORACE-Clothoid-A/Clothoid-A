@@ -18,11 +18,12 @@ from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr  # noqa: F401  (bgr_to_image: stripe debug, commented out)
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.lane_detector import LaneParams
 from clothoid_lane.stopline import NearLineDetector, NearLineParams, StopLineDetector, StopLineParams
 
 
-class StopLineNode(Node):
+class StopLineNode(QuietEventsMixin, Node):
     def __init__(self, subscribe_images=True):
         super().__init__('stopline')
 

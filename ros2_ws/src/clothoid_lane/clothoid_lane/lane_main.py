@@ -23,6 +23,7 @@ from std_msgs.msg import Bool, Float32, Int32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 from clothoid_lane.bump_gap import BumpGap, BumpGapParams
@@ -74,7 +75,7 @@ def make_detector(value):
                        TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}))
 
 
-class LaneMainNode(Node):
+class LaneMainNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('lane_main')
 

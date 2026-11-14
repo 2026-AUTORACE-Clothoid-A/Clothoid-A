@@ -24,6 +24,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rosidl_runtime_py.utilities import get_message
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_bringup.latency_stats import WindowStats, mux_winner, parse_pairs
 
 TWIST = 'geometry_msgs/msg/Twist'
@@ -33,7 +34,7 @@ def stamp_sec(msg) -> float:
     return msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
 
-class LatencyMonitor(Node):
+class LatencyMonitor(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('latency_monitor')
         self.declare_parameter('stamped_topics', [

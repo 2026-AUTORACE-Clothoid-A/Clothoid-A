@@ -23,6 +23,7 @@ import cv2
 import numpy as np
 import rclpy
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_finish.bev import Bev, CameraModel
 from clothoid_finish.finish_core import FinishParams, Phase
 from clothoid_interfaces.msg import DetectionArray
@@ -46,7 +47,7 @@ FORK_SIGNS = ('sign_left', 'sign_right')
 DIRECTION_NAMES = {0: 'left lane', 1: 'right lane', 2: 'both'}
 
 
-class MissionNode(Node):
+class MissionNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('mission')
 

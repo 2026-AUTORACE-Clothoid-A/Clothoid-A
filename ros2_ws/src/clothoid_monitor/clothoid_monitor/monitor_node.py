@@ -18,6 +18,7 @@ import yaml
 import cv2
 import numpy as np
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from .flask_app_factory import FLASK_IMPORT_ERROR, FlaskServerThread, create_app
 from .graph_utils import build_graph_snapshot
 from .image_utils import extract_jpeg_dimensions
@@ -161,7 +162,7 @@ def render_lidar_bev(scan_msg: LaserScan, width: int = 400, height: int = 400, m
     return encoded.tobytes() if success else bytes()
 
 
-class MonitorNode(Node):
+class MonitorNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('clothoid_monitor_node')
 

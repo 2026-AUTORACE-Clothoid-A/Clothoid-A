@@ -22,6 +22,7 @@ from sensor_msgs.msg import CameraInfo, CompressedImage, Image, Imu
 from std_msgs.msg import Bool, String
 
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_finish.bev import Bev, CameraModel
 from clothoid_finish.finish_core import FinishCore, FinishParams, Phase
 from clothoid_lane.lane_detector import LaneParams
@@ -29,7 +30,7 @@ from clothoid_lane.lane_detector import LaneParams
 STALE_SEC = 0.5
 
 
-class FinishNode(Node):
+class FinishNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('finish')
         for name, default in (('image_topic', '/camera/color/image_raw/compressed'),

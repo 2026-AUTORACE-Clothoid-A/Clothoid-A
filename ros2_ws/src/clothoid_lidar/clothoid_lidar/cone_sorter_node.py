@@ -16,6 +16,7 @@ from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from std_msgs.msg import Bool
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.cone_sorter import ConeMission, ConeSorter, SorterParams
 
 _FIELDS = [
@@ -50,7 +51,7 @@ def to_path(points: np.ndarray, header) -> Path:
     return path
 
 
-class ConeSorterNode(Node):
+class ConeSorterNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('cone_sorter')
 
