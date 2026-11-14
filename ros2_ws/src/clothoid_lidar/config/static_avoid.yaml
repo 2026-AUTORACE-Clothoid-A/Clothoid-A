@@ -67,6 +67,15 @@ static_avoid:
     course_fallback_past: 1.0
     start_line_odometer: 14.2
     course_fallback_odometer: 3.0
+    # where the node started, from the first turn (AvoidParams.course_turn_deg): the race start ->
+    # the mission starts on the start line (approach_speed until the first blocker); elsewhere -> a
+    # blocker starts it anywhere; not judged yet -> no start
+    course_turn_deg: 45.0
+    course_corner_tol_deg: 20.0
+    course_corner1_x_min: 7.5
+    course_corner1_odometer_max: 11.0
+    course_test_start: 1.0       # a LIMO in our lane this soon after the launch: an avoid test, elsewhere
+    approach_speed: 0.8
     island_handover: 1.0         # handover_after_island false: m before the island front, lane_main enters A / B
     island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
     # image_source: 10hz           # 10hz: image_10hz_topic, every frame; raw: image_topic, every image_every-th   (launch argument; a value here would override it)

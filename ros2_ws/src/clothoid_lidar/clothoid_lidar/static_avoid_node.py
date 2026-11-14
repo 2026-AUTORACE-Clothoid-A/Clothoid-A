@@ -110,6 +110,7 @@ class StaticAvoidNode(Node):
         self.entry = EntryLineTracker()
         self.course = None
         self.snaps_logged = 0
+        self.origin_logged = 'pending'
         if self.p.course_map:
             self.course = CourseMap(self.p)
             self.tracker.course = self.course
@@ -319,16 +320,38 @@ class StaticAvoidNode(Node):
                 self.entry.start_by_map = None
                 self.get_logger().warn(f'course map: {why}; the dashed lane-line pair decides the '
                                        'section start line from now on')
+            self.log_origin()
         for c in check_start_line(self.entry, bgr, self.cam, self.lane_fitter.colours,
                                   self.tracker.distance_at(t_img), self.p.lane_width):
             why = c.where or f'lane-line pair in {c.pairs} frames around it'
             self.get_logger().info(f'white line at odometer {c.odometer:.2f} m: '
                                    + ('SECTION START LINE' if c.start else 'not the section start')
                                    + f' ({why})')
+            if c.start and self.course is not None and self.course.corner1 is not None:
+                # race start: the start line starts the mission (on the next LIMO message)
+                self.course.set_origin('race', 'the section start line where the map has it, after '
+                                       f'the first right turn at map x {self.course.corner1[1]:.1f} m')
+                self.log_origin()
+                if self.course.origin == 'race':
+                    self.avoid.request_line_start(self.tracker.line_pose(c.odometer))
         had_event = self.avoid.event
         self.lane_fitter.on_frame(bgr, self.avoid, self.tracker, self.entry, t_img)
         if self.avoid.event != had_event and 'fit' in self.avoid.event:
             self.get_logger().info(f'{self.avoid.event}: island {self.avoid.island[0]:.2f} m')
+
+    def log_origin(self):
+        """The course map's judgement of where the node started, once when made."""
+        if self.course is None or self.course.origin == self.origin_logged:
+            return
+        self.origin_logged = self.course.origin
+        if self.course.origin == 'race':
+            self.get_logger().info(f'course map: race start confirmed ({self.course.origin_why}); '
+                                   'the mission starts on this line')
+        else:
+            self.entry.start_by_map = None
+            self.get_logger().info(f'course map: not from the race start ({self.course.origin_why}); '
+                                   'a blocker starts the mission, the dashed lane-line pair finds the '
+                                   'section start line')
 
     def on_island(self, msg: PointStamped):
         if self.avoid.state != ACTIVE or not self.tracker.ready:
@@ -357,12 +380,25 @@ class StaticAvoidNode(Node):
         entry_back = self.tracker.distance - c.odometer if c is not None else None
         entry_pose = self.tracker.line_pose(c.odometer) if c is not None else None
         was_done = self.avoid.done
+        had_line = self.avoid.line_start is not None
+        # course map: a blocker starts the mission only away from the race start (see CourseMap); one
+        # right after the launch is an avoid test launched in the section (nothing there at the race start)
+        if (self.course is not None and self.course.origin == 'pending'
+                and self.tracker.distance < self.p.course_test_start and self.avoid.blocked(limos)):
+            self.course.set_origin('elsewhere', f'a LIMO in our lane {self.tracker.distance:.2f} m after '
+                                   'the launch')
+            self.log_origin()
+        allowed = self.course is None or self.course.origin == 'elsewhere'
         started = self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
-                                      entry_back, entry_pose)
+                                      entry_back, entry_pose, allowed)
         if self.avoid.done and not was_done:
             self.get_logger().info(f'static obstacle DONE: {self.avoid.event}')
+        if had_line and not started and self.avoid.line_start is None:
+            self.get_logger().warn(f'static obstacle: {self.avoid.event}')
         if started:
-            self.get_logger().info(f'static obstacle START (blocked ahead) at odometer '
+            how = ('section start line, at approach speed until a blocker'
+                   if self.avoid.approach else 'blocked ahead')
+            self.get_logger().info(f'static obstacle START ({how}) at odometer '
                                    f'{self.tracker.distance:.2f} m, island '
                                    f'{self.avoid.island[0]:.2f} m ({self.avoid.island_source})')
 
