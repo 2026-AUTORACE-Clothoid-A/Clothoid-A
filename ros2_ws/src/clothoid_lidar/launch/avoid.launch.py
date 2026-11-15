@@ -49,6 +49,7 @@ def _nodes(context):
     flags = {k: LaunchConfiguration(k).perform(context).lower() == 'true'
              for k in ('ignore_cone', 'debug_heavy', 'course_map')}
     flags['recovery_reverse'] = LaunchConfiguration('reverse').perform(context).lower() == 'true'
+    flags['escape'] = LaunchConfiguration('escape').perform(context).lower() == 'true'
     cam_file, white = _lane_files(camera)
     extra = LaunchConfiguration('params').perform(context)
     flags['image_source'] = LaunchConfiguration('image').perform(context)
@@ -84,7 +85,10 @@ def generate_launch_description():
                                           'start the section start line starts the mission; elsewhere '
                                           '(judged from the first turn) a blocker does. false: always '
                                           'a blocker (an avoid-only test started in the section itself)'),
-        DeclareLaunchArgument('reverse', default_value='false',
-                              description='back up 0.2 m when every path stays blocked (recovery)'),
+        DeclareLaunchArgument('reverse', default_value='true',
+                              description='stuck: back up 0.2 m along the way the car came (recovery)'),
+        DeclareLaunchArgument('escape', default_value='true',
+                              description='stuck: drive a free curvature-limited three-arc escape path '
+                                          '(AvoidParams.escape), first after a back-up'),
         OpaqueFunction(function=_nodes),
     ])

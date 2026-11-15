@@ -220,3 +220,27 @@ def test_fork_confirms_on_two_frames_while_parking_keeps_three(node):
     assert 'sign_parking' not in n.seen
     detections(n, clock, 1000.4, 'sign_parking')
     assert 'sign_parking' in n.seen
+
+
+@pytest.mark.parametrize('name,direction', [('sign_left', 0), ('sign_right', 1)])
+def test_configured_fork_sweep_confirms_after_missing_frames(node, name, direction):
+    n, clock = node
+    first = DetectionArray(detections=[Detection(class_name=name, confidence=.55,
+                          x_min=0, x_max=20, y_min=200, y_max=220)])
+    first.header.stamp.sec = 1000
+    n.on_detections(first)
+    assert name not in n.seen
+    for k in range(1, 8):
+        clock[0] = 1000. + .1 * k
+        msg = DetectionArray()
+        msg.header.stamp.sec = 1000
+        msg.header.stamp.nanosec = k * 100_000_000
+        n.on_detections(msg)
+    clock[0] = 1000.8
+    msg = DetectionArray(detections=[Detection(class_name=name, confidence=.55,
+                        x_min=450, x_max=470, y_min=200, y_max=220)])
+    msg.header.stamp.sec, msg.header.stamp.nanosec = 1000, 800_000_000
+    n.on_detections(msg)
+    n.on_timer()
+    assert name in n.seen and n.logic.direction == direction
+    assert not n.logic.parking_flag and n.logic.state == DRIVE

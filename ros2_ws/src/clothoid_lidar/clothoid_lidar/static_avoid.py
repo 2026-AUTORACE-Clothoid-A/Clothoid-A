@@ -187,27 +187,43 @@ class AvoidParams:
     recovery_sharp: bool = False
     recovery_lengths: Tuple[float, ...] = (0.5, 0.8, 1.2)
     stuck_time: float = 0.5           # s with every path blocked
+    stuck_log_after: float = 0.5      # s blocked before the one 'stuck' log line (no line for a blip)
     recovery_until: float = 0.5       # m driven on a plan again: back to the normal candidates
-    recovery_reverse: bool = False    # also back up when still stuck (launch argument `reverse`)
+    recovery_reverse: bool = True     # also back up when still stuck (launch argument `reverse`)
     reverse_after: float = 1.5        # s stuck
-    reverse_distance: float = 0.20    # m per back-up, straight back along the way the car came
-    reverse_max: float = 0.40         # m in all, per mission
+    # m per back-up, along the way the car came (its own recorded poses, so the space is free; the
+    # lidar's +-110 deg does not see behind), driven to its end; then an escape path first if one is
+    # free (the normal plan from there would stop at the same place again)
+    reverse_distance: float = 0.20
+    reverse_lookahead: float = 0.15   # m back along the recorded way, steered at
+    # m in all, per mission: the stuck back-ups (reverse_distance each) and the undo of an abandoned
+    # escape path together. A cap so that a car stuck again and again does
+    # not shuttle for ever (1115_1709: a back-up, two escape paths, then 20 s stuck at 39 deg)
+    reverse_max: float = 1.50
     reverse_speed: float = 0.15
     # stuck for stuck_time: search once (again every escape_retry s) curvature-limited paths of three
     # arcs (escape_curvatures x 1 / escape_radius, escape_lengths each) for one that is free and ends
     # about straight, and drive it slowly with a short look-ahead. 1113 auto 05 stopped 14 s where
     # only such a quick swerve (right at full lock, then left) went through; the lane-centre
     # S-curves never contain it
-    # off for now (11-13 car: with reverse on, escape paths turned the car near 90 deg and the
-    # back-up then drove it off the track; fixed on a later branch)
-    escape: bool = False
-    escape_radius: float = 0.47       # m, car 7 at full lock
+    # on, with the back-up (launch arguments `escape` / `reverse`). Sim: stopped right behind two
+    # LIMOs after a late start, the car stood for good with both off and got through with them on
+    # (8 / 8, 3.5~10.5 cm clearance). The 11-13 car that turned ~90 deg and left the track (1113 auto
+    # 01 / 02) was not this: cone_follower then published on /cmd_vel_avoid (its own /cmd_vel_cone since
+    # 11-13 17:54); no back-up or escape command of this node is in those bags
+    escape: bool = True
+    # m, car 7 at full lock through /cmd_vel: 0.455 left / 0.48 right (ODOM_STEERING_TEST.md, circle
+    # diameters 91 / 96 cm); the wider one, a path the car cannot follow is worse than a wide one
+    escape_radius: float = 0.48
     escape_curvatures: Tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)
     escape_lengths: Tuple[float, ...] = (0.2, 0.4, 0.6)
     escape_end_heading_deg: float = 35.0
     escape_lookahead: float = 0.30
     escape_speed: float = 0.15
-    escape_margin: float = 0.03       # m of clearance more than safety: full-lock arcs are cut a little
+    # m of clearance more (+) or less (-) than safety for an escape path. Not more than the normal
+    # plans: the last resort, driven at escape_speed, must not be the stricter one (it was +0.03, and
+    # +0.15 off the car, see swerve_margin). Sim (tools/static_avoid/sim_layouts.py) decides the value
+    escape_margin: float = 0.0
     escape_w_near: float = 0.02       # per obstacle cost point (0..100), against m of progress
     escape_retry: float = 1.0         # s
     # the first metres of every path start where the car is now: if the car is already inside the
@@ -222,7 +238,9 @@ class AvoidParams:
     # the look-ahead and the car's front overhang.
     min_turn_radius: float = 0.48
     escape_offset: float = 0.30
-    escape_margin: float = 0.15
+    # was a second `escape_margin` (the later field won: 0.15 in the tests, the simulation and the
+    # replays, but the yaml's 0.03 on the car, where the swerve distance so was 0.475 m, not 0.595)
+    swerve_margin: float = 0.15
     w_lethal_far: float = 400.0       # x share of path samples lethal beyond the escape distance
     w_obstacle: float = 1.0
     w_centre: float = 40.0            # per m^2 off the nearest lane centre
@@ -273,6 +291,43 @@ class AvoidParams:
     speed: float = 0.30
     slow_speed: float = 0.20
     slow_cost: float = 10.0           # obstacle cost above this -> slow
+    # sign look: the fork sign (on the island front) not read yet, the island front more than look_end
+    # ahead, the car in lane 1 / 3, not changing lanes and nothing left in its own lane up to the
+    # island (no distance limit: with the sign in view it does not steer, 2026-11-15): turn the heading
+    # at full lock until the sign is within look_view_deg of the camera axis (up to look_max_deg).
+    # While the sign is in view the plan drives as before (a look holding the car straight lost a sign
+    # the plan's own heading kept in view); a car turned away turns back first. The lane beside the
+    # island fixes A / B, so the sign must be read before it: 3 of 7 hand-overs beside the island were
+    # 'no sign' with the sign there. The turn may take the car into lane 2 (no fixed limit: the old
+    # look_inner 0.40 cut the heading to 5~14 deg where ~20 was needed): it goes on while the car can
+    # still get back out of the island's width (centre island_half + car half width + look_exit_clear
+    # from lane 2's centre) at look_turn_radius before the island front, with look_exit_margin m to
+    # spare. Then, the sign still unread, the look steers out to its own lane and ends there. Each
+    # turning step is checked against the costmap / yellow lines / island first. Once per section;
+    # ends when the direction comes (the plan then takes its lane from where the car is), at look_end
+    # (back out first if inside), or when its own lane ahead is not clear.
+    sign_look: bool = True
+    # m before the island front. 0.6 ended the 1115_1709 look with the sign at the image edge
+    look_end: float = 0.4
+    look_view_deg: float = 10.0       # the sign this close to the camera axis (1113: read to ~20 deg)
+    look_max_deg: float = 45.0
+    look_exit_clear: float = 0.02     # m, past the island's width the way out ends
+    look_exit_margin: float = 0.15    # m before the island front the way out must be done
+    look_speed: float = 0.15
+    look_gain: float = 1.5            # steering per heading error
+    # turning on the spot: when the turn cannot be made forward before look_end, alternate look_step
+    # m forward at full lock towards the sign and look_step m back at full lock the other way (both
+    # turn the same way, the moves mostly cancel). At most look_cycles_max times and look_reverse_max m
+    # back in all; each arc is checked against the costmap, the yellow lines and the island before it
+    # is driven (the lidar sees +-110 deg: what is behind is what the costmap kept while passing it).
+    # look_turn_radius: the radius the look plans with (car 7 turns at 0.455 / 0.48 m at full lock,
+    # ODOM_STEERING_TEST.md; 0.5 leaves a little for a weaker turn)
+    look_reverse: bool = True
+    look_turn_radius: float = 0.50
+    look_step: float = 0.15
+    look_reverse_speed: float = 0.10
+    look_cycles_max: int = 2
+    look_reverse_max: float = 0.40
 
 
 def yaw_from_quaternion(x: float, y: float, z: float, w: float) -> float:
@@ -582,12 +637,23 @@ class Costmap:
         occupied = self.count >= p.occupied_count
         if not occupied.any():
             self.cost[:] = 0.0
+            self.dist = None
             return
         d = distance_transform_edt(~occupied) * p.resolution
+        self.dist = d                    # m to the nearest occupied cell (clearance checks)
         inscribed = p.car_half_width + p.safety
         cost = np.where(d < p.inflation_radius,
                         100.0 * np.exp(-p.inflation_decay * np.maximum(d - inscribed, 0.0)), 0.0)
         self.cost = np.where(d < inscribed, LETHAL, cost)
+
+    def clearance(self, pts: np.ndarray) -> np.ndarray:
+        """m from each point to the nearest occupied cell (inf: none, or outside the grid)."""
+        out = np.full(len(pts), np.inf)
+        if getattr(self, 'dist', None) is None:
+            return out
+        i, j, ok = self.cells(pts)
+        out[ok] = self.dist[i[ok], j[ok]]
+        return out
 
     def lookup(self, pts: np.ndarray) -> np.ndarray:
         i, j, ok = self.cells(pts)
@@ -622,6 +688,7 @@ class Plan:
     candidates: List[Tuple[np.ndarray, float]] = field(default_factory=list)  # (path, cost) for debug
     feasible: bool = True
     sequence: Optional['Sequence'] = None     # lane-sequence plan, if that planner made it
+    blocked: Optional[dict] = None    # candidates out per reason (local candidates), for the stuck log
 
 
 def lane_centres(p: AvoidParams) -> np.ndarray:
@@ -645,7 +712,7 @@ def target_centre(direction: Optional[int], p: AvoidParams) -> Optional[float]:
 def escape_distance(p: AvoidParams) -> float:
     """Path length within which a lethal cell cannot be swerved around any more (m)."""
     r, y = p.min_turn_radius, min(p.escape_offset, p.min_turn_radius)
-    return math.sqrt(max(2.0 * r * y - y * y, 0.0)) + p.escape_margin
+    return math.sqrt(max(2.0 * r * y - y * y, 0.0)) + p.swerve_margin
 
 
 def _hermite(ds: np.ndarray, d0: float, m0: float, E: np.ndarray, Lt: np.ndarray):
@@ -760,7 +827,10 @@ def _score(s0, d0, psi, ds, E, Lt, d, slope, costmap, travelled, direction, last
         bad |= island_hit
     if route:       # only a way that is clear all the way to the island: else wait as one-stage
         bad |= hit.any(axis=1)
-    return np.where(bad, np.inf, cost), obstacle, s
+    # why candidates are out, for the stuck log (a candidate can count more than once)
+    blocked = {'obstacle margin': int(lethal.sum()), 'yellow line': int(out_of_road.sum()),
+               'island': int((bad & island_hit).sum()), 'of': int(len(E))}
+    return np.where(bad, np.inf, cost), obstacle, s, blocked
 
 
 def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Costmap,
@@ -803,17 +873,17 @@ def plan_paths(pose: Tuple[float, float, float], travelled: float, costmap: Cost
         cands = _route_candidates(ds, d0, m0, s0, tc, front, p)
         if cands is not None:
             E, Lt, d, slope = cands
-            cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=True)
+            cost, obstacle, s, blocked = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=True)
             if np.isfinite(cost).any():
-                return _plan(s, d, E, cost, obstacle, keep_candidates)
+                return _plan(s, d, E, cost, obstacle, keep_candidates, blocked)
 
     ends = np.arange(-p.end_span * w, p.end_span * w + 1e-9, p.end_step)
     E, Lt = np.meshgrid(ends, np.asarray(p.transition_lengths), indexing='ij')
     E, Lt = E.ravel(), Lt.ravel()                                   # (P,)
     ds = np.arange(p.path_ds, p.horizon + 1e-9, p.path_ds)          # (S,)
     d, slope = _hermite(ds, d0, m0, E, Lt)
-    cost, obstacle, s = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=False)
-    return _plan(s, d, E, cost, obstacle, keep_candidates)
+    cost, obstacle, s, blocked = _score(s0, d0, psi, ds, E, Lt, d, slope, *args, route=False)
+    return _plan(s, d, E, cost, obstacle, keep_candidates, blocked)
 
 
 def _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep) -> Optional[Plan]:
@@ -872,7 +942,7 @@ def _sequence_plan(pose, costmap, direction, p, island, lane_in_costmap, keep) -
                 sequence=seq)
 
 
-def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
+def _plan(s, d, E, cost, obstacle, keep_candidates, blocked=None) -> Plan:
     best = int(np.argmin(cost))
     feasible = bool(np.isfinite(cost[best]))
     cands = []
@@ -882,7 +952,7 @@ def _plan(s, d, E, cost, obstacle, keep_candidates) -> Plan:
             cands.append((np.column_stack((s[k], d[k])), float(cost[k])))
     return Plan(path=np.column_stack((s[best], d[best])), end_offset=float(E[best]),
                 cost=float(cost[best]), obstacle_cost=float(obstacle[best]), candidates=cands,
-                feasible=feasible)
+                feasible=feasible, blocked=blocked)
 
 
 class CourseMap:
@@ -1031,10 +1101,12 @@ def path_blocker(s0: float, costmap: 'Costmap', lane_rel: Optional['SectionFrame
                  island: Tuple[float, float], p: AvoidParams, margin: float = 0.0):
     """blocked(s, d, heading) per sample, lane coordinates: a footprint circle on a lethal cell (past
     lethal_free_start), a corner over the yellow outer line, or on the island (its pointed tip
-    allowed), as the lane-sequence planner checks. margin: m of clearance more than safety."""
+    allowed), as the lane-sequence planner checks. margin: m of clearance more (+) or less (-) than
+    safety."""
     w = p.lane_width
     off = np.asarray(p.footprint_offsets)
     limit = LETHAL if margin <= 0.0 else 100.0 * math.exp(-p.inflation_decay * margin) - 1e-6
+    reach = p.car_half_width + p.safety + margin       # margin < 0: circle centre to an occupied cell
 
     def blocked(s, d, h):
         fs = s[:, None] + off * np.cos(h)[:, None]
@@ -1042,8 +1114,11 @@ def path_blocker(s0: float, costmap: 'Costmap', lane_rel: Optional['SectionFrame
         q = np.column_stack((fs.ravel(), fd.ravel()))
         if lane_rel is not None:
             q = lane_rel.points_from(q)
-        c = costmap.lookup(q).reshape(fs.shape)
-        lethal = (c >= limit).any(axis=1) & (s - s0 > p.lethal_free_start)
+        if margin < 0.0:
+            hit = (costmap.clearance(q) < reach).reshape(fs.shape)
+        else:
+            hit = costmap.lookup(q).reshape(fs.shape) >= limit
+        lethal = hit.any(axis=1) & (s - s0 > p.lethal_free_start)
         corner = np.abs(d) + p.car_half_length * np.abs(np.sin(h)) + p.car_half_width * np.cos(h)
         out = corner > 1.5 * w - p.line_margin + 1e-6
         tip = np.clip(np.minimum(s - island[0], island[1] - s) / p.island_tip, 0.0, 1.0)
@@ -1170,10 +1245,13 @@ class StaticAvoid:
         self.event = ''                      # last state change, for the log
         self.reset_recovery()
         self.done = False                    # the section is behind us, avoided or not
+        self.trail: List[Tuple[float, float, float]] = []    # world poses, the way the car came
+        self.now_world = (0.0, 0.0, 0.0)
         # course map, race start: start on the section start line (request_line_start), at
         # approach_speed until the first blocker
         self.line_start: Optional[Tuple[float, float, float]] = None    # the line's pose, pending
         self.approach = False
+        self.reset_look()
 
     # ---- trigger --------------------------------------------------------------------------
     def blocking(self, limos: np.ndarray, since_entry: Optional[float] = None) -> np.ndarray:
@@ -1206,6 +1284,7 @@ class StaticAvoid:
         p = self.p
         blocked = self.blocked(limos, entry_back)
         self.seen_entry = entry_pose
+        self.remember(pose_world)        # also before the start: the mission can be stuck right after it
         if self.state == ACTIVE:
             if blocked:
                 self.approach = False
@@ -1332,6 +1411,7 @@ class StaticAvoid:
         self.last_end = None
         self.blocked_scans = 0
         self.reset_recovery()
+        self.reset_look()
         self.event = 'start'
 
     def past_island(self, pose_world) -> bool:
@@ -1349,6 +1429,7 @@ class StaticAvoid:
         fork: the mission is done, locked until a retry (see on_limos)."""
         self.state = IDLE
         self.approach, self.line_start = False, None
+        self.look, self.look_arc = False, None
         if final:
             self.locked, self.lock_entry, self.done = True, self.seen_entry, True
         self.armed = why.startswith('hand over')
@@ -1521,6 +1602,7 @@ class StaticAvoid:
             esc = escape_path(pose, self.costmap, self.lane_in_costmap(), self.island,
                               self.direction, p)
             if esc is not None:
+                self.escape_from = (self.now_world[0], self.now_world[1])
                 self.event = 'stuck: escape path to s %.2f d %+.2f' % (esc.path[-1, 0], esc.end_offset)
         self.escape_plan = esc
         return esc
@@ -1538,6 +1620,7 @@ class StaticAvoid:
         if path_blocker(pose[0], self.costmap, self.lane_in_costmap(), self.island,
                         self.p)(ahead[:, 0], ahead[:, 1], h).any():
             self.escape_plan = None
+            self.escape_dropped = True          # half way: the car may now stand worse than before
             return None
         return esc
 
@@ -1548,12 +1631,18 @@ class StaticAvoid:
         self.stuck_since: Optional[float] = None
         self.recovering = False
         self.recovered_from: Optional[float] = None   # s where a plan was found again
-        self.backing_from: Optional[float] = None     # s where the back-up started
+        self.backing_from: Optional[Tuple[float, float]] = None   # world x, y where the back-up started
         self.reversed = 0.0
+        self.stuck_log = None           # (t, where, logged) since every path got blocked (for the log)
+        self.prefer_escape = False      # after a back-up: an escape path first, if one is free
+        self.backup_goal = 0.0          # m to back up in the back-up being driven
+        self.backup_why = ''            # 'stuck' | 'escape'
+        self.escape_from: Optional[Tuple[float, float]] = None   # world x, y where the escape path began
+        self.escape_dropped = False     # the escape path being driven got blocked half way
 
     def _stuck(self, t: Optional[float], s: float) -> Tuple[float, float]:
         """Every path blocked: stop; after stuck_time plan with the sharper recovery candidates; after
-        reverse_after back up (if allowed) straight along the way the car came, which is free."""
+        reverse_after back up (if allowed) along the way the car came (its recorded poses)."""
         p = self.p
         self.recovered_from = None
         if t is None:
@@ -1564,16 +1653,74 @@ class StaticAvoid:
         if stuck >= p.stuck_time and not self.recovering:
             self.recovering = True
             self.event = 'stuck: recovery candidates'
-        if p.recovery_reverse and stuck >= p.reverse_after and self.reversed < p.reverse_max:
-            if self.backing_from is None:
-                self.backing_from = s
-                self.event = 'stuck: backing up'
-            backed = self.backing_from - s
-            if backed < min(p.reverse_distance, p.reverse_max - self.reversed):
-                return -p.reverse_speed, 0.0
-            self.reversed += backed
-            self.backing_from, self.stuck_since = None, t          # wait for a plan again
+        if p.recovery_reverse and stuck >= p.reverse_after and self.backing_from is None \
+                and self._start_back_up(p.reverse_distance, 'stuck'):
+            self.event = 'stuck: backing up along the way the car came'
+            return self._back_up(t) or (0.0, 0.0)
         return 0.0, 0.0
+
+    def _start_back_up(self, goal: float, why: str) -> bool:
+        """Begin a back-up of `goal` m along the way the car came, if the record and reverse_max allow."""
+        if self.reversed >= self.p.reverse_max - 0.02 or self._rewind_target() is None:
+            return False
+        self.backing_from = (self.now_world[0], self.now_world[1])
+        self.backup_goal, self.backup_why = goal, why
+        return True
+
+    def remember(self, pose_world) -> None:
+        """Keep the way the car came (world poses every 2 cm, the last 1.5 m) for the back-up."""
+        if pose_world is None:
+            return
+        if self.trail and math.hypot(pose_world[0] - self.trail[-1][0],
+                                     pose_world[1] - self.trail[-1][1]) < 0.02:
+            return
+        if self.backing_from is None:            # not while backing: that way is being driven back
+            self.trail.append(tuple(pose_world))
+            del self.trail[:-75]
+
+    def _rewind_target(self) -> Optional[Tuple[float, float]]:
+        """The recorded point reverse_lookahead back along the way the car came (the oldest one within
+        reach if the record is shorter), None without a point at least 3 cm behind the rear axle."""
+        p = self.p
+        x, y, yaw = self.now_world
+        rx, ry = x - p.rear_axle_x * math.cos(yaw), y - p.rear_axle_x * math.sin(yaw)
+        best = None
+        for px, py, pyaw in reversed(self.trail):
+            qx, qy = px - p.rear_axle_x * math.cos(pyaw), py - p.rear_axle_x * math.sin(pyaw)
+            dx, dy = qx - rx, qy - ry
+            lx = math.cos(yaw) * dx + math.sin(yaw) * dy          # in the car's frame
+            ly = -math.sin(yaw) * dx + math.cos(yaw) * dy
+            if lx > -0.03:
+                continue
+            best = (lx, ly)
+            if math.hypot(lx, ly) >= p.reverse_lookahead:
+                break
+        return best
+
+    def _back_up(self, t: Optional[float]) -> Optional[Tuple[float, float]]:
+        """(v, wz) of the back-up being driven (rear axle on the circle through the recorded point),
+        None when it is done: reverse_distance driven, the limit reached or the record used up."""
+        p = self.p
+        backed = math.hypot(self.now_world[0] - self.backing_from[0],
+                            self.now_world[1] - self.backing_from[1])
+        target = self._rewind_target()
+        if target is None or backed >= min(self.backup_goal, p.reverse_max - self.reversed):
+            self.reversed += backed
+            self.backing_from = None
+            self.stuck_since, self.prefer_escape = t, True     # an escape path next
+            while self.trail and math.hypot(self.trail[-1][0] - self.now_world[0],
+                                            self.trail[-1][1] - self.now_world[1]) > 0.02 \
+                    and self._ahead(self.trail[-1]):
+                self.trail.pop()                # the part driven back is ahead again
+            return None
+        lx, ly = target
+        kappa = 2.0 * ly / (lx * lx + ly * ly)
+        delta = max(-p.max_steer, min(p.max_steer, math.atan(p.wheelbase * kappa)))
+        return -p.reverse_speed, -p.reverse_speed * math.tan(delta) / p.wheelbase
+
+    def _ahead(self, pose) -> bool:
+        x, y, yaw = self.now_world
+        return math.cos(yaw) * (pose[0] - x) + math.sin(yaw) * (pose[1] - y) > 0.0
 
     def control(self, pose_now_world, inhibit: Inhibit,
                 t: Optional[float] = None) -> Optional[Tuple[float, float]]:
@@ -1588,6 +1735,8 @@ class StaticAvoid:
             self.stop('abort: ' + reason)
             return None
         pose = self.lane_pose(pose_now_world)
+        self.now_world = pose_now_world
+        self.remember(pose_now_world)
         if p.handover_after_island:
             if self.past_island_ready(pose):
                 return None
@@ -1611,20 +1760,61 @@ class StaticAvoid:
         if pose[0] > p.max_travel:
             self.stop('hand over: max travel', True)
             return None
+        if self.backing_from is not None:           # a back-up is driven to its end
+            cmd = self._back_up(t)
+            if cmd is not None:
+                return cmd
+        look = self._sign_look(pose)
+        if look is not None:
+            return look
         # an escape path is driven to its end while it stays free: a plan found half way out starts
         # inside the safety margin (lethal_free_start) and took the car too close
         esc = self._escape_free(pose)
+        if esc is None and self.escape_dropped:
+            # an escape path blocked half way leaves the car worse placed (1115_1709: 39 deg, then
+            # 20 s stuck): drive it back to where it began, then search again
+            self.escape_dropped = False
+            driven = (math.hypot(self.now_world[0] - self.escape_from[0],
+                                 self.now_world[1] - self.escape_from[1])
+                      if self.escape_from is not None else 0.0)
+            if p.recovery_reverse and driven >= 0.05 and self._start_back_up(driven, 'escape'):
+                self.event = 'stuck: escape path blocked, backing up %.2f m along it' % driven
+                cmd = self._back_up(t)
+                if cmd is not None:
+                    return cmd
+        if esc is None and self.prefer_escape:
+            self.prefer_escape = False
+            if p.escape and self.costmap is not None:
+                esc = escape_path(pose, self.costmap, self.lane_in_costmap(), self.island,
+                                  self.direction, p)
+                self.escape_plan, self.escape_tried = esc, t
+                if esc is not None:
+                    self.escape_from = (self.now_world[0], self.now_world[1])
+                    self.event = ('stuck: escape path after the back-up to s %.2f d %+.2f'
+                                  % (esc.path[-1, 0], esc.end_offset))
         if esc is None and (self.plan is None or not self.plan.feasible):
             esc = self._escape(t, pose)
             if esc is None:
-                return self._stuck(t, pose[0])
+                # one log line when it lasts stuck_log_after s (blocked for a scan or two is normal),
+                # with where it started and how far each lane was free then (see stuck_report)
+                if self.stuck_log is None:
+                    self.stuck_log = (t if t is not None else 0.0, self.stuck_report(pose), False)
+                cmd = self._stuck(t, pose[0])
+                t0, where, logged = self.stuck_log
+                if not logged and (t is None or t - t0 >= p.stuck_log_after):
+                    self.stuck_log = (t0, where, True)
+                    self.event = ('stuck: every path blocked at ' + where
+                                  + ('; recovery candidates' if self.recovering else ''))
+                return cmd
         if esc is not None:
             delta = pure_pursuit(esc.path, pose, replace(p, lookahead=p.escape_lookahead))
             return p.escape_speed, p.escape_speed * math.tan(delta) / p.wheelbase
-        if self.backing_from is not None:                  # a plan again while backing up
-            self.reversed += max(self.backing_from - pose[0], 0.0)
-            self.backing_from = None
         self.stuck_since = None
+        if self.stuck_log is not None:
+            if self.stuck_log[2]:
+                self.event = ('stuck: moving again after %.1f s' % (t - self.stuck_log[0])
+                              if t is not None else 'stuck: moving again')
+            self.stuck_log = None
         if self.recovering:
             if self.recovered_from is None:
                 self.recovered_from = pose[0]
@@ -1639,6 +1829,218 @@ class StaticAvoid:
             v = p.approach_speed
         return v, v * math.tan(delta) / p.wheelbase
 
+    # ---- sign look (AvoidParams.sign_look) ------------------------------------------------------
+    def reset_look(self) -> None:
+        self.look = False                    # turning towards the fork sign now
+        self.look_done = False               # once per section
+        self.look_cycle = 0                  # forward / back cycles of the turn on the spot
+        self.look_backed = 0.0               # m backed in all
+        self.look_arc: Optional[Tuple[int, float, float]] = None   # (+1 / -1, s, d) where the arc began
+        self.look_turned = False             # the look has steered (it straightens before look_end)
+        self.look_side = 1.0                 # +1 lane 1, -1 lane 3: the lane the look began in
+        self.look_exit = False               # sign unread: steering back out of the island's width
+
+    def look_heading(self, d: float, gap: float) -> float:
+        """Lane-frame heading that brings the sign on the island front within look_view_deg of the
+        camera axis (0 = along the lane while it already is), at most look_max_deg. How far into
+        lane 2 that takes the car is left to exit_need."""
+        p = self.p
+        b = math.atan2(-d, max(gap, 1e-3))
+        want = abs(b) - math.radians(p.look_view_deg)
+        if want <= 0.0:
+            return 0.0
+        return math.copysign(min(want, math.radians(p.look_max_deg)), b)
+
+    def exit_clear(self) -> float:
+        """Car centre offset from lane 2's centre that clears the island's width."""
+        p = self.p
+        return p.lane_width / 2.0 + p.car_half_width + p.look_exit_clear
+
+    def exit_need(self, d: float, psi: float) -> float:
+        """m along the lane the car needs, at look_turn_radius, to get from (d, psi) out of the
+        island's width on the look's side, heading along the lane: straighten (drifting further in),
+        then an S of two arcs. 0 when straightening now already leaves it outside."""
+        p = self.p
+        r = p.look_turn_radius
+        side = self.look_side
+        inward = max(0.0, -side * psi)
+        dy = self.exit_clear() - (side * d - r * (1.0 - math.cos(inward)))
+        if dy <= 0.0:
+            return 0.0
+        dy = min(dy, 2.0 * r)
+        return r * math.sin(inward) + math.sqrt(4.0 * r * dy - dy * dy)
+
+    def _end_look(self, why: str) -> None:
+        self.look, self.look_done, self.look_arc, self.look_exit = False, True, None, False
+        self.event = 'sign look end: ' + why
+        return None
+
+    def _look_out(self, pose) -> Optional[Tuple[float, float]]:
+        """The sign still unread: steer back to the look's own lane until the car is out of the
+        island's width and not heading in, then the plan drives."""
+        p = self.p
+        s, d, psi = pose
+        side = self.look_side
+        if side * d >= self.exit_clear() and side * psi >= -math.radians(3.0):
+            return self._end_look('out of the island width in lane %d, sign unread'
+                                  % lane_of(side * p.lane_width, p))
+        target = max(-math.radians(p.look_max_deg),
+                     min(math.radians(p.look_max_deg), math.atan2(side * p.lane_width - d, 0.30)))
+        delta = float(np.clip(p.look_gain * wrap(target - psi), -p.max_steer, p.max_steer))
+        return p.look_speed, p.look_speed * math.tan(delta) / p.wheelbase
+
+    def _start_exit(self, pose, why: str) -> Optional[Tuple[float, float]]:
+        self.look_exit, self.look_arc = True, None
+        self.event = 'sign look: %s, back out to lane %d' % (why, lane_of(self.look_side * self.p.lane_width,
+                                                                          self.p))
+        return self._look_out(pose)
+
+    def _steer_blocked(self, pose, delta: float, length: float = 0.25) -> bool:
+        """Driving `length` m forward at this steering hits an obstacle, a yellow line or the island."""
+        p = self.p
+        s0, d0, psi = pose
+        sigma = np.linspace(0.0, length, 8)
+        k = math.tan(delta) / p.wheelbase
+        if abs(k) < 1e-6:
+            h = np.full(len(sigma), psi)
+            s, d = s0 + sigma * math.cos(psi), d0 + sigma * math.sin(psi)
+        else:
+            h = psi + k * sigma
+            s = s0 + (np.sin(h) - math.sin(psi)) / k
+            d = d0 - (np.cos(h) - math.cos(psi)) / k
+        return bool(path_blocker(-1e9, self.costmap, self.lane_in_costmap(), self.island, p)(s, d, h).any())
+
+    def _arc_blocked(self, pose, forward: bool, turn: float) -> bool:
+        """The look_step arc at full lock (turn = +1 left / -1 right heading change), forward or back,
+        hits an obstacle, a yellow line or the island, for the assumed and for the real (wider) radius."""
+        p = self.p
+        s0, d0, psi = pose
+        sigma = np.linspace(0.0, p.look_step, 8) * (1.0 if forward else -1.0)
+        blocked = path_blocker(-1e9, self.costmap, self.lane_in_costmap(), self.island, p)
+        for radius in (p.min_turn_radius, p.look_turn_radius):
+            k = turn / radius * (1.0 if forward else -1.0)      # heading change per signed metre
+            h = psi + k * sigma
+            s = s0 + (np.sin(h) - math.sin(psi)) / k
+            d = d0 - (np.cos(h) - math.cos(psi)) / k
+            if blocked(s, d, h).any():
+                return True
+        return False
+
+    def _sign_look(self, pose) -> Optional[Tuple[float, float]]:
+        """(v, wz) while the look steers, else None: the plan drives (see AvoidParams.sign_look)."""
+        p = self.p
+        if not p.sign_look or self.look_done or self.costmap is None:
+            return None
+        s, d, psi = pose
+        gap = self.island[0] - s
+        lane = lane_of(d, p)
+        if self.look_exit:
+            if self.direction in (0, 1):        # read on the way out: the plan takes its lane
+                return self._end_look('direction %d' % self.direction)
+            return self._look_out(pose)
+        why = None
+        if self.direction in (0, 1):
+            why = 'direction %d' % self.direction
+        elif gap < p.look_end:
+            why = 'island front %.2f m ahead' % gap
+        elif not self.look and lane == 2:
+            why = 'in lane 2'
+        elif not self.lane_clear(s + 0.2, self.island[0],
+                                 self.look_side * p.lane_width if self.look else d):
+            why = 'own lane ahead not clear'
+        if not self.look:
+            changing = self.plan is None or not self.plan.feasible or abs(self.plan.end_offset - d) > 0.10
+            if why is not None or self.island_source == 'estimate' or changing:
+                return None
+            self.look, self.look_cycle, self.look_backed, self.look_arc = True, 0, 0.0, None
+            self.look_side = 1.0 if d >= 0.0 else -1.0
+            self.event = ('sign look: island front %.2f m ahead, lane %d, heading %+.0f deg'
+                          % (gap, lane, math.degrees(psi)))
+        elif why is not None:
+            if self.direction not in (0, 1) and self.exit_need(d, psi) > 0.0:
+                return self._start_exit(pose, why)
+            return self._end_look(why)
+        need = self.exit_need(d, psi)
+        if need > 0.0 and gap - need <= p.look_exit_margin:
+            return self._start_exit(pose, 'unread, %.2f m to get out' % need)
+        # the sign within look_view_deg of the camera axis: the plan drives (a look holding the car
+        # straight lost a sign the plan's own heading kept in view); else steer it there. A look that
+        # steered straightens before look_end (with weak steering the plan drifted onto the island).
+        off = wrap(math.atan2(-d, max(gap, 1e-3)) - psi)
+        straighten = (self.look_turned and abs(psi) > math.radians(3.0)
+                      and gap - p.look_end < p.look_turn_radius * math.sin(abs(psi)) + 0.05)
+        if self.look_arc is None and not straighten and abs(off) <= math.radians(p.look_view_deg):
+            return None
+        self.look_turned = True
+        target = 0.0 if straighten else self.look_heading(d, gap)
+        err = wrap(target - psi)
+        turn = 1.0 if err > 0.0 else -1.0
+        reached = abs(err) < math.radians(3.0)
+        if self.look_arc is not None:
+            sign, s1, d1 = self.look_arc
+            moved = math.hypot(s - s1, d - d1)
+            if sign > 0 and (reached or moved >= p.look_step):
+                # forward arc done: back up turning the other way, if still needed and free
+                if (not reached and self.look_backed < p.look_reverse_max
+                        and not self._arc_blocked(pose, False, turn)):
+                    self.look_arc = (-1, s, d)
+                else:
+                    self.look_arc, self.look_cycle = None, p.look_cycles_max
+            elif sign < 0 and (reached or moved >= min(p.look_step,
+                                                       p.look_reverse_max - self.look_backed)):
+                self.look_backed += moved
+                self.look_arc, self.look_cycle = None, self.look_cycle + 1
+        if self.look_arc is None and (
+                p.look_reverse and self.look_cycle < p.look_cycles_max
+                and self.look_backed < p.look_reverse_max and abs(err) >= math.radians(5.0)
+                and gap - p.look_end < p.look_turn_radius * math.sin(abs(err))):
+            if self._arc_blocked(pose, True, turn):
+                self.look_cycle = p.look_cycles_max
+            else:
+                self.look_arc = (1, s, d)
+                self.event = 'sign look: turning on the spot, cycle %d' % (self.look_cycle + 1)
+        if self.look_arc is not None:
+            sign = self.look_arc[0]
+            v = p.look_speed if sign > 0 else -p.look_reverse_speed
+            delta = p.max_steer * turn * sign            # back: the other way, same heading change
+            return v, v * math.tan(delta) / p.wheelbase
+        delta = float(np.clip(p.look_gain * err, -p.max_steer, p.max_steer))
+        if not straighten and self._steer_blocked(pose, delta):
+            # turning further runs into a LIMO, a yellow line or the island
+            if self.exit_need(d, psi) > 0.0:
+                return self._start_exit(pose, 'turn blocked')
+            return self._end_look('turn blocked')
+        return p.look_speed, p.look_speed * math.tan(delta) / p.wheelbase
+
+    def free_ahead(self, s: float, reach: float = 2.0) -> List[Optional[float]]:
+        """Per lane (1, 2, 3): m along its centre from s to the first occupied costmap cell, None if
+        none within reach."""
+        p = self.p
+        steps = np.arange(0.0, reach, p.resolution)
+        rel = self.lane_in_costmap()
+        out = []
+        for c in lane_centres(p):
+            pts = np.column_stack((s + steps, np.full(len(steps), c)))
+            occ = self.costmap.occupied_at(pts if rel is None else rel.points_from(pts))
+            out.append(float(steps[np.argmax(occ)]) if occ.any() else None)
+        return out
+
+    def stuck_report(self, pose) -> str:
+        """Where the car stands and how far each lane is free ahead, for the log."""
+        s, d, psi = pose
+        free = self.free_ahead(s) if self.costmap is not None else [None] * 3
+        lanes = ', '.join('lane %d %s' % (k + 1, '>2.0 m' if f is None else '%.2f m' % f)
+                          for k, f in enumerate(free))
+        why = ''
+        b = self.plan.blocked if self.plan is not None else None
+        if b:
+            # 'obstacle margin': within the distance a full-lock swerve needs, every way passes too
+            # close to an obstacle (1114_0028: 0.32 m behind a LIMO, lane 1 free but out of reach)
+            why = '; %d paths blocked by: obstacle margin %d, yellow line %d, island %d' % (
+                b['of'], b['obstacle margin'], b['yellow line'], b['island'])
+        return ('s %.2f d %+.2f (lane %d, heading %+.0f deg); free ahead: %s%s'
+                % (s, d, lane_of(d, self.p), math.degrees(psi), lanes, why))
+
     def release_target(self, d: float) -> float:
         """Centre of the lane the car is in: any lane, lane_main picks A/B at the island."""
         return float(lane_centres(self.p)[lane_of(d, self.p) - 1])
@@ -1648,6 +2050,19 @@ class StaticAvoid:
         length = self.p.island_from_entry_max - self.p.island_from_entry_min
         self.island = (s_front, s_front + length)
         self.island_source = source
+
+    def lane_clear(self, s0: float, s1: float, d: float) -> bool:
+        """No occupied cell in the lane the car is in (its centre +- half a lane) between s0 and s1."""
+        p = self.p
+        if s1 <= s0 or self.costmap is None:
+            return True
+        c = float(lane_centres(p)[lane_of(d, p) - 1])
+        ss, dd = np.meshgrid(np.arange(s0, s1, p.resolution),
+                             np.arange(c - p.lane_width / 2, c + p.lane_width / 2, p.resolution),
+                             indexing='ij')
+        pts = np.column_stack((ss.ravel(), dd.ravel()))
+        rel = self.lane_in_costmap()
+        return not self.costmap.occupied_at(pts if rel is None else rel.points_from(pts)).any()
 
     def road_clear(self, s0: float, s1: float) -> bool:
         """No occupied cell across the whole road (all three lanes) between s0 and s1, lane

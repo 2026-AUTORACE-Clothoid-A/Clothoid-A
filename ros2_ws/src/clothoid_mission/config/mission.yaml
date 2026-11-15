@@ -25,8 +25,23 @@ mission:
     pedestrian_min_area: 0.0
     pedestrian_min_height: 28.0 # 2500 px^2 plus lateral gate rejected the valid warning in the bag
     # Confirm on distinct source images; colours share a traffic-light identity.
-    fork_confirm_hits: 2        # main: smaller fork signs confirm on two distinct frames
     detection_confirm_hits: 3
+    # Fork signs (sign_left / sign_right) confirm on 2 frames within fork_confirm_age: small (~20 px)
+    # and seen between the static obstacles (1114: never confirmed with 3, the car took the default road).
+    # 1115_1709: a 2nd frame did not come within 0.5 s at YOLO 10 Hz, and a conf 0.85 box touching
+    # the left border was dropped as 'edge'; no other fork sign is around, so a cut box still tells
+    # the side.
+    fork_confirm_hits: 2
+    fork_confirm_age: 1.0       # s (other classes: detection_max_age)
+    fork_ignore_edge: true      # fork boxes on the image border count (other classes: detection_edge_margin)
+    # 1115_1726: sign_left 0.65 / 0.59 / 0.55 at 17:27:18, 2.3 m before the island; confirmed only
+    # 0.74 m before it, the swerve back crossed the island tip. YOLO min_confidence is 0.5
+    fork_confidence: 0.55       # sign_left / sign_right (other classes: detection_confidence)
+    # While the car swerves the fork sign sweeps across the image (1115_1726: centre x 469 -> 362 -> 283
+    # every 0.4-0.5 s, box ~20 px wide), so the 'same place' check never matched two frames. Only one
+    # fork sign is around: match any x (y and size still). Bags 0248 / 0253 / 1726: confirmed 8 / 36 /
+    # 8 s earlier, same side, all inside /avoid/active
+    fork_any_x: true
     detection_window: 5
     detection_max_age: 0.5
     detection_confidence: 0.6

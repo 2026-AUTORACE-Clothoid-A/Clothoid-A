@@ -48,10 +48,17 @@ class SignTrack:
 class SignTracker:
     def __init__(self, hits=3, window=5, max_age=.5, retention=2., confidence=.6,
                  sign_height=14, light_height=8, edge_margin=2, max_tracks=32,
-                 match_gate=1., scale_ratio=3., class_hits=None):
+                 match_gate=1., scale_ratio=3., class_hits=None, class_max_age=None,
+                 edge_exempt=(), class_confidence=None, any_x=()):
         if not 1 <= hits <= window or max_age <= 0 or retention < max_age or max_tracks < 1:
             raise ValueError('invalid tracker window, age or capacity')
         self.class_hits = dict(class_hits or {})
+        self.class_max_age = dict(class_max_age or {})
+        if any(not 0 < age <= retention for age in self.class_max_age.values()):
+            raise ValueError('invalid per-class confirmation age')
+        self.edge_exempt = frozenset(edge_exempt)
+        self.class_confidence = dict(class_confidence or {})
+        self.any_x = frozenset(any_x)
         if any(not 1 <= value <= window for value in self.class_hits.values()):
             raise ValueError('invalid per-class hit count')
         self.hits, self.window, self.max_age = hits, window, max_age
@@ -76,25 +83,31 @@ class SignTracker:
         return inter / union if union > 0 else 0.
 
     def match_cost(self, a, b):
-        if family(a.class_name) != family(b.class_name) or not 1. / self.scale_ratio <= a.height / b.height <= self.scale_ratio:
+        scale = 2. if a.class_name in self.any_x else self.scale_ratio
+        if family(a.class_name) != family(b.class_name) or not 1. / scale <= a.height / b.height <= scale:
             return None
         ac, bc = a.centre, b.centre
         # A signal housing is tall and narrow. Its width alone is not a suitable
         # motion uncertainty scale when the car turns or the signal is occluded.
         sx = max(a.width, b.width, a.height, b.height) if family(a.class_name) == 'traffic_light' else max(a.width, b.width)
         dx, dy = abs(ac[0] - bc[0]) / sx, abs(ac[1] - bc[1]) / max(a.height, b.height)
-        return dx + dy if dx <= self.match_gate and dy <= self.match_gate else None
+        return dx + dy if (a.class_name in self.any_x or dx <= self.match_gate) and dy <= self.match_gate else None
 
     def required(self, name):
         return self.class_hits.get(name, self.hits)
 
+    def age(self, name):
+        return self.class_max_age.get(name, self.max_age)
+
     def box_reason(self, d, width=640, height=480):
         minimum = self.light_height if family(d.class_name) == 'traffic_light' else self.sign_height
-        if d.confidence < self.confidence:
-            return f'conf {d.confidence:.2f} < {self.confidence:.2f}'
+        confidence = self.class_confidence.get(d.class_name, self.confidence)
+        if d.confidence < confidence:
+            return f'conf {d.confidence:.2f} < {confidence:.2f}'
         if d.x_max <= d.x_min or d.y_max-d.y_min < minimum:
             return f'invalid width or h {d.y_max-d.y_min} < {minimum}'
-        if (d.x_min < self.edge_margin or d.y_min < self.edge_margin or
+        if d.class_name not in self.edge_exempt and (
+                d.x_min < self.edge_margin or d.y_min < self.edge_margin or
                 d.x_max > width-self.edge_margin or d.y_max > height-self.edge_margin):
             return 'edge'
         return None
@@ -156,18 +169,24 @@ class SignTracker:
             track_id = self._next_id
             self._next_id += 1
             self.tracks[track_id] = SignTrack(track_id, b, stamp, stamp,
-                                             deque(maxlen=self.window))
+                                             deque())
             assigned[track_id] = b
         confirmed = []
         for track_id, t in self.tracks.items():
             b = assigned.get(track_id)
             t.history.append((stamp, None if b is None else b.class_name))
+            age = self.age(t.box.class_name if b is None else b.class_name)
+            while t.history and stamp-t.history[0][0] > age:
+                t.history.popleft()
+            if t.box.class_name not in self.class_max_age:
+                while len(t.history) > self.window:
+                    t.history.popleft()
             t.confirmed, t.hits = False, 0
             if b is None:
                 continue
             t.box, t.last_seen = b, stamp
             t.hits = sum(name == b.class_name for old, name in t.history
-                         if 0 <= stamp - old <= self.max_age)
+                         if 0 <= stamp - old <= age)
             t.confirmed = t.hits >= self.required(b.class_name) and b.class_name != 'traffic_light_unknown'
             if t.confirmed:
                 confirmed.append(t)

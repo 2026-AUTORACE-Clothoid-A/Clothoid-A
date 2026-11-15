@@ -79,3 +79,62 @@ def test_box_reason_names_the_failed_check():
     assert gate.box_reason(box(coords=(300, 200, 310, 210), confidence=.9)).startswith('h ')
     assert gate.box_reason(box(coords=(0, 200, 30, 240), confidence=.9)) == 'edge'
     assert gate.box_reason(box(coords=(300, 200, 330, 240), confidence=.9)) is None
+
+
+FORK_GATE = dict(class_hits={'sign_left': 2, 'sign_right': 2},
+                 class_max_age={'sign_left': 1.0, 'sign_right': 1.0},
+                 edge_exempt=('sign_left', 'sign_right'))
+
+
+def test_fork_sign_second_frame_within_one_second_confirms_others_keep_half_a_second():
+    # 1115_1709 17:12:43.16: sign_left (conf 0.67, h 21) at YOLO 10 Hz, no second frame within 0.5 s
+    gate = DetectionGate(**FORK_GATE)
+    left = box('sign_left', (180, 230, 201, 251), .67)
+    bump = box('sign_bump', (400, 230, 421, 251), .9)
+    assert not step(gate, 0.0, [left, bump])
+    for t in (0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7):   # misses in between: more than `window` frames
+        assert not step(gate, t, [])
+    assert not step(gate, 0.75, [bump])             # bump: 0.75 s apart, still 1/3 within 0.5 s
+    assert step(gate, 0.8, [left]) == {'sign_left'}
+    assert not step(gate, 2.0, [left])              # 1.2 s after the last one: starts over
+
+
+def test_fork_sign_on_the_image_border_counts_other_signs_do_not():
+    # 1115_1709 17:12:52.39: sign_left conf 0.85, h 65, box 0,235,38,300 dropped as 'edge'
+    gate = DetectionGate(**FORK_GATE)
+    left = box('sign_left', (0, 235, 38, 300), .85)
+    bump = box('sign_bump', (0, 235, 38, 300), .85)
+    assert gate.box_reason(left) is None
+    assert gate.box_reason(bump) == 'edge'
+    assert not step(gate, 0.0, [left])
+    assert step(gate, 0.1, [box('sign_left', (0, 238, 35, 301), .8)]) == {'sign_left'}
+
+
+def test_fork_sign_keeps_the_confidence_limit():
+    # 1115_1709 17:12:44.96: conf 0.58 < 0.60 stays out
+    gate = DetectionGate(**FORK_GATE)
+    assert gate.box_reason(box('sign_left', (180, 230, 201, 251), .58)) == 'conf 0.58 < 0.60'
+
+
+def test_1115_1726_fork_sign_sweeping_across_the_image_confirms_at_0_55():
+    # /detections 17:27:18.04 / 18.53 / 18.94: the box moves ~100 px between frames while the car swerves
+    seq = [(18.04, (459, 231, 478, 252), .65), (18.53, (353, 231, 372, 252), .59),
+           (18.94, (273, 231, 293, 253), .55)]
+    strict = DetectionGate(**FORK_GATE, class_confidence={'sign_left': .55})
+    loose = DetectionGate(**FORK_GATE, class_confidence={'sign_left': .55}, any_x=('sign_left', 'sign_right'))
+    got = {}
+    for t, coords, conf in seq:
+        b = [box('sign_left', coords, conf)]
+        got.setdefault('strict', []).append(step(strict, t, b))
+        got.setdefault('loose', []).append(step(loose, t, b))
+    assert got['strict'] == [set(), set(), set()]
+    assert got['loose'] == [set(), {'sign_left'}, {'sign_left'}]
+    assert loose.box_reason(box('sign_left', (273, 231, 293, 253), .54)) == 'conf 0.54 < 0.55'
+    assert loose.box_reason(box('sign_bump', (273, 231, 293, 253), .58)) == 'conf 0.58 < 0.60'
+
+
+def test_any_x_still_needs_the_same_row_and_size():
+    gate = DetectionGate(**FORK_GATE, any_x=('sign_left',))
+    assert not step(gate, 0.0, [box('sign_left', (100, 230, 120, 251), .9)])
+    assert not step(gate, 0.1, [box('sign_left', (500, 330, 520, 351), .9)])   # 100 px lower
+    assert not step(gate, 0.2, [box('sign_left', (500, 200, 560, 290), .9)])   # 4x taller

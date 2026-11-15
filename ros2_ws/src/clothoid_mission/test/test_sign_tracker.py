@@ -113,3 +113,46 @@ def test_old_hits_expire_and_memory_is_bounded():
     ds = [box(name='sign_'+str(i), x=30 + i * 30) for i in range(10)]
     tracker.update(2.1, ds)
     assert len(tracker.tracks) <= 4
+
+
+def fork_tracker(**overrides):
+    options = dict(class_hits={'sign_left': 2, 'sign_right': 2},
+                   class_max_age={'sign_left': 1., 'sign_right': 1.},
+                   class_confidence={'sign_left': .55, 'sign_right': .55},
+                   edge_exempt=('sign_left', 'sign_right'), any_x=('sign_left', 'sign_right'))
+    return SignTracker(**(options | overrides))
+
+
+def test_fork_sweep_survives_missed_frames_and_preserves_identity():
+    tracker = fork_tracker()
+    assert not tracker.update(0., [box('sign_left', x=459, size=20, confidence=.65)])
+    identity = next(iter(tracker.tracks))
+    for t in (.1, .2, .3, .4, .5, .6, .7):
+        assert not tracker.update(t, [])
+    tracks = tracker.update(.8, [box('sign_left', x=273, size=20, confidence=.55)])
+    assert len(tracks) == 1 and tracks[0].id == identity and tracks[0].hits == 2
+    assert not tracker.update(1.9, [box('sign_left', x=100, size=20)])
+
+
+def test_fork_relaxation_does_not_admit_low_quality_other_signs():
+    tracker = fork_tracker()
+    for name in ('sign_left', 'sign_right'):
+        assert tracker.box_reason(box(name, x=0, confidence=.55)) is None
+        assert tracker.box_reason(box(name, confidence=.54)).startswith('conf')
+    for name in ('sign_parking', 'sign_pedestrian', 'traffic_light_red'):
+        assert tracker.box_reason(box(name, x=0)) == 'edge'
+        assert tracker.box_reason(box(name, confidence=.55)).startswith('conf')
+
+
+def test_fork_any_x_requires_matching_side_height_and_row():
+    tracker = fork_tracker()
+    assert not tracker.update(0., [box('sign_left', x=100, size=20)])
+    assert not tracker.update(.1, [box('sign_right', x=500, size=20)])
+    assert not tracker.update(.2, [box('sign_left', x=500, y=330, size=20)])
+    assert not tracker.update(.3, [box('sign_left', x=500, size=80)])
+
+
+def test_fork_relaxation_can_be_disabled():
+    tracker = fork_tracker(any_x=())
+    assert not tracker.update(0., [box('sign_left', x=100, size=20)])
+    assert not tracker.update(.5, [box('sign_left', x=500, size=20)])

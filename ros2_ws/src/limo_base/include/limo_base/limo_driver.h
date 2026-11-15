@@ -134,6 +134,7 @@ private:
 
     ImuData imu_data_;
     uint8_t motion_mode_ = 0xFF;  // current motion type; invalid until the body reports it
+    int control_mode_logged_ = -1;  // last /limo_status control_mode written to the log (-1: none yet)
 
     // m (left right wheel distance): LIMO spec sheet tread 175 mm (wheelbase 200 mm); the factory
     // driver had 0.172. Only used for the inner/central steering angle conversion.

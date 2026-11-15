@@ -700,6 +700,15 @@ void LimoDriver::publishLimoState(double stamp, uint8_t vehicle_state, uint8_t c
     status_msg.motion_mode = motion_mode;
 
     status_publisher_->publish(status_msg);
+
+    // One line whenever the body's control source changes: 1 = ROS commands, 3 = RC transmitter
+    // (bag evidence 2026-11-15). A car moving while /cmd_vel is 0 is RC or a push by hand; the log
+    // tells which without the bag.
+    if (static_cast<int>(control_mode) != control_mode_logged_) {
+        const char *name = control_mode == 1 ? "ROS commands" : control_mode == 3 ? "RC transmitter" : "other";
+        RCLCPP_INFO(this->get_logger(), "control mode %u (%s)", static_cast<unsigned>(control_mode), name);
+        control_mode_logged_ = static_cast<int>(control_mode);
+    }
 }
 
 double LimoDriver::convertInnerAngleToCentral(double inner_angle) {

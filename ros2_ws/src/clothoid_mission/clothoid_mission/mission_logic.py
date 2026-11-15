@@ -55,43 +55,60 @@ def quaternion_to_pitch_deg(x: float, y: float, z: float, w: float) -> float:
 class DetectionGate:
     """Confirm spatially consistent boxes on distinct detector frames, not timer ticks."""
     def __init__(self, hits=3, window=5, max_age=0.5, confidence=0.6,
-                 sign_height=14, light_height=8, edge_margin=2, class_hits=None):
+                 sign_height=14, light_height=8, edge_margin=2, class_hits=None, class_max_age=None,
+                 edge_exempt=(), class_confidence=None, any_x=()):
         self.hits, self.window, self.max_age = hits, window, max_age
-        # per-class override of `hits`, e.g. fork signs: small, seen between the static obstacles
+        # per-class overrides, e.g. fork signs: small, seen between the static obstacles, no other
+        # fork sign around. class_max_age classes count every frame within their age (not only the
+        # last `window`); edge_exempt classes keep boxes touching the image border
         self.class_hits = dict(class_hits or {})
+        self.class_max_age = dict(class_max_age or {})
+        self.edge_exempt = frozenset(edge_exempt)
+        self.class_confidence = dict(class_confidence or {})
+        # any_x classes match across frames wherever they are across the image (a fork sign sweeps
+        # 80-100 px per 0.5 s while the car swerves; its box is ~20 px wide); y and size still match
+        self.any_x = frozenset(any_x)
         self.confidence, self.sign_height = confidence, sign_height
         self.light_height, self.edge_margin = light_height, edge_margin
-        self.history = deque(maxlen=window)
+        self.history = deque()
 
-    @staticmethod
-    def matches(a, b):
+    def matches(self, a, b):
         # Allow detector jitter and the motion of a sign during corner entry.
         aw, ah = a.x_max-a.x_min, a.y_max-a.y_min
         bw, bh = b.x_max-b.x_min, b.y_max-b.y_min
         return (a.class_name == b.class_name and
-                abs((a.x_min+a.x_max-b.x_min-b.x_max)/2) <= max(aw, bw) and
+                (a.class_name in self.any_x or abs((a.x_min+a.x_max-b.x_min-b.x_max)/2) <= max(aw, bw)) and
                 abs((a.y_min+a.y_max-b.y_min-b.y_max)/2) <= max(ah, bh) and
                 0.5 <= ah / bh <= 2.0)
 
     def required(self, name: str) -> int:
         return self.class_hits.get(name, self.hits)
 
+    def age(self, name: str) -> float:
+        return self.class_max_age.get(name, self.max_age)
+
     def box_reason(self, d, width=640, height=480) -> Optional[str]:
         """Why the box itself cannot count (None: it can): conf, height or edge."""
         minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
-        if d.confidence < self.confidence:
-            return 'conf %.2f < %.2f' % (d.confidence, self.confidence)
+        confidence = self.class_confidence.get(d.class_name, self.confidence)
+        if d.confidence < confidence:
+            return 'conf %.2f < %.2f' % (d.confidence, confidence)
         if d.y_max-d.y_min < minimum or d.x_max <= d.x_min:
             return 'h %d < %d' % (d.y_max-d.y_min, minimum)
-        if (d.x_min < self.edge_margin or d.y_min < self.edge_margin or
-                d.x_max > width-self.edge_margin or d.y_max > height-self.edge_margin):
+        m = self.edge_margin
+        on_edge = d.x_min < m or d.y_min < m or d.x_max > width-m or d.y_max > height-m
+        if on_edge and d.class_name not in self.edge_exempt:
             return 'edge'
         return None
 
     def count(self, d, now) -> int:
-        """Recent frames (within max_age, this one included) holding a box matching d."""
+        """Recent frames (within the class's age, this one included) holding a box matching d."""
+        frames = self.history
+        if d.class_name not in self.class_max_age:
+            frames = list(frames)[-self.window:]
+        age = self.age(d.class_name)
         return sum(any(self.matches(d, old) for old in frame)
-                   for stamp, frame in self.history if 0 <= now-stamp <= self.max_age)
+                   for stamp, frame in frames if 0 <= now-stamp <= age)
 
     def update(self, now, detections, accepted, width=640, height=480):
         if self.history and now < self.history[-1][0]:
@@ -99,6 +116,9 @@ class DetectionGate:
         boxes = [d for d in detections
                  if d.class_name in accepted and self.box_reason(d, width, height) is None]
         self.history.append((now, boxes))
+        keep = max([self.max_age] + list(self.class_max_age.values()))
+        while len(self.history) > self.window and now - self.history[0][0] > keep:
+            self.history.popleft()
         return {d.class_name for d in boxes if self.count(d, now) >= self.required(d.class_name)}
 
 

@@ -18,7 +18,7 @@ static_avoid:
     red_ratio_max: 0.10          # 1105 bags: obstacle zone <= 0.06, cone course >= 0.20
     debug: true                  # /avoid/path, /avoid/cues
     # debug_heavy: false           # + /avoid/candidates, /avoid/costmap: slow on the Jetson, rviz only   (launch argument; a value here would override it)
-    # recovery_reverse: false      # every path blocked for 1.5 s: back up 0.2 m (launch argument reverse)   (launch argument; a value here would override it)
+    # recovery_reverse: true       # every path blocked for 1.5 s: back up 0.2 m along the way the car came (launch argument reverse)   (launch argument; a value here would override it)
     load_log_period: 5.0         # s, a log line with each callback's run time; 0 = off
 
     lane_width: 0.50             # line centre to centre on our track; rules 0.55, check at the venue
@@ -44,11 +44,15 @@ static_avoid:
     # every path blocked for stuck_time: one search of curvature-limited three-arc paths (escape_*),
     # the best free one driven slowly to its end (1113 auto 05: 14 s stopped where only a quick
     # swerve went through)
-    # OFF since 2026-11-13 until the heading limit along the whole path and a recovery cap land: on the car
-    # (with reverse) an escape path turned the car ~90 deg across the lanes and it left the track. Stuck
-    # now means stop and wait. recovery_reverse stays off too (full.launch avoid_reverse).
-    escape: false
-    escape_margin: 0.03          # m of clearance more than safety for an escape path
+    # on with the back-up (launch arguments escape / reverse, full.launch avoid_escape / avoid_reverse):
+    # after a back-up along the way the car came, an escape path first. Not the 11-13 crash: that car
+    # (1113 auto 01 / 02) was driven by cone_follower publishing on /cmd_vel_avoid (own /cmd_vel_cone
+    # since 11-13 17:54); no back-up or escape command of static_avoid is in those bags
+    # escape: true                 # (launch argument; a value here would override it)
+    escape_margin: 0.0           # m of clearance more (+) / less (-) than safety for an escape path
+    # swerve distance margin (AvoidParams.swerve_margin). This file's escape_margin 0.03 used to set it
+    # too (one name for two values): 0.475 m on the car, 0.595 m everywhere it was tested
+    swerve_margin: 0.15
     outside_margin: 0.10         # m past the yellow lines: hits dropped once the lanes are measured
     # painted island. Fallback when the entry line was not seen, from the point the mission started:
     # a start just before the entry line (1108 run 1 2 3 10 11) has the front at 4.61~4.74 m. A start
@@ -95,3 +99,22 @@ static_avoid:
     slow_speed: 0.20
     lookahead: 0.45
     max_steer: 0.49
+    # sign look (AvoidParams.sign_look): direction unknown, island front more than look_end ahead,
+    # lane 1 / 3, own lane clear to the island -> heading so the fork sign is in view. The
+    # lane beside the island fixes A / B: 3 of 7 hand-overs there were 'no sign' with the sign in place
+    sign_look: true
+    look_end: 0.4                # 0.6 ended the 1115_1709 look with the sign at the image edge
+    look_view_deg: 10.0          # turn only until the sign is this close to the camera axis (1113: read up to ~20 deg)
+    look_max_deg: 45.0
+    look_exit_clear: 0.02        # turn into lane 2 only while the car can still get out of the island's width (+ this) ...
+    look_exit_margin: 0.15       # ... look_exit_margin m before the island front; unread there -> back out to its own lane
+    look_speed: 0.15             # while the look steers (sign out of view); in view the plan drives
+    look_gain: 1.5
+    # turn on the spot when the forward turn would not fit before look_end: forward / back at full
+    # lock, each arc checked first; at most 2 cycles and 0.4 m back
+    look_reverse: true
+    look_turn_radius: 0.50       # car 7 turns at 0.455 / 0.48 m (full lock, ODOM_STEERING_TEST.md)
+    look_step: 0.15
+    look_reverse_speed: 0.10
+    look_cycles_max: 2
+    look_reverse_max: 0.40
