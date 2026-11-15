@@ -198,8 +198,10 @@ class AvoidParams:
     # about straight, and drive it slowly with a short look-ahead. 1113 auto 05 stopped 14 s where
     # only such a quick swerve (right at full lock, then left) went through; the lane-centre
     # S-curves never contain it
-    # off for now (11-13 car: with reverse on, escape paths turned the car near 90 deg and the
-    # back-up then drove it off the track; fixed on a later branch)
+    # off by default until it has been seen on the car (launch argument `escape`). The 11-13 car that
+    # turned ~90 deg and left the track (1113 auto 01 / 02) was not this: cone_follower then published
+    # on /cmd_vel_avoid (its own /cmd_vel_cone since 11-13 17:54) and its reverse / full-lock commands
+    # drove the car; no back-up or escape command of this node is in those bags
     escape: bool = False
     escape_radius: float = 0.47       # m, car 7 at full lock
     escape_curvatures: Tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)

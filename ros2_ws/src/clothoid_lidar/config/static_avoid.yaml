@@ -44,10 +44,11 @@ static_avoid:
     # every path blocked for stuck_time: one search of curvature-limited three-arc paths (escape_*),
     # the best free one driven slowly to its end (1113 auto 05: 14 s stopped where only a quick
     # swerve went through)
-    # OFF since 2026-11-13 until the heading limit along the whole path and a recovery cap land: on the car
-    # (with reverse) an escape path turned the car ~90 deg across the lanes and it left the track. Stuck
-    # now means stop and wait. recovery_reverse stays off too (full.launch avoid_reverse).
-    escape: false
+    # off until seen on the car (launch argument escape / full.launch avoid_escape; with recovery_reverse
+    # = avoid_reverse). Stuck means stop and wait. Not the 11-13 crash: that car (1113 auto 01 / 02) was
+    # driven by cone_follower publishing on /cmd_vel_avoid (own /cmd_vel_cone since 11-13 17:54); no
+    # back-up or escape command of static_avoid is in those bags
+    # escape: false                # (launch argument; a value here would override it)
     escape_margin: 0.03          # m of clearance more than safety for an escape path
     outside_margin: 0.10         # m past the yellow lines: hits dropped once the lanes are measured
     # painted island. Fallback when the entry line was not seen, from the point the mission started:

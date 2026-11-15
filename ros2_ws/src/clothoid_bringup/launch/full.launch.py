@@ -18,14 +18,17 @@ see docs/PACKAGES.md). Platform arguments (`camera_pitch`, `use_camera`, `use_li
 Static obstacle avoidance (`use_avoid`, clothoid_lidar/avoid.launch.py: limo_extractor + static_avoid)
 reads the camera at 10 Hz when `use_image_10hz:=true` (default), else every 3rd raw frame.
 `ignore_cone:=true` keeps it running while the cone course is active (test track only: after the cones
-it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_debug_heavy` are its `reverse` /
-`debug_heavy`. `avoid_course_map` (default true): static_avoid keeps an /imu + /odom course map from
-where it was launched and judges from the first turn whether that was the race start. Race start: the
+it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_escape` / `avoid_debug_heavy` are
+its `reverse` / `escape` / `debug_heavy`. `avoid_course_map` (default true): static_avoid keeps an /imu +
+/odom course map from where it was launched and judges from the first turn whether that was the race
+start. Race start: the
 section start line (its place on the map) starts the mission, at lane speed until the first obstacle;
 nothing starts it before. Elsewhere: an obstacle in our lane starts it as before. false: always the
 latter (an avoid-only test launched inside the section, with no turn before it).
-Keep `avoid_reverse` off: on the car it backed across the lanes and left the track (2026-11-13);
-the escape paths are off in static_avoid.yaml (`escape: false`) for the same reason.
+`avoid_reverse` / `avoid_escape` (default off, not yet seen on the car): when every path stays blocked,
+back up 0.2 m / drive a free three-arc escape path. The 11-13 crash once blamed on them (1113 auto 01 /
+02: ~90 deg, off the track) was cone_follower publishing on /cmd_vel_avoid before it got its own
+/cmd_vel_cone (11-13 17:54); none of their commands is in those bags.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
@@ -98,6 +101,9 @@ def generate_launch_description():
                                           'an obstacle (a test launched inside the section)'),
         DeclareLaunchArgument('avoid_reverse', default_value='false',
                               description='static_avoid backs up 0.2 m when every path stays blocked'),
+        DeclareLaunchArgument('avoid_escape', default_value='false',
+                              description='static_avoid drives a free escape path when every path stays '
+                                          'blocked (not yet seen on the car)'),
         DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
                               description='static_avoid also publishes /avoid/candidates and /avoid/costmap'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
@@ -131,6 +137,7 @@ def generate_launch_description():
                                             "'.lower() == 'true' else 'raw'"]),
                  'ignore_cone': LaunchConfiguration('ignore_cone'),
                  'reverse': LaunchConfiguration('avoid_reverse'),
+                 'escape': LaunchConfiguration('avoid_escape'),
                  'course_map': LaunchConfiguration('avoid_course_map'),
                  'debug_heavy': LaunchConfiguration('avoid_debug_heavy')}, enabled('use_avoid')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
