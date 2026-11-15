@@ -36,7 +36,6 @@ class PathRelaxation:
             return original
         n = len(original)
         ref = original.copy()
-        s = arc
         tangent = np.gradient(ref, axis=0)
         norm = np.linalg.norm(tangent, axis=1)
         if np.any(norm < 1e-6):
@@ -50,6 +49,12 @@ class PathRelaxation:
         allowance = np.maximum(0., np.minimum(np.minimum(dl, dr)-envelope, .12*(dl+dr)))
         # Preserve both endpoint positions and tangents; never guess unseen exit.
         allowance[:2] = allowance[-2:] = 0.
+        if not np.any(allowance):
+            # Fixed offsets cannot change this path. Keep the same history the
+            # full solve would save, without its projection and 32 no-op steps.
+            self.world = transform(original, pose)
+            self.pose = np.asarray(pose)
+            return original
         prior = np.zeros(n)
         if self.world is not None and np.linalg.norm(np.array(pose[:2])-self.pose[:2]) < .25:
             old = transform(self.world, pose, True)
@@ -76,10 +81,9 @@ class PathRelaxation:
             gradient = .04*offset+.10*(offset-prior)+np.sum(grad*normal, axis=1)
             offset = np.clip(offset-.06*gradient, -allowance, allowance)
         candidate = ref+offset[:, None]*normal
-        # Interpolate displacement onto the ORIGINAL sampling so a zero update
-        # preserves the existing centreline, rather than changing its geometry.
-        delta = np.column_stack([np.interp(arc, s, (candidate-ref)[:, k]) for k in (0, 1)])
-        candidate = original+delta
+        # The solve already uses the original samples; keep the same arithmetic
+        # without interpolating the displacement back onto the identical grid.
+        candidate = original+(candidate-ref)
         # Validate current evidence after temporal smoothing. An old path never
         # overrides a newly observed obstacle. Reject the entire update on failure.
         checked = np.vstack((candidate, (candidate[:-1]+candidate[1:])/2))

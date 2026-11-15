@@ -51,3 +51,18 @@ def test_pose_transformed_history_and_reset():
     got=f.refine(transform(c,pose,True),transform(l,pose,True),transform(r,pose,True),transform(np.vstack((l,r)),pose,True),pose,.05)
     assert np.isfinite(got).all()
     f.clear();assert f.world is None
+
+
+def test_zero_lateral_allowance_keeps_path_and_refreshes_pose_history():
+    c, l, r = scene('s')
+    f = PathRelaxation()
+    f.refine(c, l, r, np.vstack((l, r)), (0., 0., 0.), .05)
+    # Neither side leaves room for a lateral update inside the body envelope.
+    x = np.linspace(0., 1., 21)
+    narrow = np.column_stack((x, np.zeros_like(x)))
+    left, right = narrow+[0., .2], narrow-[0., .2]
+    pose = (.02, .01, .03)
+    result = f.refine(narrow, left, right, np.vstack((left, right)), pose, .05)
+    np.testing.assert_array_equal(result, narrow)
+    np.testing.assert_array_equal(f.world, transform(narrow, pose))
+    np.testing.assert_array_equal(f.pose, pose)
