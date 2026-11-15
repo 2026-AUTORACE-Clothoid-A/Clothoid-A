@@ -60,9 +60,9 @@ class LaneConnection:
             raise ValueError('connection start needs a finite pose, time and steering')
         self.clear()
         self.started = self.last_time = now
-        self.last_pose = np.asarray(pose[:2], float)
+        self.last_pose = (pose[0], pose[1])
         limit = central_limit(wheelbase)
-        self.steering = float(np.clip(steering, -limit, limit))
+        self.steering = max(-limit, min(steering, limit))
 
     def pause(self, now):
         # Zero speed centres the LIMO wheels. Restart the slew from that angle;
@@ -80,8 +80,8 @@ class LaneConnection:
         if not all(math.isfinite(v) for v in values):
             self.pause(now)
             return 0., 0., False
-        position = np.asarray(pose[:2], float)
-        self.travelled += float(np.linalg.norm(position - self.last_pose))
+        position = (pose[0], pose[1])
+        self.travelled += math.hypot(position[0] - self.last_pose[0], position[1] - self.last_pose[1])
         self.last_pose = position
         dt = now - self.last_time
         self.last_time = now
@@ -94,9 +94,9 @@ class LaneConnection:
             return 0., 0., False
         limit = central_limit(wheelbase)
         requested = math.atan(wheelbase * angular_z / speed)
-        desired = float(np.clip(requested, -limit, limit))
+        desired = max(-limit, min(requested, limit))
         max_step = math.radians(self.p.steer_rate_deg_s) * min(max(0., dt), max_dt)
-        self.steering += float(np.clip(desired - self.steering, -max_step, max_step))
+        self.steering += max(-max_step, min(desired - self.steering, max_step))
         commanded_speed = min(speed, max_speed, self.p.speed)
         # Compare equivalent central angles, not angular velocities at different
         # speeds. A persistent curve is just as valid as a straight lane.

@@ -30,8 +30,8 @@ class ExitPathMemory:
 
     def update_pose(self, pose):
         if self.last_pose is not None:
-            self.travelled += float(np.linalg.norm(np.array(pose[:2]) - self.last_pose))
-        self.last_pose = np.array(pose[:2])
+            self.travelled += math.hypot(pose[0] - self.last_pose[0], pose[1] - self.last_pose[1])
+        self.last_pose = (pose[0], pose[1])
 
     def remember(self, path, pose, lookahead, spacing):
         self.update_pose(pose)
