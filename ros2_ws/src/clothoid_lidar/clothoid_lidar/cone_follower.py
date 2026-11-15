@@ -14,6 +14,7 @@ from scipy.interpolate import CubicSpline
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra, minimum_spanning_tree
 from scipy.spatial import Delaunay
+from clothoid_lidar.cone_path_relaxation import PathRelaxation
 from clothoid_lidar.cone_corner import endpoint_centerline
 from clothoid_lidar.cone_corridor import CorridorMemory, usable_path, width_samples
 
@@ -42,6 +43,7 @@ class FollowerParams:
     # and left/right arrive one after the other, so 0.1 would call the other side stale.
     boundary_timeout: float = 0.25
     corner_endpoint_enabled: bool = True
+    path_relaxation_enabled: bool = False
 
     def __post_init__(self):
         if not np.isfinite(self.lfd) or self.lfd <= 0.0:
@@ -270,11 +272,13 @@ class ConeFollower:
     def __init__(self, params: FollowerParams):
         self.p = params
         self.corridor = CorridorMemory()
+        self.path_relaxation = PathRelaxation()
         self.last_forward_steering = None
         self.reverse_start_travel = None
 
     def reset(self):
         self.corridor.clear()
+        self.path_relaxation.clear()
         self.last_forward_steering = None
         self.reverse_start_travel = None
 
@@ -317,11 +321,16 @@ class ConeFollower:
         center = np.zeros((0, 2))
         if left_fresh and right_fresh and len(left) and len(right):
             center = build_center_line(left, right, p)
+            if p.path_relaxation_enabled:
+                center = self.path_relaxation.refine(center, left, right, obstacles, pose, p.centerline_ds)
+            else:
+                self.path_relaxation.clear()
             target = look_ahead_point(center, p)
             if target is not None and np.isfinite(target).all() and target[0] > 0.:
                 if usable_path(center, obstacles, min_clearance, target):
                     self.corridor.observe(left, right, center, pose, p.lfd)
                 return self._forward(center)
+        self.path_relaxation.clear()
         # An empty/one-point centre is not a steerable path, even if both
         # boundary messages are fresh. Try retained/width paths before recovery.
         if pose is not None:

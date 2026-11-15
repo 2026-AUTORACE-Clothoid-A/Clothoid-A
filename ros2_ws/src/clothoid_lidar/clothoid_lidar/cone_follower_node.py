@@ -53,6 +53,7 @@ class ConeFollowerNode(Node):
         self.declare_parameter('lsq_window_size', d.lsq_window_size)
         self.declare_parameter('boundary_timeout', d.boundary_timeout)
         self.declare_parameter('corner_endpoint_enabled', d.corner_endpoint_enabled)
+        self.declare_parameter('path_relaxation_enabled', d.path_relaxation_enabled)
         self.declare_parameter('exit_clearance', 0.2)  # path to detected obstacle centre, metres
 
         self.follower = ConeFollower(self._build(lambda n: self.get_parameter(n).value))
@@ -112,7 +113,8 @@ class ConeFollowerNode(Node):
             rear_axle_x=value('rear_axle_x'), lfd=value('lfd'), centerline_ds=value('centerline_ds'),
             steering_gain=value('steering_gain'),
             lsq_window_size=value('lsq_window_size'), boundary_timeout=value('boundary_timeout'),
-            corner_endpoint_enabled=value('corner_endpoint_enabled'))
+            corner_endpoint_enabled=value('corner_endpoint_enabled'),
+            path_relaxation_enabled=value('path_relaxation_enabled'))
 
     def on_parameters(self, params):
         proposed = {p.name: p.value for p in params}
