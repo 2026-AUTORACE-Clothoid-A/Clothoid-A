@@ -54,7 +54,7 @@ class DetectionGate:
     """Confirm spatially consistent boxes on distinct detector frames, not timer ticks."""
     def __init__(self, hits=3, window=5, max_age=0.5, confidence=0.6,
                  sign_height=14, light_height=8, edge_margin=2, class_hits=None, class_max_age=None,
-                 edge_exempt=()):
+                 edge_exempt=(), class_confidence=None, any_x=()):
         self.hits, self.window, self.max_age = hits, window, max_age
         # per-class overrides, e.g. fork signs: small, seen between the static obstacles, no other
         # fork sign around. class_max_age classes count every frame within their age (not only the
@@ -62,17 +62,20 @@ class DetectionGate:
         self.class_hits = dict(class_hits or {})
         self.class_max_age = dict(class_max_age or {})
         self.edge_exempt = frozenset(edge_exempt)
+        self.class_confidence = dict(class_confidence or {})
+        # any_x classes match across frames wherever they are across the image (a fork sign sweeps
+        # 80-100 px per 0.5 s while the car swerves; its box is ~20 px wide); y and size still match
+        self.any_x = frozenset(any_x)
         self.confidence, self.sign_height = confidence, sign_height
         self.light_height, self.edge_margin = light_height, edge_margin
         self.history = deque()
 
-    @staticmethod
-    def matches(a, b):
+    def matches(self, a, b):
         # Allow detector jitter and the motion of a sign during corner entry.
         aw, ah = a.x_max-a.x_min, a.y_max-a.y_min
         bw, bh = b.x_max-b.x_min, b.y_max-b.y_min
         return (a.class_name == b.class_name and
-                abs((a.x_min+a.x_max-b.x_min-b.x_max)/2) <= max(aw, bw) and
+                (a.class_name in self.any_x or abs((a.x_min+a.x_max-b.x_min-b.x_max)/2) <= max(aw, bw)) and
                 abs((a.y_min+a.y_max-b.y_min-b.y_max)/2) <= max(ah, bh) and
                 0.5 <= ah / bh <= 2.0)
 
@@ -85,8 +88,9 @@ class DetectionGate:
     def box_reason(self, d, width=640, height=480) -> Optional[str]:
         """Why the box itself cannot count (None: it can): conf, height or edge."""
         minimum = self.light_height if d.class_name.startswith('traffic_light_') else self.sign_height
-        if d.confidence < self.confidence:
-            return 'conf %.2f < %.2f' % (d.confidence, self.confidence)
+        confidence = self.class_confidence.get(d.class_name, self.confidence)
+        if d.confidence < confidence:
+            return 'conf %.2f < %.2f' % (d.confidence, confidence)
         if d.y_max-d.y_min < minimum or d.x_max <= d.x_min:
             return 'h %d < %d' % (d.y_max-d.y_min, minimum)
         m = self.edge_margin
