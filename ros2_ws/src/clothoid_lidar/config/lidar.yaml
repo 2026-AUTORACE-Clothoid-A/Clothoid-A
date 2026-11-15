@@ -51,6 +51,11 @@ cone_sorter:
 
 cone_follower:
   ros__parameters:
+    # Local memory pose: integrate rear-axle wheel speed with the IMU gyro.
+    # The steering-feedback-derived /odom pose under-reports full-lock rotation.
+    odom_topic: /odom
+    imu_topic: /imu
+    pose_topic: /cone/odom   # diagnostic local base_link pose; no global TF is replaced
     speed: 0.25              # keep response margin for the measured ~0.2 s steering delay
     reverse_speed: -0.2       # only recover a missing boundary path, with fresh rear-scan clearance
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)

@@ -15,7 +15,7 @@ from nav_msgs.msg import Path, Odometry
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Bool, Header
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -25,6 +25,7 @@ from clothoid_lidar.cone_follower import (ConeFollower, FollowerParams, FollowRe
 from clothoid_lidar.cone_exit import ExitPathMemory, clearance
 from clothoid_lidar.cone_sorter_node import to_path
 from clothoid_lidar.cone_recovery import current_boundaries, recovery_confirmed, reverse_sweep_clear
+from clothoid_lidar.cone_odometry import ConeOdometry
 
 
 def path_to_array(msg: Path) -> np.ndarray:
@@ -41,6 +42,9 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.declare_parameter('mission_active_topic', '/cone/mission_active')
         self.declare_parameter('centerline_topic', '/cone/centerline')
         self.declare_parameter('target_topic', '/cone/target')
+        self.declare_parameter('imu_topic', '/imu')
+        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('pose_topic', '/cone/odom')
 
         d = FollowerParams()
         self.declare_parameter('wheelbase', d.wheelbase)
@@ -58,6 +62,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.declare_parameter('exit_clearance', 0.2)  # path to detected obstacle centre, metres
 
         self.follower = ConeFollower(self._build(lambda n: self.get_parameter(n).value))
+        self.odometry = ConeOdometry(self.follower.p.rear_axle_x, self.follower.p.boundary_timeout)
+        self.pose_generation = self.odometry.generation
         self.active = False
         self.exiting = False
         self.exit_memory = ExitPathMemory()
@@ -65,6 +71,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.pose_time = None
         self.pose_header_age = None
         self.odom_rx_interval = None
+        self.last_odom_rx = None
         self.obstacles = np.zeros((0, 2))
         self.obstacles_time = None
         self.obstacles_scan_stamp = self.previous_obstacles_stamp = self.start_scan_stamp = None
@@ -86,6 +93,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             Path, self.get_parameter('centerline_topic').value, 1)
         self.target_pub = self.create_publisher(
             PointStamped, self.get_parameter('target_topic').value, 1)
+        self.pose_pub = self.create_publisher(Odometry, self.get_parameter('pose_topic').value, 1)
         self.create_subscription(
             Path, self.get_parameter('left_boundary_topic').value, self.on_left, 1)
         self.create_subscription(
@@ -98,13 +106,15 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.create_subscription(Bool, '/lane/cone_exit_ready', self.on_lane_ready, 1)
         # Pose is a high-rate sensor input. Prefer its latest sample rather
         # than waiting for retransmission of a lost reliable sample.
-        self.create_subscription(Odometry, '/odom', self.on_odom,
+        self.create_subscription(Odometry, self.get_parameter('odom_topic').value, self.on_odom,
+                                 QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        self.create_subscription(Imu, self.get_parameter('imu_topic').value, self.on_imu,
                                  QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         self.create_subscription(PoseArray, '/lidar/obstacles', self.on_obstacles, 1)
         self.create_subscription(LaserScan, '/scan', self.on_scan, qos_profile_sensor_data)
         self.create_timer(self.control_period, self.exit_control)
         self.add_on_set_parameters_callback(self.on_parameters)
-        self.get_logger().info('cone_follower started')
+        self.get_logger().info('cone_follower started: local pose from IMU gyro + rear-axle wheel speed')
 
     @staticmethod
     def _build(value) -> FollowerParams:
@@ -120,9 +130,16 @@ class ConeFollowerNode(QuietEventsMixin, Node):
     def on_parameters(self, params):
         proposed = {p.name: p.value for p in params}
         try:
-            self.follower.p = self._build(lambda n: proposed.get(n, self.get_parameter(n).value))
+            candidate = self._build(lambda n: proposed.get(n, self.get_parameter(n).value))
+            estimator = ConeOdometry(candidate.rear_axle_x, candidate.boundary_timeout)
         except Exception as exc:
             return SetParametersResult(successful=False, reason=str(exc))
+        if candidate.rear_axle_x != self.follower.p.rear_axle_x:
+            self.odometry = estimator
+            self._reset_pose_memory()
+        else:
+            self.odometry.timeout = candidate.boundary_timeout
+        self.follower.p = candidate
         return SetParametersResult(successful=True)
 
     def on_left(self, msg: Path):
@@ -183,23 +200,61 @@ class ConeFollowerNode(QuietEventsMixin, Node):
     def on_odom(self, msg):
         self.odom_received += 1
         received = self.get_clock().now()
-        self.odom_rx_interval = (None if self.pose_time is None else
-                                (received-self.pose_time).nanoseconds*1e-9)
+        self.odom_rx_interval = (None if self.last_odom_rx is None else
+                                (received-self.last_odom_rx).nanoseconds*1e-9)
+        self.last_odom_rx = received
         stamp = msg.header.stamp.sec*1000000000+msg.header.stamp.nanosec
         self.pose_header_age = (received.nanoseconds-stamp)*1e-9 if stamp else None
-        p, q = msg.pose.pose.position, msg.pose.pose.orientation
-        pose = (p.x, p.y, math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
-        if not all(math.isfinite(v) for v in pose):
+        sensor_time = self._sensor_stamp(msg, received)
+        if sensor_time is not None:
+            self.odometry.odom(sensor_time, msg.twist.twist.linear.x)
+        self._update_pose(received)
+        if self.pose is not None and self.pose_pub.get_subscription_count():
+            out = Odometry()
+            out.header.stamp, out.header.frame_id = self.pose_time.to_msg(), 'cone_odom'
+            out.child_frame_id = 'base_link'
+            out.pose.pose.position.x, out.pose.pose.position.y = self.pose[:2]
+            out.pose.pose.orientation.z = math.sin(self.pose[2]/2)
+            out.pose.pose.orientation.w = math.cos(self.pose[2]/2)
+            omega = self.odometry.gyro-self.odometry.bias
+            out.twist.twist.linear.x = self.odometry.speed
+            out.twist.twist.linear.y = self.odometry.rear_offset*omega
+            out.twist.twist.angular.z = omega
+            self.pose_pub.publish(out)
+
+    def on_imu(self, msg):
+        received = self.get_clock().now()
+        sensor_time = self._sensor_stamp(msg, received)
+        if sensor_time is not None:
+            gyro = msg.angular_velocity.z if msg.angular_velocity_covariance[0] >= 0 else math.nan
+            self.odometry.imu(sensor_time, gyro)
+        self._update_pose(received)
+
+    def _sensor_stamp(self, msg, received):
+        stamp = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
+        stamp = stamp or received.nanoseconds*1e-9
+        return stamp if -.02 <= received.nanoseconds*1e-9-stamp <= self.odometry.timeout else None
+
+    def _reset_pose_memory(self):
+        self.exit_memory.clear()
+        self.follower.reset()
+        self.pose = self.pose_time = None
+        self.pose_generation = self.odometry.generation
+
+    def _update_pose(self, received):
+        if self.pose_generation != self.odometry.generation:
+            self._reset_pose_memory()
+            if self.active:
+                self.get_logger().warn('cone local pose restarted after invalid or interrupted sensors; '
+                                       'retained paths cleared', throttle_duration_sec=1.)
+        self.pose = self.odometry.pose(received.nanoseconds*1e-9)
+        if self.pose is None:
             self.pose_time = None
-            self.exit_memory.clear()
-            self.follower.reset()
             return
-        if self.pose is not None and math.hypot(pose[0]-self.pose[0], pose[1]-self.pose[1]) > 1.0:
-            self.exit_memory.clear()
-            self.follower.reset()
-        self.exit_memory.update_pose(pose)
-        self.follower.corridor.update_pose(pose)
-        self.pose, self.pose_time = pose, received
+        self.pose_time = rclpy.time.Time(nanoseconds=round(self.odometry.stamp*1e9),
+                                       clock_type=received.clock_type)
+        self.exit_memory.update_pose(self.pose)
+        self.follower.corridor.update_pose(self.pose)
 
     def on_obstacles(self, msg):
         stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
@@ -242,7 +297,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         p = self.follower.p
         pose = self.pose if self.pose is not None and self._fresh(self.pose_time) else None
         lane_ready = self.lane_ready and self._fresh(self.lane_ready_time)
-        if lane_ready and self.exit_memory.handover_ready(pose, p.rear_axle_x, p.wheelbase):
+        if pose is not None and lane_ready and self.exit_memory.handover_ready(
+                pose, p.rear_axle_x, p.wheelbase):
             if self.exit_memory.observed_end is None:
                 self.get_logger().warn('cone EXIT: no observed endpoint; using lane-only handover',
                                        throttle_duration_sec=1.0)

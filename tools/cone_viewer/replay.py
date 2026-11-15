@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def analyse(path, progress=lambda value: None):
     # A reload always follows source edits, even when the viewer is already open.
-    from clothoid_lidar import cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_corridor, cone_exit, cone_recovery, cone_path_relaxation
-    for module in (cone_trace, cone_corner, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_sorter, cone_follower, obstacle_extractor):
+    from clothoid_lidar import cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_corridor, cone_exit, cone_recovery, cone_path_relaxation, cone_odometry
+    for module in (cone_trace, cone_corner, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_sorter, cone_follower, obstacle_extractor, cone_odometry):
         importlib.reload(module)
     config_path = ROOT/'ros2_ws/src/clothoid_lidar/config/lidar.yaml'
     config = yaml.safe_load(config_path.read_text())
@@ -29,6 +29,10 @@ def analyse(path, progress=lambda value: None):
     mission = cone_sorter.ConeMission(cone_sorter.ConeSorter(sp), hold_exit=True)
     follower = cone_follower.ConeFollower(fp)
     exit_memory = cone_exit.ExitPathMemory()
+    odometry = cone_odometry.ConeOdometry(fp.rear_axle_x, fp.boundary_timeout)
+    pose_generation = odometry.generation
+    follower_config = config['cone_follower']['ros__parameters']
+    odom_topic, imu_topic = follower_config.get('odom_topic', '/odom'), follower_config.get('imu_topic', '/imu')
     files = sorted(Path(path).glob('*.db3')) if Path(path).is_dir() else [Path(path)]
     if not files:
         raise ValueError('bag에 db3 파일이 없습니다.')
@@ -39,7 +43,7 @@ def analyse(path, progress=lambda value: None):
             if minimum is not None:start_stamps.append(minimum)
             topics = {i: (n, t) for i, n, t in db.execute('select id,name,type from topics')}
             wanted = {i: (n, t) for i, (n, t) in topics.items()
-                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', '/odom', '/lane/cone_exit_ready')
+                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', odom_topic, imu_topic, '/lane/cone_exit_ready')
                       or (t in ('sensor_msgs/msg/CompressedImage', 'sensor_msgs/msg/Image')
                           and 'debug' not in n and 'depth' not in n and 'warp' not in n)}
             camera = sorted([(i, n, t) for i, (n, t) in wanted.items() if 'Image' in t],
@@ -98,17 +102,30 @@ def analyse(path, progress=lambda value: None):
             # The live follower acknowledges readiness on its 20 Hz timer.
             # Consume it here so a short true pulse is not lost between scans.
             current_pose = pose if pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout else None
-            if (lane_ready and active and mission.exiting
+            if (current_pose is not None and lane_ready and active and mission.exiting
                     and exit_memory.handover_ready(current_pose, fp.rear_axle_x, fp.wheelbase)):
                 mission.finish_exit()
                 follower.reset();exit_memory.clear();exit_reference_end = None
                 left = right = np.zeros((0, 2));lt = rt = None;active = False
                 events.append((t, '콘 종료'))
             continue
-        if name == '/odom':
-            q = msg.pose.pose.orientation; pos = msg.pose.pose.position
-            pose = (pos.x, pos.y, math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
-            pose_time = t; follower.corridor.update_pose(pose); exit_memory.update_pose(pose)
+        if name in (odom_topic, imu_topic):
+            header_time = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
+            sensor_time = header_time-t0*1e-9 if header_time else t
+            if -.02 <= t-sensor_time <= fp.boundary_timeout:
+                if name == odom_topic:
+                    odometry.odom(sensor_time, msg.twist.twist.linear.x)
+                else:
+                    gyro = msg.angular_velocity.z if msg.angular_velocity_covariance[0] >= 0 else math.nan
+                    odometry.imu(sensor_time, gyro)
+            if pose_generation != odometry.generation:
+                follower.reset();exit_memory.clear();exit_reference_end = None
+                pose_generation = odometry.generation
+                events.append((t, 'IMU/속도 수신 중단: 저장 경로 초기화'))
+            pose = odometry.pose(t)
+            pose_time = odometry.stamp if pose is not None else None
+            if pose is not None:
+                follower.corridor.update_pose(pose);exit_memory.update_pose(pose)
             continue
         if ty != 'sensor_msgs/msg/LaserScan':
             continue
@@ -165,7 +182,7 @@ def analyse(path, progress=lambda value: None):
         if active and mission.exiting:
             fresh_pose = pose is not None and pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout
             current_pose = pose if fresh_pose else None
-            if (lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= fp.boundary_timeout
+            if (current_pose is not None and lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= fp.boundary_timeout
                     and exit_memory.handover_ready(current_pose, fp.rear_axle_x, fp.wheelbase)):
                 mission.finish_exit()
             else:
@@ -217,7 +234,7 @@ def analyse(path, progress=lambda value: None):
     if not frames:
         raise ValueError('라이다 스캔이 없습니다.')
     digest = hashlib.sha256()
-    for module in (cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation):
+    for module in (cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_odometry):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
     digest.update(config_path.read_bytes())
