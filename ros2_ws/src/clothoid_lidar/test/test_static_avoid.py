@@ -1267,9 +1267,22 @@ def test_sign_look_heading_only_as_far_as_needed():
     a = StaticAvoid(AvoidParams())
     assert a.look_heading(0.5, 3.0) == 0.0                 # the sign 9.5 deg off: in view already
     psi = a.look_heading(0.5, 0.7)                         # 35.5 deg off: turn right, towards it
-    assert -math.radians(20.0) < psi < 0.0                 # capped by the room to lane 2 (look_inner)
+    assert psi == pytest.approx(-math.radians(35.5 - 10.0), abs=0.01)   # no lateral cap
     assert a.look_heading(-0.5, 0.7) == pytest.approx(-psi)
-    assert a.look_heading(0.40, 0.7) == 0.0                # no room left in the lane
+    assert a.look_heading(0.5, 0.2) == pytest.approx(-math.radians(45.0))   # look_max_deg
+
+
+def test_sign_look_exit_need():
+    a = StaticAvoid(AvoidParams())
+    a.look_side = 1.0                                      # lane 1
+    assert a.exit_need(0.5, 0.0) == 0.0                    # lane centre, straight
+    assert a.exit_need(0.5, math.radians(-20.0)) == 0.0    # straightening now still leaves it out
+    inside = a.exit_need(0.30, 0.0)                        # 0.30: over the island's width (0.38)
+    assert 0.0 < inside < 0.6
+    assert a.exit_need(0.30, math.radians(-30.0)) > inside + 0.2   # heading in: straighten first
+    lane1 = a.exit_need(0.30, math.radians(-30.0))
+    a.look_side = -1.0                                     # lane 3: the mirror image
+    assert a.exit_need(-0.30, math.radians(30.0)) == pytest.approx(lane1)
 
 
 def test_sign_look_not_with_the_direction_known():
@@ -1294,7 +1307,8 @@ def test_sign_look_reads_a_sign_out_of_view_and_takes_its_lane(flag, lane):
 def test_sign_look_never_read_ends_straight_beside_the_island():
     out = run([(1.2, 0.0)], direction=('view', 1, 0.0, 0.0), steer_gain=0.55, t_max=70.0)
     events = [e[1] for e in out['events']]
-    assert any(e.startswith('sign look end: island front') for e in events), events
+    # turned into lane 2 for the sign, then back out of the island's width in its own lane
+    assert any(e.startswith('sign look end: out of the island width in lane 1') for e in events), events
     check(out, 0.50, 1)
     assert not out.get('island_tip'), out
 
@@ -1302,13 +1316,12 @@ def test_sign_look_never_read_ends_straight_beside_the_island():
 @pytest.mark.parametrize('steer_gain', [1.0, 0.55])
 def test_sign_look_turns_on_the_spot_when_close(steer_gain):
     # lane 1, island front 0.8 m ahead, turned 25 deg away (outwards): no room to turn forward
-    a, end, events, (s_lo, s_hi), d_min = _look_drive((3.55, 0.5, math.radians(25.0)),
+    a, end, events, (s_lo, s_hi), _ = _look_drive((3.55, 0.5, math.radians(25.0)),
                                                       steer_gain=steer_gain)
     assert any(e.startswith('sign look: turning on the spot') for e in events), events
     assert 1 <= a.look_cycle <= 2 and 0.0 < a.look_backed <= 0.40
     assert end[2] < 0.0                                     # now turned towards the sign
     assert s_hi < 4.35 - 0.35 and s_lo > 3.55 - 0.10        # kept before look_end (0.4), little backing
-    assert d_min > AvoidParams().look_inner - 0.05          # not past look_inner into lane 2
 
 
 def test_sign_look_does_not_back_into_what_is_behind():
