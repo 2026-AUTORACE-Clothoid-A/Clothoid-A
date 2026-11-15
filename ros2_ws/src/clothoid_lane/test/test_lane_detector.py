@@ -180,6 +180,34 @@ def test_tracker_debug_image_shows_windows_and_reference():
     assert det.detect(np.zeros((480, 640, 3), np.uint8), SIDE_RIGHT, 160).reference == ''
 
 
+def test_cone_exit_large_boundary_switch_needs_repeated_observations():
+    det = tracker()
+    det.set_boundary_continuity(True)
+    right = draw([(480, YELLOW, 8, 0, 479)])
+    left = draw([(240, YELLOW, 8, 0, 479)])
+    assert det.detect(right, SIDE_RIGHT, 160).reference == 'right'
+    # The other boundary implies a different lane centre. Do not take a one-frame switch.
+    assert not det.detect(left, SIDE_RIGHT, 160).found
+    assert not det.detect(left, SIDE_RIGHT, 160).found
+    assert det.detect(left, SIDE_RIGHT, 160).reference == 'left'
+
+
+def test_cone_exit_consistent_alternative_boundary_needs_no_extra_wait():
+    det = tracker()
+    det.set_boundary_continuity(True)
+    first = det.detect(draw([(480, YELLOW, 8, 0, 479)]), SIDE_RIGHT, 160)
+    second = det.detect(draw([(160, YELLOW, 8, 0, 479)]), SIDE_RIGHT, 160)
+    assert first.found and second.found
+    assert abs(first.target_x-second.target_x) < 2
+
+
+def test_short_line_fit_outside_observed_rows_is_not_alignment_evidence():
+    det = tracker()
+    det.t.look_row = 185
+    result = det.detect(draw([(480, YELLOW, 8, 240, 330)]), SIDE_RIGHT, 160)
+    assert result.found and result.heading_deg is None
+
+
 def test_steering_law_matches_2025():
     import math
     from clothoid_lane.steering import angular_z, steer_angle

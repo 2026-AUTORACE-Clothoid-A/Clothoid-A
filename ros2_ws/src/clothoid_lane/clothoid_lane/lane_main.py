@@ -27,7 +27,7 @@ from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 from clothoid_lane.parking_landmark_publisher import LandmarkPublisher
-from clothoid_lane.cone_handover import ConeHandover
+from clothoid_lane.cone_handover import ConeHandover, HandoverParams
 from clothoid_lane.bump_gap import BumpGap, BumpGapParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
                                     limit_step, speed_scaled_gain, steer_angle)
@@ -119,6 +119,8 @@ class LaneMainNode(QuietEventsMixin, Node):
         # Low-speed handover until the detected lane and control target agree.
         self.declare_parameter('cone_active_topic', '/cone/mission_active')
         self.declare_parameter('cone_exit_speed', 0.3)
+        for name, value in HandoverParams().__dict__.items():
+            self.declare_parameter('cone_exit_' + name, value)
 
         # lane following side / width. Widths are real distances, line centre to centre in metres;
         # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
@@ -223,6 +225,11 @@ class LaneMainNode(QuietEventsMixin, Node):
             v = value(name)
             if not math.isfinite(v) or v < 0:
                 return SetParametersResult(successful=False, reason=f'{name} must be finite and >= 0')
+        try:
+            HandoverParams(**{name: value('cone_exit_' + name)
+                              for name in HandoverParams.__dataclass_fields__})
+        except ValueError as exc:
+            return SetParametersResult(successful=False, reason=str(exc))
         width = WIDTH_PARAMS & proposed.keys()
         gap_names = ('bump_gap_' + name for name in BumpGapParams.__dataclass_fields__)
         if any(not math.isfinite(value(name)) or value(name) < 0 for name in gap_names):
@@ -241,7 +248,13 @@ class LaneMainNode(QuietEventsMixin, Node):
 
     # --- flags from other nodes -------------------------------------------------
     def on_cone_active(self, msg: Bool):
-        self.cone_handover.on_cone(msg.data, self.get_clock().now().nanoseconds * 1e-9)
+        now = self.get_clock().now()
+        self.cone_handover.on_cone(msg.data, now.nanoseconds * 1e-9, self._exit_travel(now))
+
+    def _exit_travel(self, now):
+        if self.odom_stamp is not None and 0 <= (now-self.odom_stamp).nanoseconds*1e-9 <= .25:
+            return self.odom_travel
+        return None
 
     def on_direction(self, msg: Int32):
         # 2025: ignored once the parking mission started
@@ -384,6 +397,8 @@ class LaneMainNode(QuietEventsMixin, Node):
 
     def process_bgr(self, bgr, header):
         debug = self.get_parameter('debug').value
+        if hasattr(self.detector, 'set_boundary_continuity'):
+            self.detector.set_boundary_continuity(self.cone_handover.recovering)
         result = self.detector.detect(bgr, self.side, self.lane_width, debug)
 
         now = self.get_clock().now()
@@ -404,10 +419,22 @@ class LaneMainNode(QuietEventsMixin, Node):
 
         # Reuse the normal filter's pixel step and target freshness interval.
         # A locked/held command is not evidence of a newly observed lane.
+        self.cone_handover.p = HandoverParams(**{
+            name: self.get_parameter('cone_exit_' + name).value
+            for name in HandoverParams.__dataclass_fields__})
+        heading = getattr(result, 'heading_deg', None)
+        aligned = (heading is not None and math.isfinite(heading)
+                   and abs(heading) <= self.cone_handover.p.max_heading_deg
+                   and 0 <= (now-frame_time).nanoseconds*1e-9 <= .15
+                   and target is not None and not locked
+                   and abs(math.degrees(steer_angle(*target, self.detector.p.warp_w,
+                                                   self.detector.p.warp_h)))
+                   <= self.cone_handover.p.max_steer_deg)
         self.cone_handover.observe(
             now.nanoseconds * 1e-9, result.found,
             (result.target_x, result.target_y), target,
-            self.get_parameter('target_max_step_px').value, TARGET_RESET_SEC)
+            self.get_parameter('target_max_step_px').value, TARGET_RESET_SEC,
+            aligned=aligned, travel=self._exit_travel(now))
         self.cone_ready_pub.publish(Bool(data=self.cone_handover.ready))
 
         if debug and result.debug_image is not None:
@@ -415,7 +442,7 @@ class LaneMainNode(QuietEventsMixin, Node):
                 cv2.circle(result.debug_image, (int(round(target[0])), int(round(target[1]))), 7,
                            (0, 255, 255), 2)
             self.debug_pub.publish(bgr_to_image(result.debug_image, header))
-        if debug:
+        if debug or (self.cone_handover.recovering and self.target_pub.get_subscription_count()):
             self._publish_debug_points(result, header)
 
         if result.zigzag:
