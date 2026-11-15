@@ -196,8 +196,8 @@ class AvoidParams:
     # free (the normal plan from there would stop at the same place again)
     reverse_distance: float = 0.20
     reverse_lookahead: float = 0.15   # m back along the recorded way, steered at
-    # m in all, per mission: the stuck back-ups (reverse_distance each), the undo of an abandoned
-    # escape path and the sign look's rewind together. A cap so that a car stuck again and again does
+    # m in all, per mission: the stuck back-ups (reverse_distance each) and the undo of an abandoned
+    # escape path together. A cap so that a car stuck again and again does
     # not shuttle for ever (1115_1709: a back-up, two escape paths, then 20 s stuck at 39 deg)
     reverse_max: float = 1.50
     reverse_speed: float = 0.15
@@ -300,17 +300,18 @@ class AvoidParams:
     # The lane beside the island fixes A / B, so the sign must be read before it: 3 of 7 hand-overs
     # beside the island were 'no sign' with the sign there. Up to look_max_deg, less when the turn and
     # the turn back (radius look_turn_radius) would take the car centre within look_inner of lane 2's
-    # centre: into lane 2 on purpose (a sign to the far side is then one lane change away, the way
-    # back is short); a look that steered is straight again by look_end. Once per section; ends when
+    # centre; a look that steered is straight again by look_end. Once per section; ends when
     # the direction comes, at look_end, or when its lane ahead is not clear.
     sign_look: bool = True
     # m before the island front. 0.6 ended the 1115_1709 look with the sign at the image edge
     look_end: float = 0.4
     look_view_deg: float = 10.0       # the sign this close to the camera axis (1113: read to ~20 deg)
     look_max_deg: float = 45.0
-    # m, the car centre's closest offset to lane 2's centre. Below 0.40 (into lane 2) the sim read more
-    # signs but late, and crossed to the far lane over the island tip (look_inner 0.10~0.30 all alike:
-    # random island 0 -> 8, dense 0 -> 40, weak steering 0 -> 46~50; sign 13 deg / 1.6 m, 2026-11-15)
+    # m, the car centre's closest offset to lane 2's centre. Beside the island the car centre needs
+    # about 0.34 (island half width + car half width). Below that the sign was not read more often in
+    # the sim, but a car still unread at look_end stood over the island's width and could not get back
+    # out in the last 0.4 m (look_inner 0.10~0.30 all alike: random island 0 -> 4, dense 0 -> 72 of
+    # 160, every one a sign never read; sign 13 deg / 1.6 m, 2026-11-15)
     look_inner: float = 0.40
     look_speed: float = 0.15
     look_gain: float = 1.5            # steering per heading error
