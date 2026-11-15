@@ -162,7 +162,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             self.exiting = False
             self.exit_memory.clear()
             self.follower.reset()
-            self.center_pub.publish(to_path(np.zeros((0, 2)), Header(frame_id='base_link')))
+            if self.center_pub.get_subscription_count():
+                self.center_pub.publish(to_path(np.zeros((0, 2)), Header(frame_id='base_link')))
             self.get_logger().info('cone mission END')
             self.left = self.right = np.zeros((0, 2))
             self.left_time = self.right_time = None
@@ -260,7 +261,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         if not usable:
             # Keep the cone MUX input stopped rather than fall through to an unready lane.
             self.cmd_pub.publish(Twist())
-            self.center_pub.publish(to_path(center, Header(frame_id='base_link')))
+            if self.center_pub.get_subscription_count():
+                self.center_pub.publish(to_path(center, Header(frame_id='base_link')))
             self.get_logger().warn('cone EXIT: no fresh clear forward path; waiting for lane',
                                    throttle_duration_sec=1.0)
             return
@@ -327,11 +329,11 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             result.speed * math.tan(result.steering) / self.follower.p.wheelbase)
         self.cmd_pub.publish(cmd)
 
-        if len(result.center) or result.speed <= 0.:
+        if (len(result.center) or result.speed <= 0.) and self.center_pub.get_subscription_count():
             header = Header(frame_id='base_link')
             header.stamp = self.get_clock().now().to_msg()
             self.center_pub.publish(to_path(result.center, header))
-        if result.target is not None:
+        if result.target is not None and self.target_pub.get_subscription_count():
             target = PointStamped()
             target.header.stamp = self.get_clock().now().to_msg()
             target.header.frame_id = 'base_link'
