@@ -196,7 +196,10 @@ class AvoidParams:
     # free (the normal plan from there would stop at the same place again)
     reverse_distance: float = 0.20
     reverse_lookahead: float = 0.15   # m back along the recorded way, steered at
-    reverse_max: float = 0.40         # m in all, per mission
+    # m in all, per mission: the stuck back-ups (reverse_distance each) and the undo of an abandoned
+    # escape path together. A cap so that a car stuck again and again does
+    # not shuttle for ever (1115_1709: a back-up, two escape paths, then 20 s stuck at 39 deg)
+    reverse_max: float = 1.50
     reverse_speed: float = 0.15
     # stuck for stuck_time: search once (again every escape_retry s) curvature-limited paths of three
     # arcs (escape_curvatures x 1 / escape_radius, escape_lengths each) for one that is free and ends
@@ -288,23 +291,28 @@ class AvoidParams:
     speed: float = 0.30
     slow_speed: float = 0.20
     slow_cost: float = 10.0           # obstacle cost above this -> slow
-    # sign look: the fork sign (on the island front) not read yet, the island front look_end ~
-    # look_start m ahead, the car in lane 1 / 3, not changing lanes and nothing left on the road up to
-    # the island: turn the heading just enough to bring the sign within look_view_deg of the camera
+    # sign look: the fork sign (on the island front) not read yet, the island front more than look_end
+    # ahead, the car in lane 1 / 3, not changing lanes and nothing left in its own lane up to the
+    # island (no distance limit: with the sign in view it does not steer, 2026-11-15): turn the heading
+    # just enough to bring the sign within look_view_deg of the camera
     # axis, at look_speed. While the sign is in view the plan drives as before (a look holding the car
     # straight lost a sign the plan's own heading kept in view); a car turned away turns back first.
     # The lane beside the island fixes A / B, so the sign must be read before it: 3 of 7 hand-overs
     # beside the island were 'no sign' with the sign there. Up to look_max_deg, less when the turn and
     # the turn back (radius look_turn_radius) would take the car centre within look_inner of lane 2's
-    # centre (in the simulation a look ending 0.30 m off lane 2's centre still touched the island tip
-    # while straightening); a look that steered is straight again by look_end. Once per section; ends
-    # when the direction comes, at look_end, or when the road ahead is not clear.
+    # centre; a look that steered is straight again by look_end. Once per section; ends when
+    # the direction comes, at look_end, or when its lane ahead is not clear.
     sign_look: bool = True
-    look_start: float = 3.0
-    look_end: float = 0.6             # m before the island front: still room to change 1 <-> 3
+    # m before the island front. 0.6 ended the 1115_1709 look with the sign at the image edge
+    look_end: float = 0.4
     look_view_deg: float = 10.0       # the sign this close to the camera axis (1113: read to ~20 deg)
     look_max_deg: float = 45.0
-    look_inner: float = 0.40          # m, the car centre's closest offset to lane 2's centre
+    # m, the car centre's closest offset to lane 2's centre. Beside the island the car centre needs
+    # about 0.34 (island half width + car half width). Below that the sign was not read more often in
+    # the sim, but a car still unread at look_end stood over the island's width and could not get back
+    # out in the last 0.4 m (look_inner 0.10~0.30 all alike: random island 0 -> 4, dense 0 -> 72 of
+    # 160, every one a sign never read; sign 13 deg / 1.6 m, 2026-11-15)
+    look_inner: float = 0.40
     look_speed: float = 0.15
     look_gain: float = 1.5            # steering per heading error
     # turning on the spot: when the turn cannot be made forward before look_end (look_turn_radius,
@@ -1593,6 +1601,7 @@ class StaticAvoid:
             esc = escape_path(pose, self.costmap, self.lane_in_costmap(), self.island,
                               self.direction, p)
             if esc is not None:
+                self.escape_from = (self.now_world[0], self.now_world[1])
                 self.event = 'stuck: escape path to s %.2f d %+.2f' % (esc.path[-1, 0], esc.end_offset)
         self.escape_plan = esc
         return esc
@@ -1610,6 +1619,7 @@ class StaticAvoid:
         if path_blocker(pose[0], self.costmap, self.lane_in_costmap(), self.island,
                         self.p)(ahead[:, 0], ahead[:, 1], h).any():
             self.escape_plan = None
+            self.escape_dropped = True          # half way: the car may now stand worse than before
             return None
         return esc
 
@@ -1624,6 +1634,10 @@ class StaticAvoid:
         self.reversed = 0.0
         self.stuck_log = None           # (t, where, logged) since every path got blocked (for the log)
         self.prefer_escape = False      # after a back-up: an escape path first, if one is free
+        self.backup_goal = 0.0          # m to back up in the back-up being driven
+        self.backup_why = ''            # 'stuck' | 'escape'
+        self.escape_from: Optional[Tuple[float, float]] = None   # world x, y where the escape path began
+        self.escape_dropped = False     # the escape path being driven got blocked half way
 
     def _stuck(self, t: Optional[float], s: float) -> Tuple[float, float]:
         """Every path blocked: stop; after stuck_time plan with the sharper recovery candidates; after
@@ -1638,12 +1652,19 @@ class StaticAvoid:
         if stuck >= p.stuck_time and not self.recovering:
             self.recovering = True
             self.event = 'stuck: recovery candidates'
-        if (p.recovery_reverse and stuck >= p.reverse_after and self.reversed < p.reverse_max
-                and self.backing_from is None and self._rewind_target() is not None):
-            self.backing_from = (self.now_world[0], self.now_world[1])
+        if p.recovery_reverse and stuck >= p.reverse_after and self.backing_from is None \
+                and self._start_back_up(p.reverse_distance, 'stuck'):
             self.event = 'stuck: backing up along the way the car came'
             return self._back_up(t) or (0.0, 0.0)
         return 0.0, 0.0
+
+    def _start_back_up(self, goal: float, why: str) -> bool:
+        """Begin a back-up of `goal` m along the way the car came, if the record and reverse_max allow."""
+        if self.reversed >= self.p.reverse_max - 0.02 or self._rewind_target() is None:
+            return False
+        self.backing_from = (self.now_world[0], self.now_world[1])
+        self.backup_goal, self.backup_why = goal, why
+        return True
 
     def remember(self, pose_world) -> None:
         """Keep the way the car came (world poses every 2 cm, the last 1.5 m) for the back-up."""
@@ -1682,10 +1703,10 @@ class StaticAvoid:
         backed = math.hypot(self.now_world[0] - self.backing_from[0],
                             self.now_world[1] - self.backing_from[1])
         target = self._rewind_target()
-        if target is None or backed >= min(p.reverse_distance, p.reverse_max - self.reversed):
+        if target is None or backed >= min(self.backup_goal, p.reverse_max - self.reversed):
             self.reversed += backed
-            self.backing_from, self.stuck_since = None, t
-            self.prefer_escape = True
+            self.backing_from = None
+            self.stuck_since, self.prefer_escape = t, True     # an escape path next
             while self.trail and math.hypot(self.trail[-1][0] - self.now_world[0],
                                             self.trail[-1][1] - self.now_world[1]) > 0.02 \
                     and self._ahead(self.trail[-1]):
@@ -1748,6 +1769,18 @@ class StaticAvoid:
         # an escape path is driven to its end while it stays free: a plan found half way out starts
         # inside the safety margin (lethal_free_start) and took the car too close
         esc = self._escape_free(pose)
+        if esc is None and self.escape_dropped:
+            # an escape path blocked half way leaves the car worse placed (1115_1709: 39 deg, then
+            # 20 s stuck): drive it back to where it began, then search again
+            self.escape_dropped = False
+            driven = (math.hypot(self.now_world[0] - self.escape_from[0],
+                                 self.now_world[1] - self.escape_from[1])
+                      if self.escape_from is not None else 0.0)
+            if p.recovery_reverse and driven >= 0.05 and self._start_back_up(driven, 'escape'):
+                self.event = 'stuck: escape path blocked, backing up %.2f m along it' % driven
+                cmd = self._back_up(t)
+                if cmd is not None:
+                    return cmd
         if esc is None and self.prefer_escape:
             self.prefer_escape = False
             if p.escape and self.costmap is not None:
@@ -1755,6 +1788,7 @@ class StaticAvoid:
                                   self.direction, p)
                 self.escape_plan, self.escape_tried = esc, t
                 if esc is not None:
+                    self.escape_from = (self.now_world[0], self.now_world[1])
                     self.event = ('stuck: escape path after the back-up to s %.2f d %+.2f'
                                   % (esc.path[-1, 0], esc.end_offset))
         if esc is None and (self.plan is None or not self.plan.feasible):
@@ -1847,11 +1881,11 @@ class StaticAvoid:
             why = 'island front %.2f m ahead' % gap
         elif lane == 2:
             why = 'in lane 2'
-        elif not self.road_clear(s + 0.2, self.island[0]):
-            why = 'road ahead not clear'
+        elif not self.lane_clear(s + 0.2, self.island[0], d):
+            why = 'own lane ahead not clear'
         if not self.look:
             changing = self.plan is None or not self.plan.feasible or abs(self.plan.end_offset - d) > 0.10
-            if why is not None or self.island_source == 'estimate' or gap > p.look_start or changing:
+            if why is not None or self.island_source == 'estimate' or changing:
                 return None
             self.look, self.look_cycle, self.look_backed, self.look_arc = True, 0, 0.0, None
             self.event = ('sign look: island front %.2f m ahead, lane %d, heading %+.0f deg'
@@ -1942,6 +1976,19 @@ class StaticAvoid:
         length = self.p.island_from_entry_max - self.p.island_from_entry_min
         self.island = (s_front, s_front + length)
         self.island_source = source
+
+    def lane_clear(self, s0: float, s1: float, d: float) -> bool:
+        """No occupied cell in the lane the car is in (its centre +- half a lane) between s0 and s1."""
+        p = self.p
+        if s1 <= s0 or self.costmap is None:
+            return True
+        c = float(lane_centres(p)[lane_of(d, p) - 1])
+        ss, dd = np.meshgrid(np.arange(s0, s1, p.resolution),
+                             np.arange(c - p.lane_width / 2, c + p.lane_width / 2, p.resolution),
+                             indexing='ij')
+        pts = np.column_stack((ss.ravel(), dd.ravel()))
+        rel = self.lane_in_costmap()
+        return not self.costmap.occupied_at(pts if rel is None else rel.points_from(pts)).any()
 
     def road_clear(self, s0: float, s1: float) -> bool:
         """No occupied cell across the whole road (all three lanes) between s0 and s1, lane

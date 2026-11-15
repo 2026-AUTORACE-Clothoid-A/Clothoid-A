@@ -256,7 +256,7 @@ def test_one_limo_then_fork_lane(direction, lane):
 
 
 def test_no_direction_never_on_island():
-    out = run([(1.2, 0.0)], direction=None)
+    out = run([(1.2, 0.0)], direction=None, t_max=70.0)     # with the sign look's rewind
     check(out, 0.50)
     assert out['final_lane'] in (1, 3)
 
@@ -1292,22 +1292,23 @@ def test_sign_look_reads_a_sign_out_of_view_and_takes_its_lane(flag, lane):
 
 
 def test_sign_look_never_read_ends_straight_beside_the_island():
-    out = run([(1.2, 0.0)], direction=('view', 1, 0.0, 0.0), steer_gain=0.55)
-    assert any(e[1].startswith('sign look end: island front') for e in out['events']), out['events']
+    out = run([(1.2, 0.0)], direction=('view', 1, 0.0, 0.0), steer_gain=0.55, t_max=70.0)
+    events = [e[1] for e in out['events']]
+    assert any(e.startswith('sign look end: island front') for e in events), events
     check(out, 0.50, 1)
     assert not out.get('island_tip'), out
 
 
 @pytest.mark.parametrize('steer_gain', [1.0, 0.55])
 def test_sign_look_turns_on_the_spot_when_close(steer_gain):
-    # lane 1, island front 1.0 m ahead, turned 25 deg away (outwards): no room to turn forward
-    a, end, events, (s_lo, s_hi), d_min = _look_drive((3.35, 0.5, math.radians(25.0)),
+    # lane 1, island front 0.8 m ahead, turned 25 deg away (outwards): no room to turn forward
+    a, end, events, (s_lo, s_hi), d_min = _look_drive((3.55, 0.5, math.radians(25.0)),
                                                       steer_gain=steer_gain)
     assert any(e.startswith('sign look: turning on the spot') for e in events), events
     assert 1 <= a.look_cycle <= 2 and 0.0 < a.look_backed <= 0.40
     assert end[2] < 0.0                                     # now turned towards the sign
-    assert s_hi < 4.35 - 0.55 and s_lo > 3.35 - 0.10        # kept before look_end, little backing
-    assert d_min > 0.40 - 0.05                              # stayed in lane 1
+    assert s_hi < 4.35 - 0.35 and s_lo > 3.55 - 0.10        # kept before look_end (0.4), little backing
+    assert d_min > AvoidParams().look_inner - 0.05          # not past look_inner into lane 2
 
 
 def test_sign_look_does_not_back_into_what_is_behind():
