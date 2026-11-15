@@ -536,27 +536,81 @@ def test_target_lane_limo_just_before_the_island_is_reached_over_the_tip_at_most
     check(out, w, 3)
 
 
+def _came(a, poses):
+    for pose in poses:
+        a.remember(pose)
+
+
 def test_reverse_recovery_backs_up_only_when_allowed():
+    way = [(-0.5 + 0.02 * k, 0.0, 0.0) for k in range(26)]
     blocked = StaticAvoid(AvoidParams(recovery_reverse=True, escape=False))
     blocked.activate((0.0, 0.0, 0.0))
+    _came(blocked, way)
     blocked.plan = None
     cmds = [blocked.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) for k in range(20)]
     assert cmds[0] == (0.0, 0.0) and any(v < 0.0 for v, _ in cmds)
-    assert blocked.event == 'stuck: backing up'
-    off = StaticAvoid(AvoidParams(escape=False))
+    assert blocked.event == 'stuck: backing up along the way the car came'
+    off = StaticAvoid(AvoidParams(recovery_reverse=False, escape=False))
     off.activate((0.0, 0.0, 0.0))
+    _came(off, way)
     off.plan = None
     assert all(off.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) == (0.0, 0.0) for k in range(30))
+    # no record of the way the car came (started standing): what is behind is unknown, no back-up
+    blind = StaticAvoid(AvoidParams(recovery_reverse=True, escape=False))
+    blind.activate((0.0, 0.0, 0.0))
+    blind.plan = None
+    assert all(blind.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k) == (0.0, 0.0) for k in range(30))
 
 
 def test_reverse_stops_after_its_distance():
     a = StaticAvoid(AvoidParams(recovery_reverse=True, escape=False))
     a.activate((0.0, 0.0, 0.0))
+    _came(a, [(-0.5 + 0.02 * k, 0.0, 0.0) for k in range(26)])
     a.plan = None
-    for k in range(16):
+    for k in range(17):
         a.control((0.0, 0.0, 0.0), Inhibit(), 0.1 * k)
-    assert a.control((-0.25, 0.0, 0.0), Inhibit(), 1.7) == (0.0, 0.0)      # backed 0.25 m >= 0.2
+    assert a.control((-0.25, 0.0, 0.0), Inhibit(), 1.8) == (0.0, 0.0)      # backed 0.25 m >= 0.2
     assert a.reversed == pytest.approx(0.25)
+
+
+def test_reverse_follows_the_way_the_car_came():
+    """Came in on a left curve (R 0.6 m): the back-up retraces it instead of going straight back."""
+    R = 0.6
+    way = [(R * math.sin(th) + 0.1 * math.cos(th), R * (1 - math.cos(th)) + 0.1 * math.sin(th), th)
+           for th in np.linspace(0.0, 0.8, 41)]           # rear axle on the circle, base 0.1 m ahead
+    for gain in (1.0, 0.8):
+        a = StaticAvoid(AvoidParams(recovery_reverse=True, escape=False))
+        a.activate(way[0])
+        _came(a, way)
+        a.plan = None
+        x, y, th = way[-1]
+        xr, yr = x - 0.1 * math.cos(th), y - 0.1 * math.sin(th)
+        worst, t, moved = 0.0, 0.0, 0.0
+        for _ in range(200):
+            cmd = a.control((xr + 0.1 * math.cos(th), yr + 0.1 * math.sin(th), th), Inhibit(), t)
+            t += 0.05
+            if cmd is None or (a.reversed > 0.0 and a.backing_from is None):
+                break
+            v, wz = cmd
+            delta = gain * math.atan(L * wz / v) if abs(v) > 1e-6 else 0.0
+            xr += v * math.cos(th) * 0.05
+            yr += v * math.sin(th) * 0.05
+            th += v * math.tan(delta) / L * 0.05
+            moved += abs(v) * 0.05
+            bx, by = xr + 0.1 * math.cos(th), yr + 0.1 * math.sin(th)
+            worst = max(worst, min(math.hypot(bx - px, by - py) for px, py, _ in way))
+        assert 0.18 <= a.reversed <= 0.26, (gain, a.reversed)
+        assert worst < 0.02, (gain, worst)           # within 2 cm of the way it came
+        assert th < 0.8 - 0.2                        # turned back as it came in (straight: 0.8)
+
+
+def test_escape_margin_and_swerve_margin_are_two_values():
+    p = AvoidParams()
+    assert p.escape_margin == 0.0 and p.swerve_margin == 0.15
+    assert p.recovery_reverse and p.escape                  # on by default
+    from clothoid_lidar.static_avoid import escape_distance
+    assert escape_distance(p) == pytest.approx(0.595, abs=0.002)
+    assert escape_distance(replace(p, escape_margin=-0.03)) == pytest.approx(0.595, abs=0.002)
 
 
 def test_lane_frame_moves_the_lanes_not_the_costmap():
