@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def analyse(path, progress=lambda value: None):
     # A reload always follows source edits, even when the viewer is already open.
-    from clothoid_lidar import cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_corridor, cone_exit, cone_recovery, cone_path_relaxation
-    for module in (cone_trace, cone_corner, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_sorter, cone_follower, obstacle_extractor):
+    from clothoid_lidar import cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_corridor, cone_exit, cone_recovery, cone_path_relaxation, cone_odometry, cone_lane_connection
+    for module in (cone_trace, cone_corner, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_sorter, cone_follower, obstacle_extractor, cone_odometry, cone_lane_connection):
         importlib.reload(module)
     config_path = ROOT/'ros2_ws/src/clothoid_lidar/config/lidar.yaml'
     config = yaml.safe_load(config_path.read_text())
@@ -29,6 +29,13 @@ def analyse(path, progress=lambda value: None):
     mission = cone_sorter.ConeMission(cone_sorter.ConeSorter(sp), hold_exit=True)
     follower = cone_follower.ConeFollower(fp)
     exit_memory = cone_exit.ExitPathMemory()
+    odometry = cone_odometry.ConeOdometry(fp.rear_axle_x, fp.boundary_timeout)
+    pose_generation = odometry.generation
+    follower_config = config['cone_follower']['ros__parameters']
+    connection = cone_lane_connection.LaneConnection(cone_lane_connection.ConnectionParams(**{
+        k: follower_config['exit_connect_' + k]
+        for k in cone_lane_connection.ConnectionParams.__dataclass_fields__}))
+    odom_topic, imu_topic = follower_config.get('odom_topic', '/odom'), follower_config.get('imu_topic', '/imu')
     files = sorted(Path(path).glob('*.db3')) if Path(path).is_dir() else [Path(path)]
     if not files:
         raise ValueError('bag에 db3 파일이 없습니다.')
@@ -39,7 +46,7 @@ def analyse(path, progress=lambda value: None):
             if minimum is not None:start_stamps.append(minimum)
             topics = {i: (n, t) for i, n, t in db.execute('select id,name,type from topics')}
             wanted = {i: (n, t) for i, (n, t) in topics.items()
-                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', '/odom', '/lane/cone_exit_ready')
+                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', odom_topic, imu_topic, '/lane/cone_exit_ready', '/lane/cone_exit_candidate')
                       or (t in ('sensor_msgs/msg/CompressedImage', 'sensor_msgs/msg/Image')
                           and 'debug' not in n and 'depth' not in n and 'warp' not in n)}
             camera = sorted([(i, n, t) for i, (n, t) in wanted.items() if 'Image' in t],
@@ -68,6 +75,7 @@ def analyse(path, progress=lambda value: None):
     left = right = np.zeros((0, 2)); lt = rt = None; active = False
     pose = None; pose_time = None
     lane_ready = False; lane_ready_time = None
+    lane_candidate = None; lane_candidate_stamp = lane_candidate_time = None
     exit_reference_end = None
     previous_scan = start_scan = None
     last_event = None; events = []; command_rows = []
@@ -95,20 +103,34 @@ def analyse(path, progress=lambda value: None):
             flags.append((t, bool(msg.data))); continue
         if name == '/lane/cone_exit_ready':
             lane_ready, lane_ready_time = bool(msg.data), t
-            # The live follower acknowledges readiness on its 20 Hz timer.
-            # Consume it here so a short true pulse is not lost between scans.
-            current_pose = pose if pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout else None
-            if (lane_ready and active and mission.exiting
-                    and exit_memory.handover_ready(current_pose, fp.rear_axle_x, fp.wheelbase)):
-                mission.finish_exit()
-                follower.reset();exit_memory.clear();exit_reference_end = None
-                left = right = np.zeros((0, 2));lt = rt = None;active = False
-                events.append((t, '콘 종료'))
             continue
-        if name == '/odom':
-            q = msg.pose.pose.orientation; pos = msg.pose.pose.position
-            pose = (pos.x, pos.y, math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z)))
-            pose_time = t; follower.corridor.update_pose(pose); exit_memory.update_pose(pose)
+        if name == '/lane/cone_exit_candidate':
+            candidate_stamp = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9-t0*1e-9
+            if (msg.header.frame_id == 'base_link' and 0 <= t-candidate_stamp <= fp.boundary_timeout
+                    and (lane_candidate_stamp is None or candidate_stamp > lane_candidate_stamp)
+                    and all(math.isfinite(v) for v in (msg.twist.linear.x,msg.twist.angular.z))
+                    and msg.twist.linear.x >= 0.):
+                lane_candidate = msg.twist
+                lane_candidate_stamp, lane_candidate_time = candidate_stamp, t
+            continue
+        if name in (odom_topic, imu_topic):
+            header_time = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
+            sensor_time = header_time-t0*1e-9 if header_time else t
+            if -.02 <= t-sensor_time <= fp.boundary_timeout:
+                if name == odom_topic:
+                    odometry.odom(sensor_time, msg.twist.twist.linear.x)
+                else:
+                    gyro = msg.angular_velocity.z if msg.angular_velocity_covariance[0] >= 0 else math.nan
+                    odometry.imu(sensor_time, gyro)
+            if pose_generation != odometry.generation:
+                follower.reset();exit_memory.clear();exit_reference_end = None
+                connection.clear()
+                pose_generation = odometry.generation
+                events.append((t, 'IMU/속도 수신 중단: 저장 경로 초기화'))
+            pose = odometry.pose(t)
+            pose_time = odometry.stamp if pose is not None else None
+            if pose is not None:
+                follower.corridor.update_pose(pose);exit_memory.update_pose(pose)
             continue
         if ty != 'sensor_msgs/msg/LaserScan':
             continue
@@ -124,9 +146,11 @@ def analyse(path, progress=lambda value: None):
         was_exiting = mission.exiting
         result = mission.update(points, t)
         if mission.exiting and not was_exiting:
+            connection.clear()
             lane_ready = False; lane_ready_time = None
             events.append((t, '콘 출구: 저장 경로 유지'))
         elif was_exiting and not mission.exiting:
+            connection.clear()
             events.append((t, '콘 경계 재검출'))
         command = None; callback_results = []
         def control():
@@ -165,9 +189,30 @@ def analyse(path, progress=lambda value: None):
         if active and mission.exiting:
             fresh_pose = pose is not None and pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout
             current_pose = pose if fresh_pose else None
-            if (lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= fp.boundary_timeout
-                    and exit_memory.handover_ready(current_pose, fp.rear_axle_x, fp.wheelbase)):
-                mission.finish_exit()
+            arrived = current_pose is not None and exit_memory.handover_ready(current_pose, fp.rear_axle_x)
+            if connection.active or arrived:
+                candidate_fresh = (lane_candidate is not None
+                    and 0 <= t-lane_candidate_time <= fp.boundary_timeout
+                    and 0 <= t-lane_candidate_stamp <= fp.boundary_timeout)
+                command = cone_follower.FollowResult(0.,0.,source='lane_connection_wait')
+                if current_pose is not None and candidate_fresh:
+                    if not connection.active:
+                        last = command_rows[-1] if command_rows else (t,0.,0.)
+                        connection.start(t,current_pose,last[2] if last[1]>0. else 0.,fp.wheelbase)
+                    ready = lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= fp.boundary_timeout
+                    velocity, angle, done = connection.step(t,current_pose,lane_candidate.linear.x,
+                        lane_candidate.angular.z,fp.wheelbase,fp.speed,odometry.speed,
+                        odometry.gyro-odometry.bias,ready,fp.boundary_timeout)
+                    measured = math.atan(fp.wheelbase*(odometry.gyro-odometry.bias)/odometry.speed) if odometry.speed>.03 else 0.
+                    arcs = [cone_lane_connection.forward_arc(a,fp.wheelbase,fp.rear_axle_x,fp.lfd,fp.centerline_ds)
+                            for a in (angle,measured)]
+                    clear = all(cone_exit.clearance(arc,points)>=follower_config.get('exit_clearance',.2) for arc in arcs)
+                    if velocity>0. and clear:
+                        command = cone_follower.FollowResult(velocity,angle,center=arcs[0],source='lane_connection')
+                        if done:mission.finish_exit()
+                    else:connection.pause(t)
+                elif connection.active:connection.pause(t)
+                command_rows.append((t,command.speed,command.steering));callback_results.append(command)
             else:
                 center = exit_memory.remaining(pose, fp.rear_axle_x) if fresh_pose else np.zeros((0, 2))
                 target = cone_follower.look_ahead_point(center, fp)
@@ -179,12 +224,13 @@ def analyse(path, progress=lambda value: None):
                 command_rows.append((t, command.speed, command.steering));callback_results.append(command)
         observed_end = (cone_exit.transform(exit_reference_end[None, :], pose, True)[0]
                         if mission.exiting and exit_reference_end is not None and pose is not None else None)
-        front_remaining = (exit_memory.front_axle_remaining(pose, fp.rear_axle_x, fp.wheelbase)
+        rear_remaining = (exit_memory.rear_axle_remaining(pose, fp.rear_axle_x)
                            if mission.exiting and pose is not None and pose_time is not None
                            and 0 <= t-pose_time <= fp.boundary_timeout else None)
         command = callback_results[-1] if callback_results else None
         if active != mission.running:
             follower.reset()
+            connection.clear()
             exit_memory.clear();exit_reference_end = None
             if mission.running:start_scan = t
             events.append((t, '콘 시작' if mission.running else '콘 종료'))
@@ -200,6 +246,8 @@ def analyse(path, progress=lambda value: None):
             state = '경계 경로 없음 · 정지'
         if active and mission.exiting:
             state = '콘 출구 · 차선 준비 대기' if command is not None and command.speed == 0. else '콘 출구 · 저장 경로 추종'
+            if command is not None and command.source.startswith('lane_connection'):
+                state = '콘 출구 · 저속 차선 연결' if command.speed>0. else '콘 출구 · 차선 연결 입력/안전 조건 대기'
         if active and state != last_event:
             events.append((t, state))
         last_event = state
@@ -212,12 +260,12 @@ def analyse(path, progress=lambda value: None):
             stale_left=left.copy() if not lf else np.zeros((0,2)), stale_right=right.copy() if not rf else np.zeros((0,2)),
             left_age=None if lt is None else t-lt, right_age=None if rt is None else t-rt,
             command=command, callback_results=callback_results, fan=fan, observed_end=observed_end,
-            exiting=mission.exiting, front_remaining=front_remaining))
+            exiting=mission.exiting, rear_remaining=rear_remaining))
         previous_scan = t
     if not frames:
         raise ValueError('라이다 스캔이 없습니다.')
     digest = hashlib.sha256()
-    for module in (cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation):
+    for module in (cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_odometry, cone_lane_connection):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
     digest.update(config_path.read_bytes())

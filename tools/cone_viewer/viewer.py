@@ -206,8 +206,8 @@ class Viewer(QMainWindow):
         if f.get('observed_end') is not None:
             distance=np.linalg.norm(f['observed_end']+np.array([self.map.params.rear_axle_x,0.]))
             details+=f'   관측 끝점까지 {distance*100:.0f}cm (후륜 기준)'
-        if f.get('front_remaining') is not None:
-            details+=f"   앞차축 통과까지 {f['front_remaining']*100:+.0f}cm"
+        if f.get('rear_remaining') is not None:
+            details+=f"   후차축 통과까지 {f['rear_remaining']*100:+.0f}cm"
         self.status.setText(f"{f['state']}   |   좌 {len(f['left'])} / 우 {len(f['right'])}개"+details)
         recorded='기록 명령 없음';ri=bisect.bisect_right(self.recorded_times,t)-1
         if ri>=0 and t-self.recorded_times[ri]<=.3:

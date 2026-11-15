@@ -51,6 +51,11 @@ cone_sorter:
 
 cone_follower:
   ros__parameters:
+    # Local memory pose: integrate rear-axle wheel speed with the IMU gyro.
+    # The steering-feedback-derived /odom pose under-reports full-lock rotation.
+    odom_topic: /odom
+    imu_topic: /imu
+    pose_topic: /cone/odom   # diagnostic local base_link pose; no global TF is replaced
     speed: 0.25              # keep response margin for the measured ~0.2 s steering delay
     reverse_speed: -0.2       # only recover a missing boundary path, with fresh rear-scan clearance
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
@@ -64,6 +69,14 @@ cone_follower:
     path_relaxation_enabled: true   # trial: bounded local path bending reduction
     corner_endpoint_enabled: true  # straight endpoint / observed outer-turn midpoint path
     exit_clearance: 0.2      # minimum path distance to current detected obstacle centres
+    # After rear-axle arrival, connect to fresh detected lane commands under cone
+    # priority. Limits apply equally to straight, left and right exits; no exit
+    # waypoint / timed turn. Completion requires measured speed + IMU turn agreement.
+    exit_connect_speed: 0.2
+    exit_connect_steer_rate_deg_s: 20.0
+    exit_connect_confirm_sec: 0.3
+    exit_connect_max_distance: 1.0 # abort bound, never an arrival / release condition
+    exit_connect_max_duration: 6.0 # abort bound, never an arrival / release condition
 
 # Second extractor instance for the static obstacle mission: LIMO-sized objects, no cones
 # (from namgyu/static-obstacle-avoidance). Retune min_width / min_points with a real LIMO scan.
