@@ -185,16 +185,20 @@ if [ -e /etc/nv_tegra_release ] || command -v nvpmodel >/dev/null || [ "${PREFLI
     echo "== CPU / GPU clocks"
     command -v nvpmodel >/dev/null && nvpmodel -q 2>/dev/null | grep -m1 "Power Mode" | sed 's/^/  /'
     govs=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort -u | tr '\n' ' ')
-    # jetson_clocks raises every core's minimum to its maximum: a lower minimum = not applied
+    # jetson_clocks raises every core's minimum to the power mode's maximum (scaling_max_freq, 1.51 GHz
+    # in limo2's 15 W mode, below the chip's cpuinfo_max_freq): a lower minimum = not applied. It leaves
+    # the governor as it is (schedutil), so the governor is only shown.
     slow=""
     for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
-        lo=$(cat "$d/scaling_min_freq" 2>/dev/null); hi=$(cat "$d/cpuinfo_max_freq" 2>/dev/null)
-        [ -n "$lo" ] && [ -n "$hi" ] && [ "$lo" -lt "$hi" ] && d=${d%/cpufreq}; slow="$slow ${d##*/}"
+        lo=$(cat "$d/scaling_min_freq" 2>/dev/null); hi=$(cat "$d/scaling_max_freq" 2>/dev/null)
+        if [ -n "$lo" ] && [ -n "$hi" ] && [ "$lo" -lt "$hi" ]; then
+            c=${d%/cpufreq}; slow="$slow ${c##*/}"
+        fi
     done
     for d in /sys/class/devfreq/*; do
         case "$(basename "$d")" in *gpu*|*ga10b*|*gv11b*|*gp10b*) ;; *) continue ;; esac
         lo=$(cat "$d/min_freq" 2>/dev/null); hi=$(cat "$d/max_freq" 2>/dev/null)
-        [ -n "$lo" ] && [ -n "$hi" ] && [ "$lo" -lt "$hi" ] && slow="$slow gpu"
+        if [ -n "$lo" ] && [ -n "$hi" ] && [ "$lo" -lt "$hi" ]; then slow="$slow gpu"; fi
     done
     if [ -n "$slow" ]; then
         warn "clocks not pinned (governor: ${govs:-?}; min < max on: $(echo $slow | cut -d" " -f1-3)$( [ $(echo $slow | wc -w) -gt 3 ] && echo " ...")): run \`sudo jetson_clocks\` (again after every reboot)"

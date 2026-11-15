@@ -73,3 +73,20 @@ def test_load_line():
 def test_percentile():
     assert percentile([1, 2, 3, 4, 5], 50) == 3
     assert percentile([], 50) != percentile([], 50)   # nan
+
+
+def test_read_survives_bad_sysfs(tmp_path, monkeypatch):
+    import builtins
+    import carmon
+    real_open = builtins.open
+
+    class Broken:                       # what a sensor-off thermal zone does on the Jetson
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): raise TypeError("can't concat NoneType to bytes")
+
+    monkeypatch.setattr(builtins, 'open', lambda p, *a, **k: Broken() if str(p).startswith('/sys/bad') else real_open(p, *a, **k))
+    assert carmon.read('/sys/bad/temp', 'x') == 'x'
+    good = tmp_path / 'temp'
+    good.write_text('41000\n')
+    assert carmon.read(str(good)).strip() == '41000'
