@@ -2,10 +2,10 @@
 
 The mission start white line and the white stop line immediately before a crosswalk have
 different roles (rules pp. 3-4, 7). `MissionEntryEvidence` confirms the former and starts braking
-before entry for bump/slow warnings. Pedestrian/light entry only prepares the observer: their
-approach limit starts after `LineStopCore` confirms the crosswalk stop line (`commit`). The stop
-target retains the car-calibrated bumper reference (`stop_line_front: 0.161`) and existing 3 cm
-projection allowance (`stop_line_gap: 0.03`). `front_axle_x: 0.10` applies only to mission entry.
+before entry for bump/slow and pedestrian/light missions. `LineStopCore` independently confirms
+the final crosswalk stop line (`commit`) and completes that stop. The stop
+target uses the original `FinishParams` bumper reference (0.161 m) and 3 cm projection allowance.
+`front_axle_x: 0.10` applies only to mission entry.
 `slow_at_stopline` / `bump_at_stopline` are retained configuration names for mission **entry**.
 For overlapping colours on the same signal housing, accepted red/yellow has priority over green.
 Three distinct source-frame hits and signal identity checks still apply; low-confidence green
@@ -35,7 +35,7 @@ camera evidence. The selected intervals used for review came from the original l
 Recorded motion remains fixed after a changed command. Changing approach timing changes the real
 trajectory. Replay therefore verifies command timing and line
 selection, **not** the new vehicle stopping error or mission completion time. Synthetic closed-loop
-tests cover the stop reference; on-car calibration is needed for `stop_line_gap` and braking response.
+tests cover the stop reference; recorded replay cannot establish physical braking response.
 
 The existing bump viewer also shows entry state/distance independently of the stop-line state;
 orange marks the tracked mission boundary and magenta the crosswalk stop candidate.
@@ -45,8 +45,8 @@ orange marks the tracked mission boundary and magenta the crosswalk stop candida
 Baseline `1011b92` and the changed callbacks received identical recorded 10 Hz images,
 detections and odometry. Times below are seconds from the bag start, for the first 0.2 m/s
 mission limit in each section (not physical vehicle speed).
-This initial version slowed at pedestrian/light entry and used a front-axle stop target; both
-changes are reverted by the stop-reference/approach correction described above.
+This initial version used a long entry braking lead and a front-axle crosswalk stop target.
+The final correction below shortens the entry lead and restores the original bumper stop target.
 
 | limo2 bag | Bump, before -> after | Signal approach, before -> after | Red confirmation, before -> after |
 | --- | --- | --- | --- |
@@ -65,7 +65,7 @@ A read-only 120-frame image-processing benchmark on limo2 (single OpenCV thread)
 median/p95 7.33/7.52 ms without the entry component fit and 8.18/9.02 ms with it. These timings
 exclude decoding, ROS scheduling and other processes' load.
 
-## Stop-reference and approach correction, 2026-11-16
+## Intermediate 4aa9fe9 correction, 2026-11-16 (superseded for entry slowing)
 
 Baseline `313c02a` and the correction received the same 530 recorded 10 Hz camera frames
 from limo2 `1116_0738_full` (38-76 s and 132-148 s), with recorded detections and odometry.
@@ -87,3 +87,34 @@ Cone handover and static-obstacle control are unchanged by this correction.
 pedestrian/light entry without an approach limit, the restored stop target, and red/green overlap.
 Overlapping red holds a stopped signal mission; departure requires three subsequent green-only
 source frames on the selected signal.
+
+## Mission-start braking correction, 2026-11-16
+
+Pedestrian/light missions again slow at their separate mission start boundary. Removing this
+entry limit was not the requested fix: the entry braking distance itself was too long. Bump,
+slow-sign, pedestrian and signal entry now share the shorter lead:
+
+| Entry setting | Previous | Corrected |
+| --- | --- | --- |
+| Response allowance | 0.25 s | 0.10 s |
+| Planned deceleration | 1.5 m/s² | 2.5 m/s² |
+| Lead at 0.8 -> 0.2 m/s, including 4 cm observation tolerance | 0.44 m | 0.24 m |
+
+The 0738/0816 recorded odometry reaches about 0.2 m/s within 0.20-0.24 s of a 0.2 m/s command.
+The new planner still includes response delay and observation tolerance. Once started, entry
+slowing stays latched so a falling measured speed cannot make the car accelerate before entry.
+Missing speed retains the conservative immediate-slow fallback.
+
+Crosswalk stops use the original `FinishParams` defaults, without the added `stop_line_front`
+and `stop_line_gap` mission overrides. Same-input replay of 530 images from `1116_0738_full`
+and 348 images from `1116_0816_full` (8-26 s and 30-47 s) matched the intermediate baseline's
+crosswalk line, remaining distance, line phases and stop states exactly within the reviewed
+crosswalk intervals. Entry-limit timing changes as intended. The recorded vehicle has already
+slowed under the earlier controller; replay onset distances are therefore not predictions for
+a new run at 0.8 m/s.
+
+186 tests passed across mission, finish, bump steering and bump-gap handling. Added tests check
+all four entry triggers at 30 cm (no entry limit) and 22 cm (0.2 m/s limit), plus delayed-actuator
+closed-loop approaches at 0.4 and 0.8 m/s reaching slow speed before the front axle crosses.
+Red priority, camera-rate crosswalk processing, 10 Hz entry observation, existing zigzag slowing,
+cone handover and static-obstacle control retain their current settings.

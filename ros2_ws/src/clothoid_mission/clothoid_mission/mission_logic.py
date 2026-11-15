@@ -277,9 +277,9 @@ class MissionLogic:
         parking_line_arm = p.use_stop_line and self.state == DRIVE and (
             not p.require_scene_confirmation and self.parking_armed and not self.parking_flag
             and p.parking_at_stopline)
-        # A mission boundary prepares observation; only the confirmed crosswalk
-        # stop target starts this approach limit. Bump/slow entry braking is separate.
-        if arm and (not p.require_scene_confirmation or inputs.line_phase == 'commit'):
+        # Keep entry slowing separate from the final crosswalk stop. Its shorter
+        # braking lead avoids crawling from a distant mission-start observation.
+        if arm and (not p.require_scene_confirmation or inputs.entry_slow or inputs.line_phase == 'commit'):
             limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
         return Outputs(
             state=self.state,

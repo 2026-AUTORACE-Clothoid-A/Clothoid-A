@@ -62,12 +62,12 @@ def test_missing_speed_does_not_postpone_braking_at_a_confirmed_boundary():
 
 
 @pytest.mark.parametrize('sign', ['sign_pedestrian', 'traffic_light_red'])
-def test_mission_entry_prepares_without_slowing_or_completing_a_crosswalk_stop(sign):
+def test_mission_entry_slows_without_completing_a_crosswalk_stop(sign):
     logic = MissionLogic(MissionParams())
     out = logic.step(Inputs(0., seen={sign}))
     assert out.entry_arm and out.stop_arm and out.speed_limit is None
     out = logic.step(Inputs(.1, entry_slow=True, entry_reached=True))
-    assert out.speed_limit is None and not out.stop and out.stop_arm
+    assert out.speed_limit == .2 and not out.stop and out.stop_arm
     out = logic.step(Inputs(.2, entry_slow=True, line_phase='commit', line_speed=.08))
     assert out.speed_limit == .08 and not out.stop
     assert logic.step(Inputs(.3, line_phase='arrived')).stop

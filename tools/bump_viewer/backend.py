@@ -361,7 +361,7 @@ def analyse(path, camera='limo2', progress=lambda value: None):
             'line_max_thickness', 'line_require_crosswalk', 'input_timeout', 'bump_pitch_thresh',
             'bump_level_thresh', 'bump_level_duration', 'bump_arm_timeout', 'bump_cooldown',
             'bump_min_area', 'bump_min_height', 'detection_confidence', 'detection_confirm_hits',
-            'detection_window', 'block_bump_after_cone', 'front_axle_x', 'stop_line_front', 'stop_line_gap',
+            'detection_window', 'block_bump_after_cone', 'front_axle_x',
             'entry_confirm_frames', 'entry_min_span', 'entry_reaction_sec', 'entry_deceleration', 'entry_rate_hz')}
         digest = hashlib.sha256()
         for module in loaded.values():

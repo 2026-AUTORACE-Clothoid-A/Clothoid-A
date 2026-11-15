@@ -274,7 +274,7 @@ def test_entry_observation_prepares_before_sign_confirmation_without_sending_spe
 
 
 @pytest.mark.parametrize('sign', ['sign_pedestrian', 'traffic_light_red'])
-def test_entry_does_not_move_or_slow_the_existing_bumper_stop_target(node, sign):
+def test_entry_slowing_does_not_move_or_complete_the_existing_bumper_stop_target(node, sign):
     n, clock = node
     cam = CameraModel()
     n.on_info(CameraInfo(width=640, height=480,
@@ -288,11 +288,11 @@ def test_entry_does_not_move_or_slow_the_existing_bumper_stop_target(node, sign)
     assert n.finish_params.front == .161
     assert n.finish_params.stop_gap == .03
     assert n.get_parameter('front_axle_x').value == .1
-    # Even a reached entry boundary does not start the crosswalk approach limit.
+    # Entry slows the car, but does not commit or complete the final crosswalk stop.
     n.mission_entry.entry_at = n.travel
     n.on_timer()
-    assert not limits and n.core.phase == Phase.FOLLOW
-    assert states[-1]['entry_phase'] == 'entered' and states[-1]['speed_limit'] is None
+    assert limits[-1] == pytest.approx(.2) and n.core.phase == Phase.FOLLOW
+    assert states[-1]['entry_phase'] == 'entered' and states[-1]['speed_limit'] == .2
     assert states[-1]['front'] == .161 and states[-1]['entry_front'] == .1
     for now in (1000.3, 1000.35, 1000.4):
         n.core._sighting(now, 1.)
@@ -301,6 +301,53 @@ def test_entry_does_not_move_or_slow_the_existing_bumper_stop_target(node, sign)
     n.on_timer()
     n.on_timer()
     assert limits[-1] == pytest.approx(.2)
+
+
+@pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump', 'sign_pedestrian', 'traffic_light_red'])
+def test_start_line_slows_near_entry_instead_of_starting_a_long_crawl(node, sign):
+    n, clock = node
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, sign)
+        n.on_timer()
+    n.latest_speed, n.latest_speed_time = .8, clock[0]
+    n.mission_entry.entry_at = n.travel + .1 + .30
+    n.on_timer()
+    assert not limits
+    assert n.mission_entry.remaining(n.travel, .1) == pytest.approx(.30)
+    n.travel += .08
+    clock[0] += .05
+    n.on_timer()
+    assert limits[-1] == pytest.approx(.2)
+    assert not n.mission_entry.reached(n.travel, .1)
+
+
+@pytest.mark.parametrize('speed', [.4, .8])
+def test_shorter_entry_lead_reaches_slow_speed_before_crossing_with_actuator_delay(node, speed):
+    n, _ = node
+    value = lambda name: n.get_parameter(name).value
+    n.mission_entry.entry_at = 1.
+    distance, target, apply_at, slow_remaining = 0., speed, None, None
+    for step in range(1000):
+        now = step * .01
+        if step % 5 == 0 and n.mission_entry.should_slow(
+                distance, value('front_axle_x'), speed, .2,
+                value('entry_reaction_sec'), value('entry_deceleration')):
+            if apply_at is None:
+                apply_at = now + .10  # delayed controller, independent of the gate's response lead
+                slow_remaining = n.mission_entry.remaining(distance, value('front_axle_x'))
+        if apply_at is not None and now + 1e-9 >= apply_at:
+            target = .2
+        next_speed = max(target, speed - 2.5 * .01)
+        distance += (speed + next_speed) * .5 * .01
+        speed = next_speed
+        if n.mission_entry.reached(distance, value('front_axle_x')):
+            assert slow_remaining is not None and slow_remaining <= .25
+            assert speed <= .22
+            break
+    else:
+        pytest.fail('vehicle did not reach the mission boundary')
 
 
 def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():

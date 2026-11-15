@@ -8,8 +8,8 @@ Publishes
   `state_topic` (String, JSON): state, what armed it, the line stop (for clothoid_debug stop_viz)
 
 Confirmed sign tracks prepare local observers. They do not transfer driving control.
-Mission boundaries prepare observers. Light/pedestrian slowing starts only after
-the separate crosswalk stop line is confirmed, using the existing bumper stop reference.
+Mission boundaries start slowing near front-wheel entry. The separate crosswalk
+stop line retains the original bumper stop reference and final-stop processing.
 Parking needs a separate entry line and fresh passive lidar bay evidence. Floor processing is
 shared by those observers; parking-only preparation caps image decoding at 6 Hz.
 Slow and bump signs prepare a start-line observer; measured speed sets the braking lead.
@@ -75,10 +75,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('white_v_min', 150)
         self.declare_parameter('line_require_crosswalk', True)
         self.declare_parameter('front_axle_x', 0.10)
-        self.declare_parameter('stop_line_front', 0.161)
-        self.declare_parameter('stop_line_gap', 0.03)
-        self.declare_parameter('entry_reaction_sec', 0.25)
-        self.declare_parameter('entry_deceleration', 1.5)
+        self.declare_parameter('entry_reaction_sec', 0.10)
+        self.declare_parameter('entry_deceleration', 2.5)
         self.declare_parameter('entry_confirm_frames', 2)
         self.declare_parameter('entry_min_span', 0.26)
         self.declare_parameter('entry_rate_hz', 10.0)
@@ -249,12 +247,12 @@ class MissionNode(QuietEventsMixin, Node):
         self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
         self.create_subscription(Bool, get('avoid_active_topic'), self.on_avoid_active, 1)
 
-        # Preserve the car-calibrated bumper stop reference. The front axle belongs
-        # only to mission entry; changing entry policy must not move the stop target.
+        # Original crosswalk stop settings: FinishCore's calibrated bumper reference
+        # and gap. Mission-entry tuning must not change the crosswalk stop target.
         self.parking_front = FinishParams().front
         self.finish_params = FinishParams(lost_hold_sec=1e9, band=get('line_band'),
-            speed=get('approach_speed'), front=get('stop_line_front'), stop_gap=get('stop_line_gap'))
-        if (get('front_axle_x') < 0 or get('stop_line_front') < 0 or get('entry_reaction_sec') < 0 or
+            speed=get('approach_speed'))
+        if (get('front_axle_x') < 0 or get('entry_reaction_sec') < 0 or
                 get('entry_deceleration') <= 0 or get('entry_confirm_frames') < 2 or
                 not 0 < get('entry_min_span') <= 2*get('line_band') or get('entry_rate_hz') <= 0):
             raise ValueError('invalid front axle or entry braking parameters')
@@ -624,8 +622,7 @@ class MissionNode(QuietEventsMixin, Node):
                                 ('bump_line', self.logic.bump_line_armed_at)) if a is not None]
         core = self.core
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
-        entry_braking = entry_slow and (self.logic.bump_state == BUMP_APPROACHING or
-            self.logic.slow_armed_at is not None or now < self.logic.slow_until)
+        entry_braking = entry_slow and out.speed_limit is not None
         self.mission_state_pub.publish(String(data=json.dumps({
             'state': out.state, 'armed': armed,
             'cone_entered': self.logic.cone_entered,
