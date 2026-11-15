@@ -179,7 +179,6 @@ def _cost(points, chain, side, p, graph=None, distance_cache=None) -> float:
 
     headings = [math.atan2(s[1], s[0]) for s in segs]
     turns = [_wrap(headings[i] - headings[i - 1]) for i in range(1, len(headings))]
-    # Direction-change penalty omitted for the host comparison.
     # turning away from the track (left boundary turning further left)
     wrong_limit = math.radians(p.wrong_dir_threshold_deg)
     wrong = sum(abs(t) for t in turns if t * side > 0.0 and abs(t) > wrong_limit)
@@ -189,90 +188,6 @@ def _cost(points, chain, side, p, graph=None, distance_cache=None) -> float:
     return (p.w_angle_cost * angle + p.w_residual_dist_cost * residual + p.w_num_cones_cost * number
             + p.w_initial_dir_cost * initial
             + p.w_wrong_dir_cost * wrong) / weight
-
-
-def _point_segment_distance(point, a, b):
-    dx, dy = b[0]-a[0], b[1]-a[1]
-    length = dx*dx+dy*dy
-    t = max(0., min(1., ((point[0]-a[0])*dx+(point[1]-a[1])*dy)/length)) if length > 1e-12 else 0.
-    return math.hypot(point[0]-a[0]-t*dx, point[1]-a[1]-t*dy)
-
-
-def _segments_cross(a, b, c, d):
-    def cross(p, q, r):
-        return (q[0]-p[0])*(r[1]-p[1])-(q[1]-p[1])*(r[0]-p[0])
-    return cross(a, b, c)*cross(a, b, d) < 0. and cross(c, d, a)*cross(c, d, b) < 0.
-
-
-def _bridge_inner_gap(points, chain, other, graph, p, side):
-    """Continue an observed inner corner across one gap with a confirmed tail.
-
-    Keep the normal neighbour graph unchanged. Only a terminal inward turn can
-    bridge up to two normal cone gaps, shorter than the opposite-wall distance.
-    At least two new observations must form a normal-gap continuation. The tail
-    uses the existing turn rules, starting a new turn history at the bridge.
-    """
-    if len(chain) < 2 or len(other) < 3 or len(chain) >= p.max_trace_length-1:
-        return chain
-    def heading_span(indices):
-        headings = [math.atan2(points[b][1]-points[a][1], points[b][0]-points[a][0])
-                    for a, b in zip(indices, indices[1:])]
-        return max(abs(_wrap(h-headings[0])) for h in headings)
-    outer_turn = heading_span(other)
-    if outer_turn < math.radians(p.threshold_absolute_angle_deg) or heading_span(chain) >= outer_turn:
-        # A curved opposite wall is the evidence that this is an inner endpoint.
-        return chain
-    end, previous = points[chain[-1]], points[chain[-2]]
-    heading = math.atan2(end[1]-previous[1], end[0]-previous[0])
-    wall = [points[i] for i in other]
-    def wall_distance(point):
-        return (min(_point_segment_distance(point, a, b) for a, b in zip(wall, wall[1:]))
-                if len(wall) > 1 else math.dist(point, wall[0]))
-    width = wall_distance(end)
-    limit = min(2*p.max_dist_between_cones, width)
-    used = set(chain) | set(other)
-    prior_edges = list(zip(chain[:-2], chain[1:-1]))
-    candidates = []
-    for i, point in enumerate(points):
-        if i in used:
-            continue
-        gap = math.dist(end, point)
-        if not 1e-6 < gap < limit:
-            continue
-        turn = _wrap(math.atan2(point[1]-end[1], point[0]-end[0])-heading)
-        turn_size = abs(turn)
-        if turn*side >= 0 or not math.radians(p.threshold_absolute_angle_deg) < turn_size <= math.radians(
-                p.threshold_absolute_angle_deg+p.threshold_directional_angle_deg):
-            continue
-        if wall_distance(point) <= gap:
-            continue
-        if _crosses_car(end, point, p.car_size):
-            continue
-        if any(_segments_cross(end, point, a, b) for a, b in zip(wall, wall[1:])):
-            continue
-        if any(_segments_cross(end, point, points[a], points[b]) for a, b in prior_edges):
-            continue
-        if gap <= p.max_dist_between_cones:
-            # Do not skip a nearer observation to manufacture a longer gap.
-            return chain
-        tail = [chain[-1], i]
-        blocked = used - {chain[-1]}
-        while len(chain)+len(tail)-1 < p.max_trace_length:
-            choices = [j for j in graph[tail[-1]] if j not in blocked
-                       and wall_distance(points[j]) > gap
-                       and _can_add(points, tail, len(tail)-1, j, side, p)
-                       and not any(_segments_cross(points[tail[-1]], points[j], a, b)
-                                   for a, b in zip(wall, wall[1:]))
-                       and not any(_segments_cross(points[tail[-1]], points[j], points[a], points[b])
-                                   for a, b in zip(chain[:-1], chain[1:]))]
-            if not choices:
-                break
-            tail.append(min(choices, key=lambda j: (math.dist(points[tail[-1]], points[j]), j)))
-        if len(tail) >= 3:
-            candidates.append((gap, i, tail[1:]))
-    if not candidates:
-        return chain
-    return list(chain)+min(candidates)[2]
 
 
 def best_chains(points: Sequence[Point], first_left: Optional[int], first_right: Optional[int],
@@ -289,13 +204,3 @@ def best_chains(points: Sequence[Point], first_left: Optional[int], first_right:
         best = min(chains, key=lambda c: _cost(points, c, side, params, graph, distance_cache)) if chains else (first,)
         result.append(list(best))
     return result[0], result[1]
-
-
-def extend_inner_gaps(points, left, right, params):
-    """Extend published boundaries without changing the normal tracing seeds."""
-    if not left or not right:
-        return left, right
-    graph = _neighbours(points, params.max_n_neighbors, params.max_dist_between_cones)
-    extended_left = _bridge_inner_gap(points, left, right, graph, params, +1)
-    extended_right = _bridge_inner_gap(points, right, extended_left, graph, params, -1)
-    return extended_left, extended_right

@@ -14,7 +14,7 @@ import time
 
 import numpy as np
 
-from clothoid_lidar.cone_trace import best_chains, extend_inner_gaps
+from clothoid_lidar.cone_trace import best_chains
 
 LEFT = +1
 RIGHT = -1
@@ -59,7 +59,6 @@ class SorterParams:
     w_residual_dist_cost: float = 200.0
     w_num_cones_cost: float = 5000.0
     w_initial_dir_cost: float = 1000.0
-    w_change_dir_cost: float = 2000.0
     w_wrong_dir_cost: float = 1000.0
     max_search_nodes: int = 3000          # bounds the time of one search, not in 2025
     boundary_timeout: float = 0.25       # discard association after a scan gap, seconds
@@ -115,21 +114,6 @@ class ConeSorter:
         return best
 
     # --- boundaries -------------------------------------------------------------
-    def extend_corners(self, cones: np.ndarray, result: SortResult) -> SortResult:
-        """Add supported terminal observations only to the published boundaries.
-
-        The mission retains the original trace for association on the next scan.
-        A corner continuation must not silently become a new left/right seed.
-        """
-        if self.p.trace_method != 'dfs2025' or not len(result.left) or not len(result.right):
-            return result
-        points = [(float(x), float(y)) for x, y in cones]
-        index = {point: i for i, point in enumerate(points)}
-        left = [index[tuple(p)] for p in result.left]
-        right = [index[tuple(p)] for p in result.right]
-        left, right = extend_inner_gaps(points, left, right, self.p)
-        return SortResult(left=cones[left], right=cones[right])
-
     def trace(self, cones: np.ndarray, start: int, used: set) -> List[int]:
         """Greedy chain: nearest unused cone within the gap, without a sharp turn."""
         p = self.p
@@ -262,7 +246,6 @@ class ConeMission:
         result = self.sorter.sort(cones, self.previous)
         self.previous = result
         self.previous_stamp = stamp
-        # Host A/B comparison: publish the ordinary trace without bridging inner gaps.
         return result
 
     def finish_exit(self):
