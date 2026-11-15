@@ -298,16 +298,13 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         pose = self.pose if self.pose is not None and self._fresh(self.pose_time) else None
         lane_ready = self.lane_ready and self._fresh(self.lane_ready_time)
         if pose is not None and lane_ready and self.exit_memory.handover_ready(
-                pose, p.rear_axle_x, p.wheelbase):
-            if self.exit_memory.observed_end is None:
-                self.get_logger().warn('cone EXIT: no observed endpoint; using lane-only handover',
-                                       throttle_duration_sec=1.0)
+                pose, p.rear_axle_x):
             self.exit_done_pub.publish(Bool(data=True))
             return
         if lane_ready and pose is not None:
-            remaining = self.exit_memory.front_axle_remaining(pose, p.rear_axle_x, p.wheelbase)
+            remaining = self.exit_memory.rear_axle_remaining(pose, p.rear_axle_x)
             if remaining is not None and remaining > 0.:
-                self.get_logger().info(f'cone EXIT: lane ready; observed endpoint {remaining:.3f} m ahead of front axle',
+                self.get_logger().info(f'cone EXIT: lane ready; observed endpoint {remaining:.3f} m ahead of rear axle',
                                        throttle_duration_sec=1.0)
         center = (self.exit_memory.remaining(pose, p.rear_axle_x)
                   if pose is not None else np.zeros((0, 2)))
@@ -319,7 +316,10 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             self.cmd_pub.publish(Twist())
             if self.center_pub.get_subscription_count():
                 self.center_pub.publish(to_path(center, Header(frame_id='base_link')))
-            self.get_logger().warn('cone EXIT: no fresh clear forward path; waiting for lane',
+            message = ('cone EXIT: no observed endpoint; waiting for measured path'
+                       if self.exit_memory.observed_end is None else
+                       'cone EXIT: no fresh clear forward path; waiting for lane')
+            self.get_logger().warn(message,
                                    throttle_duration_sec=1.0)
             return
         self.publish_result(FollowResult(p.speed, steering_from_target(target, p),

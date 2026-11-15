@@ -103,7 +103,7 @@ def analyse(path, progress=lambda value: None):
             # Consume it here so a short true pulse is not lost between scans.
             current_pose = pose if pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout else None
             if (current_pose is not None and lane_ready and active and mission.exiting
-                    and exit_memory.handover_ready(current_pose, fp.rear_axle_x, fp.wheelbase)):
+                    and exit_memory.handover_ready(current_pose, fp.rear_axle_x)):
                 mission.finish_exit()
                 follower.reset();exit_memory.clear();exit_reference_end = None
                 left = right = np.zeros((0, 2));lt = rt = None;active = False
@@ -183,7 +183,7 @@ def analyse(path, progress=lambda value: None):
             fresh_pose = pose is not None and pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout
             current_pose = pose if fresh_pose else None
             if (current_pose is not None and lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= fp.boundary_timeout
-                    and exit_memory.handover_ready(current_pose, fp.rear_axle_x, fp.wheelbase)):
+                    and exit_memory.handover_ready(current_pose, fp.rear_axle_x)):
                 mission.finish_exit()
             else:
                 center = exit_memory.remaining(pose, fp.rear_axle_x) if fresh_pose else np.zeros((0, 2))
@@ -196,7 +196,7 @@ def analyse(path, progress=lambda value: None):
                 command_rows.append((t, command.speed, command.steering));callback_results.append(command)
         observed_end = (cone_exit.transform(exit_reference_end[None, :], pose, True)[0]
                         if mission.exiting and exit_reference_end is not None and pose is not None else None)
-        front_remaining = (exit_memory.front_axle_remaining(pose, fp.rear_axle_x, fp.wheelbase)
+        rear_remaining = (exit_memory.rear_axle_remaining(pose, fp.rear_axle_x)
                            if mission.exiting and pose is not None and pose_time is not None
                            and 0 <= t-pose_time <= fp.boundary_timeout else None)
         command = callback_results[-1] if callback_results else None
@@ -229,7 +229,7 @@ def analyse(path, progress=lambda value: None):
             stale_left=left.copy() if not lf else np.zeros((0,2)), stale_right=right.copy() if not rf else np.zeros((0,2)),
             left_age=None if lt is None else t-lt, right_age=None if rt is None else t-rt,
             command=command, callback_results=callback_results, fan=fan, observed_end=observed_end,
-            exiting=mission.exiting, front_remaining=front_remaining))
+            exiting=mission.exiting, rear_remaining=rear_remaining))
         previous_scan = t
     if not frames:
         raise ValueError('라이다 스캔이 없습니다.')

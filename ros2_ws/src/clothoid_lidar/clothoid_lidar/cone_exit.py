@@ -85,15 +85,21 @@ class ExitPathMemory:
         front = transform(np.array([[wheelbase-rear_axle_x, 0.]]), pose)[0]
         return float((self.observed_end-front) @ self.end_direction)
 
-    def handover_ready(self, pose, rear_axle_x, wheelbase):
-        """Gate lane readiness on progress when an observed endpoint is known.
+    def rear_axle_remaining(self, pose, rear_axle_x):
+        """Signed distance until the pursuit reference reaches the observed exit plane.
 
-        With no accepted path, retain the existing lane-only fallback rather
-        than trapping the mission on a point that was never observed.
+        Positive means the rear axle still has to advance. Use the observed
+        endpoint, excluding the extrapolated continuation used for steering.
         """
-        if self.observed_end is None:
-            return True
-        remaining = self.front_axle_remaining(pose, rear_axle_x, wheelbase)
+        if (self.observed_end is None or pose is None or not np.isfinite(pose).all()
+                or not np.isfinite(rear_axle_x) or rear_axle_x < 0.):
+            return None
+        rear = transform(np.array([[-rear_axle_x, 0.]]), pose)[0]
+        return float((self.observed_end-rear) @ self.end_direction)
+
+    def handover_ready(self, pose, rear_axle_x):
+        """Arrival and pursuit use the same rear axle; missing geometry cannot confirm arrival."""
+        remaining = self.rear_axle_remaining(pose, rear_axle_x)
         return remaining is not None and remaining <= 1e-9
 
     def remaining(self, pose, rear_axle_x):
