@@ -44,13 +44,13 @@ cone_sorter:
 
 cone_follower:
   ros__parameters:
-    speed: 0.25              # bag-based trial: more response distance margin; verify with a new bag
+    speed: 0.25              # keep response margin for the measured ~0.2 s steering delay
     reverse_speed: -0.2       # only recover a missing boundary path, with fresh rear-scan clearance
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
     wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
     rear_axle_x: 0.1         # rear axle behind base_link (base_link is midway between the axles)
-    lfd: 0.3                 # rear-axle lookahead circle radius, metres
-    steering_gain: 1.1       # forward curvature x1.1; does not move the lookahead target
+    lfd: 0.35                # rear-axle circle radius; smoother commands than 0.30 in bag-scene trials
+    steering_gain: 1.0       # geometric pure pursuit without extra curvature amplification
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
