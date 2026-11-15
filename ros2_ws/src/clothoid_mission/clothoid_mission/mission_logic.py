@@ -203,7 +203,7 @@ class MissionLogic:
             self.cone_active_since = None
 
         if p.slow_at_stopline:
-            if 'sign_slow' in seen and now >= self.slow_until and self.slow_armed_at is None:
+            if 'sign_slow' in seen and now >= self.slow_until:
                 self.slow_armed_at = now
             if self.slow_armed_at is not None:
                 if self._line_arrived(inputs):
@@ -254,13 +254,17 @@ class MissionLogic:
         now, seen, pitch, p = inputs.now, inputs.seen, inputs.imu_pitch, self.p
         bump_blocked = self.cone_entered and p.block_bump_after_cone
 
+        # Select the configured trigger even on the first tick after cooldown.
+        if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
+            self.bump_state = BUMP_IDLE
+
         # 1. YOLO trigger
         if bump_blocked:
             self.bump_line_armed_at = None
             if self.bump_state == BUMP_APPROACHING:
                 self.bump_state = BUMP_IDLE
         elif p.bump_at_stopline and self.bump_state == BUMP_IDLE:
-            if 'sign_bump' in seen and self.bump_line_armed_at is None:
+            if 'sign_bump' in seen:
                 self.bump_line_armed_at = now
             if self.bump_line_armed_at is not None:
                 if pitch is not None and abs(pitch) >= p.bump_pitch_thresh:
@@ -278,9 +282,6 @@ class MissionLogic:
                       and now - self.bump_line_armed_at > p.bump_arm_timeout_sec):
                     self.bump_line_armed_at = None
         elif 'sign_bump' in seen:
-            if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
-                self.bump_state = BUMP_IDLE
-
             if self.bump_state == BUMP_IDLE:
                 self.bump_state = BUMP_APPROACHING
                 self.bump_level_started_at = None
@@ -289,11 +290,7 @@ class MissionLogic:
                 self.bump_armed_at = now
 
         # 2. State transitions using IMU pitch and timers
-        if self.bump_state == BUMP_COOLDOWN:
-            if now >= self.bump_cooldown_until:
-                self.bump_state = BUMP_IDLE
-
-        elif self.bump_state == BUMP_APPROACHING:
+        if self.bump_state == BUMP_APPROACHING:
             # Expire if bump not hit within timeout
             if now - self.bump_armed_at > p.bump_arm_timeout_sec:
                 self.bump_state = BUMP_IDLE

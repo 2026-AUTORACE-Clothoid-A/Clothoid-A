@@ -2,6 +2,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from clothoid_mission.mission_logic import (  # noqa: E402
@@ -251,3 +253,18 @@ def test_bump_at_stopline_waits_for_line_or_pitch_fallback():
     logic2.step(Inputs(now=0.0, seen={'sign_bump'}, imu_pitch=0.0))
     out2 = logic2.step(Inputs(now=0.8, line_phase='search', imu_pitch=4.2))
     assert logic2.bump_state == BUMP_ON and out2.speed_limit == 0.2 and out2.steering_lock
+
+
+@pytest.mark.parametrize('sign, timeout', [('sign_slow', 8.0), ('sign_bump', 12.0)])
+def test_visible_sign_refreshes_stopline_arm_until_the_last_sighting_expires(sign, timeout):
+    logic = MissionLogic(MissionParams(slow_at_stopline=True, bump_at_stopline=True,
+                                       arm_timeout_sec=timeout, bump_arm_timeout_sec=timeout))
+    assert run(logic, 0.0, sign).stop_arm
+    assert run(logic, timeout - 0.1, sign, phase='search').stop_arm
+    # The first sighting is stale, but the sign was just confirmed again.
+    out = run(logic, timeout + 0.1, phase='search')
+    assert out.stop_arm and out.speed_limit is None
+    # With no further sightings or committed line, the arm still expires.
+    out = run(logic, 2 * timeout, phase='search')
+    assert not out.stop_arm and out.speed_limit is None
+    assert run(logic, 2 * timeout + 0.1, phase='arrived').speed_limit is None
