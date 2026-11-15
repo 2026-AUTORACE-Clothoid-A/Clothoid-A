@@ -90,10 +90,13 @@ angles still need measuring, see Open points.
   independently of the crosswalk stop line. A quality sign/light candidate prepares passive sensing;
   a confirmed mission is required to reduce speed. Two odometry-consistent line images confirm the
   boundary, including oblique lines while turning. Braking lead uses measured speed,
-  `entry_reaction_sec`, and `entry_deceleration`. `front_axle_x` is the front-wheel reference for
-  entry and crosswalk stops; finish and parking retain their existing geometric references.
+  `entry_reaction_sec`, and `entry_deceleration` for bump/slow warnings. A pedestrian/light
+  boundary prepares observation without applying the approach speed; that limit starts only
+  after the crosswalk stop line is committed. `front_axle_x` is the mission-entry reference;
+  `stop_line_front` retains the car-calibrated 0.161 m bumper reference and `stop_line_gap` the
+  existing 0.03 m allowance for crosswalk stops. Finish and parking retain their references.
   `/mission/state` adds `entry_phase`, `entry_active`, `mission_entry` (integrated travel coordinate),
   `entry_remaining` (metres to front wheels), `entry_slow`, and `entry_reached`.
   `entry_rate_hz` caps the extra entry analysis at 10 Hz; active crosswalk stop processing keeps
-  its camera rate. Overlapping accepted traffic-light colours prefer green, with three-frame
+  its camera rate. Overlapping accepted traffic-light colours prefer red/yellow, with three-frame
   confirmation on the selected signal retained.

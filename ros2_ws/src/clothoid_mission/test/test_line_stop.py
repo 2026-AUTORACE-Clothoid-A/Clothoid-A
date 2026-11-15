@@ -160,7 +160,7 @@ def test_mission_line_requires_crosswalk_context():
     assert core.phase == Phase.COMMIT
 
 
-def test_mission_stop_reference_is_the_front_axle_without_changing_finish_defaults():
+def test_explicit_reference_does_not_change_finish_defaults():
     params = FinishParams(front=.1, stop_gap=.03, rear_offset=.1, odom_scale=1.)
     core, x = run(params=params)
     assert core.phase == Phase.STOP

@@ -157,7 +157,7 @@ def detection_rows(node, detections):
         elif reason:
             status = '품질 탈락: '+reason
         elif track is None:
-            status = '중복/색상 겹침 · 초록 우선'
+            status = '중복/색상 겹침 · 정지색 우선'
         else:
             status = '확정' if track.confirmed else f'확인 {hits}/{gate.required(d.class_name)}'
         rows.append(dict(name=d.class_name, confidence=float(d.confidence),
@@ -361,7 +361,7 @@ def analyse(path, camera='limo2', progress=lambda value: None):
             'line_max_thickness', 'line_require_crosswalk', 'input_timeout', 'bump_pitch_thresh',
             'bump_level_thresh', 'bump_level_duration', 'bump_arm_timeout', 'bump_cooldown',
             'bump_min_area', 'bump_min_height', 'detection_confidence', 'detection_confirm_hits',
-            'detection_window', 'block_bump_after_cone', 'front_axle_x', 'stop_line_gap',
+            'detection_window', 'block_bump_after_cone', 'front_axle_x', 'stop_line_front', 'stop_line_gap',
             'entry_confirm_frames', 'entry_min_span', 'entry_reaction_sec', 'entry_deceleration', 'entry_rate_hz')}
         digest = hashlib.sha256()
         for module in loaded.values():

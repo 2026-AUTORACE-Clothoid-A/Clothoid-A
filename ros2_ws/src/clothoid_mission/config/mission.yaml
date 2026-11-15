@@ -65,8 +65,9 @@ mission:
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
     line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
-    front_axle_x: 0.10          # base_link (axle midpoint) -> front wheels, rules' judging reference
-    stop_line_gap: 0.03         # projection allowance before crosswalk stop line; calibrate on car
+    front_axle_x: 0.10          # mission entry only: base_link -> front wheels
+    stop_line_front: 0.161     # restore the existing car-calibrated bumper stop reference
+    stop_line_gap: 0.03        # retain the existing stop-line projection allowance
     entry_reaction_sec: 0.25    # sensing/timer/actuation allowance before mission boundary
     entry_deceleration: 1.5     # m/s^2, conservative 0.8 -> 0.2 braking estimate from full-run odom
     entry_confirm_frames: 2    # distinct, odometry-consistent images of the mission START line
@@ -100,7 +101,8 @@ mission:
     slow_at_stopline: true
     bump_at_stopline: true
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
-    # (line_stop.py), independently of mission entry. Stop position uses front_axle_x.
+    # (line_stop.py), independently of mission entry. Stop position uses stop_line_front.
+    # Entry prepares the observer; approach speed begins only on crosswalk-line commit.
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true
     approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
     image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame

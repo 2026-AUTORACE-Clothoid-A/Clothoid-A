@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -60,7 +61,7 @@ def test_selected_red_is_not_released_by_another_green(node):
     assert n.logic.state == DRIVE
 
 
-def test_overlapping_green_on_selected_signal_releases_only_after_three_frames(node):
+def test_overlapping_red_on_selected_signal_holds_until_three_green_only_frames(node):
     n, clock = node
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, 'traffic_light_red')
@@ -74,6 +75,10 @@ def test_overlapping_green_on_selected_signal_releases_only_after_three_frames(n
         message.detections.append(Detection(class_name='traffic_light_green', confidence=.7,
             x_min=100, x_max=120, y_min=200, y_max=220))
         n.on_detections(message)
+        n.on_timer()
+        assert n.logic.state == STOPPED_LIGHT
+    for k, now in enumerate((1000.6, 1000.7, 1000.8)):
+        detections(n, clock, now, 'traffic_light_green')
         n.on_timer()
         assert n.logic.state == (DRIVE if k == 2 else STOPPED_LIGHT)
 
@@ -266,6 +271,36 @@ def test_entry_observation_prepares_before_sign_confirmation_without_sending_spe
         n.on_timer()
     assert n.mission_entry.entry_at is not None and not limits
     assert n.core.phase == Phase.IDLE and n.logic.state == DRIVE
+
+
+@pytest.mark.parametrize('sign', ['sign_pedestrian', 'traffic_light_red'])
+def test_entry_does_not_move_or_slow_the_existing_bumper_stop_target(node, sign):
+    n, clock = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+                         k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    limits, states = [], []
+    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    n.mission_state_pub = SimpleNamespace(publish=lambda m: states.append(json.loads(m.data)))
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, sign)
+        n.on_timer()
+    assert n.finish_params.front == .161
+    assert n.finish_params.stop_gap == .03
+    assert n.get_parameter('front_axle_x').value == .1
+    # Even a reached entry boundary does not start the crosswalk approach limit.
+    n.mission_entry.entry_at = n.travel
+    n.on_timer()
+    assert not limits and n.core.phase == Phase.FOLLOW
+    assert states[-1]['entry_phase'] == 'entered' and states[-1]['speed_limit'] is None
+    assert states[-1]['front'] == .161 and states[-1]['entry_front'] == .1
+    for now in (1000.3, 1000.35, 1000.4):
+        n.core._sighting(now, 1.)
+    assert n.core.target == pytest.approx(1.-.161-.03)
+    clock[0] = 1000.4
+    n.on_timer()
+    n.on_timer()
+    assert limits[-1] == pytest.approx(.2)
 
 
 def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():

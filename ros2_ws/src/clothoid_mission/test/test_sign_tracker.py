@@ -92,15 +92,18 @@ def test_long_occlusion_with_two_possible_signals_does_not_reacquire_arbitrarily
         assert all(track.id != identity for track in green)
 
 
-def test_overlapping_green_wins_but_still_requires_distinct_source_frames():
+def test_overlapping_red_wins_but_still_requires_distinct_source_frames():
     tracker = SignTracker()
     for t in (0., .1):
         assert not tracker.update(t, [box('traffic_light_red'), box('traffic_light_green')])
     assert not tracker.update(.1, [box('traffic_light_red'), box('traffic_light_green')])
-    tracks = tracker.update(.2, [box('traffic_light_red', confidence=.95),
-                                box('traffic_light_green', confidence=.7)])
-    assert [t.box.class_name for t in tracks] == ['traffic_light_green']
+    tracks = tracker.update(.2, [box('traffic_light_red', confidence=.7),
+                                box('traffic_light_green', confidence=.95)])
+    assert [t.box.class_name for t in tracks] == ['traffic_light_red']
     assert len(tracker.tracks) == 1
+    assert not tracker.update(.3, [box('traffic_light_green')])
+    assert not tracker.update(.4, [box('traffic_light_green')])
+    assert tracker.update(.5, [box('traffic_light_green')])[0].box.class_name == 'traffic_light_green'
 
 
 def test_low_quality_red_does_not_override_an_accepted_green():

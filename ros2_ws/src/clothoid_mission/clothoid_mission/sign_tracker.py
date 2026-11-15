@@ -120,10 +120,10 @@ class SignTracker:
             b = Observation(d.class_name, float(d.confidence), d.x_min, d.y_min, d.x_max, d.y_max)
             if self.box_reason(b, width, height) is None:
                 boxes.append(b)
-        # The same housing can yield overlapping colours. Prefer a quality green;
-        # it still needs three source-frame hits on this same signal to permit going.
-        priority = {'traffic_light_green': 2, 'traffic_light_red': 1,
-                    'traffic_light_yellow': 0}
+        # The same housing can yield overlapping colours. Prefer a quality red/yellow;
+        # conflicting green must not contribute to permission to depart.
+        priority = {'traffic_light_red': 2, 'traffic_light_yellow': 1,
+                    'traffic_light_green': 0}
         result = []
         for b in sorted(boxes, key=lambda b: -b.confidence):
             same = next((i for i, old in enumerate(result) if family(b.class_name) == family(
