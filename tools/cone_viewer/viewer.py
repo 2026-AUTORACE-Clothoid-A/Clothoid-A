@@ -82,6 +82,14 @@ class Map(QWidget):
         c=f['command']
         if c is not None:
             line(c.center,COLORS['center'],4)
+            if len(c.center):
+                p.setPen(QPen(QColor(COLORS['center']),2));p.setBrush(Qt.NoBrush)
+                p.drawEllipse(xy(c.center[-1]),6,6)
+            endpoint=f.get('observed_end')
+            if endpoint is not None:
+                point=xy(endpoint);p.setPen(QPen(QColor('#ffe080'),3))
+                p.drawLine(point+QPointF(-6,-6),point+QPointF(6,6))
+                p.drawLine(point+QPointF(-6,6),point+QPointF(6,-6))
             if c.target is not None:
                 p.setBrush(QColor(COLORS['target']));p.setPen(QPen(QColor(COLORS['target']),2));p.drawEllipse(xy(c.target),7,7)
                 line([[-self.params.rear_axle_x,0],c.target],COLORS['target'],1,Qt.DotLine)
@@ -116,7 +124,7 @@ class Viewer(QMainWindow):
         self.events.itemClicked.connect(lambda item:self.seek_time(item.data(Qt.UserRole)))
         views.addWidget(self.camera);views.addWidget(self.map);views.addWidget(event_panel);views.setSizes([580,650,220]);layout.addWidget(views,1)
         legend=QHBoxLayout()
-        for color,text in [(COLORS['left'],'▲ 왼쪽 콘'),(COLORS['right'],'■ 오른쪽 콘'),(COLORS['center'],'━ 현재 중심 경로'),(COLORS['target'],'● 목표점'),(COLORS['turn'],'┄ 조향 궤적')]:
+        for color,text in [(COLORS['left'],'▲ 왼쪽 콘'),(COLORS['right'],'■ 오른쪽 콘'),(COLORS['center'],'━ 경로 / ○ 끝점'),('#ffe080','× 관측 경로 끝'),(COLORS['target'],'● 목표점'),(COLORS['turn'],'┄ 조향 궤적')]:
             label=QLabel(text);label.setStyleSheet(f'color:{color}');legend.addWidget(label)
         legend.addStretch();layout.addLayout(legend)
         row=QHBoxLayout();self.time_label=QLabel('0.00 s');self.time_label.setMinimumWidth(145);row.addWidget(self.time_label)
@@ -128,7 +136,7 @@ class Viewer(QMainWindow):
         for label,field in [('원본 라이다','show_raw'),('조향 궤적','show_turn')]:
             checkbox=QCheckBox(label);checkbox.setChecked(True);checkbox.toggled.connect(lambda value,key=field:self.set_layer(key,value));row.addWidget(checkbox)
         row.addStretch();save=QPushButton('현재 화면 저장');save.clicked.connect(self.save);row.addWidget(save);layout.addLayout(row)
-        footer=QLabel('카메라·기록 명령 = 원본 백 | 경계·경로 = 현재 코드 | ROS 메시지 도착 지연은 재현하지 않음 | 끝에서 정지')
+        footer=QLabel('카메라·차선 준비 신호·기록 명령 = 원본 백 | 콘 경로 = 현재 코드 | 스캔 단위 재계산·ROS 콜백 지연 미재현 | 끝에서 정지')
         footer.setStyleSheet('color:#a9bdce');layout.addWidget(footer)
         self.shortcuts=[]
         for sequence,callback in [('Space',self.toggle),('Left',lambda:self.step(-1)),('Right',lambda:self.step(1))]:
@@ -195,6 +203,11 @@ class Viewer(QMainWindow):
             details=f'   v {c.speed:+.2f} m/s  ·  조향 요청 {math.degrees(c.steering):+.1f}°'
             limit=math.atan(self.map.params.wheelbase/(self.map.params.wheelbase/math.tan(math.radians(28))+.175/2))
             if abs(c.steering)>limit:details+=f'  → 차체 제한 {math.degrees(np.clip(c.steering,-limit,limit)):+.1f}°'
+        if f.get('observed_end') is not None:
+            distance=np.linalg.norm(f['observed_end']+np.array([self.map.params.rear_axle_x,0.]))
+            details+=f'   관측 끝점까지 {distance*100:.0f}cm (후륜 기준)'
+        if f.get('front_remaining') is not None:
+            details+=f"   앞차축 통과까지 {f['front_remaining']*100:+.0f}cm"
         self.status.setText(f"{f['state']}   |   좌 {len(f['left'])} / 우 {len(f['right'])}개"+details)
         recorded='기록 명령 없음';ri=bisect.bisect_right(self.recorded_times,t)-1
         if ri>=0 and t-self.recorded_times[ri]<=.3:
@@ -203,6 +216,7 @@ class Viewer(QMainWindow):
                  'boundary_recovery':'경계 복구 후진', 'recovery_blocked':'후진 공간 미확인', 'recovery_limit':'후진 이동거리 상한',
                  'no_boundary_path':'사용 가능한 경계 경로 없음', 'no_cones':'콘 검출 없음',
                  'stale_pose':'차량 자세 갱신 끊김', 'stale_obstacles':'장애물 관측 갱신 끊김'}
+        methods.update(exit_path='콘 출구 저장 경로',exit_wait='차선 준비까지 정지')
         method=methods[c.source] if c is not None and c.source in methods else ('안쪽 콘–바깥 경계 중간점' if f['fan'] else '기존 중심 경로' if c is not None and not c.reverse else '전진 경로 없음')
         self.metrics.setText(f"재계산 방식  {method}   |   {recorded}   |   이 스캔 명령 {len(f['callback_results'])}회")
         ci=bisect.bisect_left(self.camera_times,t)
