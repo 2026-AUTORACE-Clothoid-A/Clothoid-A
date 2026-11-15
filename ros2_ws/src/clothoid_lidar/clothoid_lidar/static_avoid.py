@@ -301,8 +301,8 @@ class AvoidParams:
     # 'no sign' with the sign there. The turn may take the car into lane 2 (no fixed limit: the old
     # look_inner 0.40 cut the heading to 5~14 deg where ~20 was needed): it goes on while the car can
     # still get back out of the island's width (centre island_half + car half width + look_exit_clear
-    # from lane 2's centre) at look_turn_radius before the island front, with look_exit_margin m to
-    # spare. Then, the sign still unread, the look steers out to its own lane and ends there. Each
+    # from lane 2's centre) at look_turn_radius by the end of the island's pointed tip (island_tip
+    # past its front, the planner allows the tip too), with look_exit_margin m to spare. Then, the sign still unread, the look steers out to its own lane and ends there. Each
     # turning step is checked against the costmap / yellow lines / island first. Once per section;
     # ends when the direction comes (the plan then takes its lane from where the car is), at look_end
     # (back out first if inside), or when its own lane ahead is not clear.
@@ -312,7 +312,7 @@ class AvoidParams:
     look_view_deg: float = 10.0       # the sign this close to the camera axis (1113: read to ~20 deg)
     look_max_deg: float = 45.0
     look_exit_clear: float = 0.02     # m, past the island's width the way out ends
-    look_exit_margin: float = 0.15    # m before the island front the way out must be done
+    look_exit_margin: float = 0.05    # m before the end of the island's pointed tip the way out is done
     look_speed: float = 0.15
     look_gain: float = 1.5            # steering per heading error
     # turning on the spot: when the turn cannot be made forward before look_end, alternate look_step
@@ -1961,7 +1961,7 @@ class StaticAvoid:
                 return self._start_exit(pose, why)
             return self._end_look(why)
         need = self.exit_need(d, psi)
-        if need > 0.0 and gap - need <= p.look_exit_margin:
+        if need > 0.0 and gap + p.island_tip - need <= p.look_exit_margin:   # out by the end of the tip
             return self._start_exit(pose, 'unread, %.2f m to get out' % need)
         # the sign within look_view_deg of the camera axis: the plan drives (a look holding the car
         # straight lost a sign the plan's own heading kept in view); else steer it there. A look that

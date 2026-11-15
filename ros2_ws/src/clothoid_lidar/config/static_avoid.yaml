@@ -107,7 +107,7 @@ static_avoid:
     look_view_deg: 10.0          # turn only until the sign is this close to the camera axis (1113: read up to ~20 deg)
     look_max_deg: 45.0
     look_exit_clear: 0.02        # turn into lane 2 only while the car can still get out of the island's width (+ this) ...
-    look_exit_margin: 0.15       # ... look_exit_margin m before the island front; unread there -> back out to its own lane
+    look_exit_margin: 0.05       # ... look_exit_margin m before the end of the island's pointed tip; unread there -> back out to its own lane
     look_speed: 0.15             # while the look steers (sign out of view); in view the plan drives
     look_gain: 1.5
     # turn on the spot when the forward turn would not fit before look_end: forward / back at full

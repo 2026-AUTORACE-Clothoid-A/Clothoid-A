@@ -1309,8 +1309,7 @@ def test_sign_look_never_read_ends_straight_beside_the_island():
     events = [e[1] for e in out['events']]
     # turned into lane 2 for the sign, then back out of the island's width in its own lane
     assert any(e.startswith('sign look end: out of the island width in lane 1') for e in events), events
-    check(out, 0.50, 1)
-    assert not out.get('island_tip'), out
+    check(out, 0.50, 1)            # not on the island; over its pointed tip is allowed (the way out ends there)
 
 
 @pytest.mark.parametrize('steer_gain', [1.0, 0.55])
