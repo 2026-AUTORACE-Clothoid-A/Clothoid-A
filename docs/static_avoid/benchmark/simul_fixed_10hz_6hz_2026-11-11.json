@@ -1,0 +1,380 @@
+[
+ {
+  "name": "1108 run1-2 (L2 c7, L3 c6)",
+  "direction": 0,
+  "why": [],
+  "gap": 0.32710807378278084,
+  "tip": false,
+  "lanes": "2-1",
+  "time": 22.391666667000003,
+  "end": [
+   3.300663663760133,
+   0.4199795395698379
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "0.8 entry line: crossed at odometer 0.66 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "2.9 start fit +0.0 deg: island 4.57 m",
+   "5.4 lane fit +0.6 deg: island 4.40 m",
+   "12.6 static obstacle END: hand over in target lane 1, 1.99 m before the island (entry line)",
+   "19.2 entry line: crossed at odometer 5.68 m"
+  ],
+  "dir": "/tmp/simul_batch_1d2q5rro",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "1108 run1-2 (L2 c7, L3 c6)",
+  "direction": 1,
+  "why": [],
+  "gap": 0.3183122415510751,
+  "tip": false,
+  "lanes": "2-1-2-3",
+  "time": 27.775000000000002,
+  "end": [
+   3.300649985939849,
+   1.4592525242889758
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "0.8 entry line: crossed at odometer 0.66 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "2.8 start fit +0.0 deg: island 4.57 m",
+   "4.9 lane fit +0.2 deg: island 4.40 m",
+   "16.2 entry line: crossed at odometer 3.91 m",
+   "20.8 static obstacle END: hand over in target lane 3, 1.17 m before the island (entry line)"
+  ],
+  "dir": "/tmp/simul_batch_ng6g8nxo",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "1108 run3 (L2 c7, L1 c6)",
+  "direction": 0,
+  "why": [],
+  "gap": 0.3050239804505572,
+  "tip": false,
+  "lanes": "2-3-2-1",
+  "time": 27.991666667,
+  "end": [
+   3.3031654937896926,
+   0.4213982320052842
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "0.8 entry line: crossed at odometer 0.67 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.4 start fit +1.0 deg: island 4.65 m",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "5.0 lane fit +0.9 deg: island 4.40 m",
+   "16.5 entry line: crossed at odometer 4.00 m",
+   "21.3 static obstacle END: hand over in target lane 1, 1.08 m before the island (entry line)",
+   "24.9 entry line: crossed at odometer 6.10 m"
+  ],
+  "dir": "/tmp/simul_batch__t9jnsvf",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "1108 run3 (L2 c7, L1 c6)",
+  "direction": 1,
+  "why": [],
+  "gap": 0.3096029633829556,
+  "tip": false,
+  "lanes": "2-3",
+  "time": 22.358333334,
+  "end": [
+   3.30323763752306,
+   1.4599677408772782
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.1 entry line: crossed at odometer 0.67 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "3.5 start fit +0.0 deg: island 4.57 m",
+   "5.3 lane fit +1.0 deg: island 4.40 m",
+   "12.7 static obstacle END: hand over in target lane 3, 1.99 m before the island (entry line)"
+  ],
+  "dir": "/tmp/simul_batch_ikjui28z",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "1108 run6-9 (L2 c3, L3 c4)",
+  "direction": 0,
+  "why": [],
+  "gap": 0.2315952502741336,
+  "tip": false,
+  "lanes": "2-1",
+  "time": 22.758333333,
+  "end": [
+   3.3007193570556828,
+   0.42112304571424064
+  ],
+  "log": [
+   "0.8 entry line: crossed at odometer 0.66 m",
+   "8.1 static obstacle START (blocked ahead) at odometer 2.37 m, island 4.40 m (entry line)",
+   "8.4 lane fit +1.0 deg: island 4.40 m",
+   "16.4 static obstacle END: hand over in target lane 1, 0.96 m before the island (entry line)",
+   "19.6 entry line: crossed at odometer 5.67 m"
+  ],
+  "dir": "/tmp/simul_batch_1lqc0n46",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "1108 run6-9 (L2 c3, L3 c4)",
+  "direction": 1,
+  "why": [],
+  "gap": 0.3159110338904696,
+  "tip": false,
+  "lanes": "2-1-2-3",
+  "time": 27.325,
+  "end": [
+   3.305695108956523,
+   1.4821010111205342
+  ],
+  "log": [
+   "0.9 entry line: crossed at odometer 0.67 m",
+   "8.1 static obstacle START (blocked ahead) at odometer 2.37 m, island 4.40 m (entry line)",
+   "8.2 lane fit +1.0 deg: island 4.40 m",
+   "20.6 entry line: crossed at odometer 5.43 m",
+   "24.2 static obstacle END: hand over past the island front (entry line), lane 3"
+  ],
+  "dir": "/tmp/simul_batch_dazcdm_o",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "sim 7 cars",
+  "direction": 0,
+  "why": [
+   "stuck"
+  ],
+  "gap": 0.2219674383996532,
+  "tip": false,
+  "lanes": "2",
+  "time": 44.991666667,
+  "end": [
+   7.9298655331307435,
+   0.9920014709356046
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.0 entry line: crossed at odometer 0.68 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.59 m",
+   "2.7 start fit +0.0 deg: island 4.59 m",
+   "5.4 lane fit +0.1 deg: island 4.40 m"
+  ],
+  "dir": "/tmp/simul_batch_77387n3m",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "sim 7 cars",
+  "direction": 1,
+  "why": [
+   "stuck"
+  ],
+  "gap": 0.21763380617642913,
+  "tip": false,
+  "lanes": "2",
+  "time": 44.991666667,
+  "end": [
+   7.930765379780441,
+   0.9929196074239848
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.5 entry line: crossed at odometer 0.67 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "2.8 start fit +0.0 deg: island 4.57 m",
+   "5.6 lane fit +0.5 deg: island 4.40 m"
+  ],
+  "dir": "/tmp/simul_batch_ayl7tm5o",
+  "conf": "raw every3 (10 Hz)"
+ },
+ {
+  "name": "1108 run1-2 (L2 c7, L3 c6)",
+  "direction": 0,
+  "why": [],
+  "gap": 0.32594050075823455,
+  "tip": false,
+  "lanes": "2-1",
+  "time": 22.358333334,
+  "end": [
+   3.3074917379250635,
+   0.419999052933436
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "0.8 entry line: crossed at odometer 0.67 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "2.7 start fit +0.0 deg: island 4.57 m",
+   "5.4 lane fit +0.2 deg: island 4.40 m",
+   "12.7 static obstacle END: hand over in target lane 1, 1.99 m before the island (entry line)"
+  ],
+  "dir": "/tmp/simul_batch_oep0a3bi",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "1108 run1-2 (L2 c7, L3 c6)",
+  "direction": 1,
+  "why": [],
+  "gap": 0.332359232271816,
+  "tip": false,
+  "lanes": "2-1-2-3",
+  "time": 27.625,
+  "end": [
+   3.303069207765514,
+   1.4595701641961993
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.5 entry line: crossed at odometer 0.69 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.48 m, island 4.65 m (estimate)",
+   "2.7 entry line crossed after the start: island 4.61 m",
+   "3.2 start fit +0.0 deg: island 4.61 m",
+   "20.2 static obstacle END: hand over in target lane 3, 1.33 m before the island (entry line)"
+  ],
+  "dir": "/tmp/simul_batch_t90ay6uw",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "1108 run3 (L2 c7, L1 c6)",
+  "direction": 0,
+  "why": [],
+  "gap": 0.31757856692428893,
+  "tip": false,
+  "lanes": "2-3-2-1",
+  "time": 27.583333333,
+  "end": [
+   3.303928516569857,
+   0.4204915834158744
+  ],
+  "log": [
+   "1.4 entry line: crossed at odometer 0.68 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.48 m, island 4.65 m (estimate)",
+   "2.7 entry line crossed after the start: island 4.60 m",
+   "2.9 start fit +1.0 deg: island 4.60 m",
+   "20.1 static obstacle END: hand over in target lane 1, 1.35 m before the island (entry line)",
+   "24.4 entry line: crossed at odometer 6.12 m"
+  ],
+  "dir": "/tmp/simul_batch_ty62geu5",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "1108 run3 (L2 c7, L1 c6)",
+  "direction": 1,
+  "why": [],
+  "gap": 0.3226153763517687,
+  "tip": false,
+  "lanes": "2-3",
+  "time": 22.375000000000004,
+  "end": [
+   3.303267221481883,
+   1.4599821776155866
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.7 entry line: crossed at odometer 0.67 m",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.6 entry line crossed after the start: island 4.57 m",
+   "3.2 start fit +0.0 deg: island 4.57 m",
+   "5.7 lane fit -0.1 deg: island 4.40 m",
+   "12.7 static obstacle END: hand over in target lane 3, 1.99 m before the island (entry line)"
+  ],
+  "dir": "/tmp/simul_batch_b2kt5y3r",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "1108 run6-9 (L2 c3, L3 c4)",
+  "direction": 0,
+  "why": [],
+  "gap": 0.22110573795164176,
+  "tip": false,
+  "lanes": "2-1",
+  "time": 22.416666667,
+  "end": [
+   3.305854905016295,
+   0.4147621902307985
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "8.1 static obstacle START (blocked ahead) at odometer 2.38 m, island 4.65 m (estimate)",
+   "9.4 start fit +0.0 deg: island 4.65 m",
+   "19.5 entry line: crossed at odometer 5.63 m",
+   "20.1 static obstacle END: hand over in target lane 1, 1.73 m before the island (estimate)"
+  ],
+  "dir": "/tmp/simul_batch_m6qn9ldi",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "1108 run6-9 (L2 c3, L3 c4)",
+  "direction": 1,
+  "why": [
+   "island"
+  ],
+  "gap": 0.19872568603408644,
+  "tip": false,
+  "lanes": "2-1-2-3",
+  "time": 26.558333334000004,
+  "end": [
+   3.300988033637245,
+   1.4902402387375018
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "8.1 static obstacle START (blocked ahead) at odometer 2.38 m, island 4.65 m (estimate)",
+   "9.0 start fit +0.0 deg: island 4.65 m",
+   "23.4 entry line: crossed at odometer 6.02 m",
+   "25.8 static obstacle END: hand over in target lane 3, 1.26 m before the island (estimate)"
+  ],
+  "dir": "/tmp/simul_batch_3zh_3xx2",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "sim 7 cars",
+  "direction": 0,
+  "why": [
+   "stuck"
+  ],
+  "gap": 0.21897509766877862,
+  "tip": false,
+  "lanes": "2",
+  "time": 44.991666667,
+  "end": [
+   7.893094899549478,
+   0.9514557845169084
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "3.3 start fit +0.0 deg: island 4.65 m"
+  ],
+  "dir": "/tmp/simul_batch_9uzfzoap",
+  "conf": "raw every5 (6 Hz)"
+ },
+ {
+  "name": "sim 7 cars",
+  "direction": 1,
+  "why": [
+   "stuck"
+  ],
+  "gap": 0.20651899585896433,
+  "tip": false,
+  "lanes": "2",
+  "time": 44.991666667,
+  "end": [
+   7.931159403162989,
+   1.0045915763377467
+  ],
+  "log": [
+   "0.0 static_avoid started: lane width 0.52 m, trigger 1.5 m ahead, camera h 0.190 pitch -0.021, white S<=50 V>=170",
+   "1.8 static obstacle START (blocked ahead) at odometer 0.49 m, island 4.65 m (estimate)",
+   "2.8 start fit +0.0 deg: island 4.65 m"
+  ],
+  "dir": "/tmp/simul_batch__7e84lo_",
+  "conf": "raw every5 (6 Hz)"
+ }
+]

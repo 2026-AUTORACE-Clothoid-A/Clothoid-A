@@ -219,7 +219,10 @@ class ConeSorter:
 
 class ConeMission:
     """IDLE -> RUNNING when the start zone is full and both first cones exist;
-    With hold_exit, sparse cones enter EXIT until the lane handover is acknowledged."""
+    With hold_exit, sparse cones enter EXIT until the lane handover is acknowledged.
+    may_start False holds the start while static_avoid runs: LIMOs side by side
+    can otherwise look like a cone course.
+    """
 
     def __init__(self, sorter: ConeSorter, hold_exit: bool = False):
         self.sorter = sorter
@@ -230,7 +233,8 @@ class ConeMission:
         self.last_stamp = None
         self.previous_stamp = None
 
-    def update(self, cones: np.ndarray, stamp: Optional[float] = None) -> Optional[SortResult]:
+    def update(self, cones: np.ndarray, stamp: Optional[float] = None,
+               may_start: bool = True) -> Optional[SortResult]:
         """Returns the sorted boundaries while the course is running, else None."""
         cones = np.asarray(cones, float).reshape(-1, 2)
         stamp = time.monotonic() if stamp is None else stamp
@@ -240,7 +244,7 @@ class ConeMission:
         if self.previous_stamp is not None and not 0 <= stamp-self.previous_stamp <= self.sorter.p.boundary_timeout:
             self.previous = None
         if not self.running:
-            if (self.sorter.start_zone_ok(cones)
+            if (may_start and self.sorter.start_zone_ok(cones)
                     and self.sorter.select_first_cone(cones, LEFT) is not None
                     and self.sorter.select_first_cone(cones, RIGHT) is not None):
                 self.running = True

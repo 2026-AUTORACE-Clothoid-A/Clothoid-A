@@ -15,6 +15,17 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
+
+# ROS-free slow-topic averaging (include/limo_base/slow_topic.hpp): tested on the PC too
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  find_package(sensor_msgs REQUIRED)
+  find_package(nav_msgs REQUIRED)
+  ament_add_gtest(test_slow_topic test/test_slow_topic.cpp)
+  target_include_directories(test_slow_topic PRIVATE include)
+  ament_target_dependencies(test_slow_topic sensor_msgs nav_msgs)
+endif()
+
 # limo_msgs comes from ~/wego_ws on the LIMO. Without it (the PC image) there is nothing to build.
 find_package(limo_msgs QUIET)
 if(NOT limo_msgs_FOUND)

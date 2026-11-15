@@ -9,10 +9,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -39,13 +40,40 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(PathJoinSubstitution([FindPackageShare(package), *path])),
             launch_arguments=(args or {}).items())
 
+    twist_mux_arm_params = os.path.join(bringup_share, 'config', 'twist_mux_arm.yaml')
+
+    def twist_mux_node(parameters, condition):
+        return Node(
+            package='twist_mux',
+            executable='twist_mux',
+            name='twist_mux',
+            output='screen',
+            parameters=parameters,
+            remappings=[('cmd_vel_out', LaunchConfiguration('mux_output'))],
+            condition=condition,
+        )
+
     camera_pitch = LaunchConfiguration('camera_pitch')
 
     return LaunchDescription([
+        DeclareLaunchArgument('require_arm', default_value='false',
+                              description='true: autonomy moves only while /estop receives false, '
+                                          'see config/twist_mux_arm.yaml'),
+        DeclareLaunchArgument('mux_output', default_value='/cmd_vel',
+                              description='twist_mux output; /cmd_vel_dry = shadow run, nothing drives'),
+        DeclareLaunchArgument('cmd_timeout', default_value='0.5',
+                              description='limo_base: stop after this long without /cmd_vel'),
+        DeclareLaunchArgument('require_yolo_ready', default_value='false',
+                              description='hold base commands until the first successful YOLO inference'),
         DeclareLaunchArgument('camera_pitch', default_value='0.0',
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
+        DeclareLaunchArgument('use_image_10hz', default_value='true',
+                              description='republish the colour image at 10 Hz on /camera/color/image_10hz '
+                                          '(topic_tools throttle) for consumers that do not need 30 Hz'),
+        DeclareLaunchArgument('use_joint_states', default_value='false',
+                              description='joint_state_publisher (wheel joints for the RViz model)'),
         DeclareLaunchArgument('use_ekf', default_value='false',
                               description='fuse /odom and /imu into /odometry/filtered'),
         DeclareLaunchArgument('steering_scale', default_value='1.06',
@@ -53,8 +81,23 @@ def generate_launch_description():
         DeclareLaunchArgument('max_inner_angle', default_value='0.48869',
                               description='limo_base: inner wheel limit in rad (official 28 deg)'),
 
-        # URDF: base_link -> laser_link, imu_link, wheels
-        include('limo_description', 'launch', 'load_urdf.launch.py'),
+        # URDF: base_link -> laser_link, imu_link (fixed joints), as limo_description's
+        # load_urdf.launch.py. joint_state_publisher only feeds the wheel joints (always 0 deg) for
+        # the RViz model; nothing else reads them, so it is off by default (~3.5 % of a core on limo2,
+        # 2026-11-09). use_joint_states:=true brings it back.
+        Node(
+            package='robot_state_publisher',
+            executable='robot_state_publisher',
+            parameters=[{'robot_description': ParameterValue(
+                Command(['xacro ', PathJoinSubstitution(
+                    [FindPackageShare('limo_description'), 'urdf', 'limo_four_diff.xacro'])]),
+                value_type=str)}],
+        ),
+        Node(
+            package='joint_state_publisher',
+            executable='joint_state_publisher',
+            condition=IfCondition(LaunchConfiguration('use_joint_states')),
+        ),
 
         # colour camera lens of the DaBai, measured on limo2 2026-11-07 (wego had 0.23, 0.05, 0.06):
         # x 5 cm ahead of the front axle (base_link is midway between the axles, wheelbase 0.2),
@@ -67,7 +110,8 @@ def generate_launch_description():
                   xyz=(0, 0, 0), rpy=('-1.5708', '0', '-1.5708')),
 
         include('limo_base', 'launch', 'limo_base.launch.py', args={
-            name: LaunchConfiguration(name) for name in ('steering_scale', 'max_inner_angle')}),
+            name: LaunchConfiguration(name)
+            for name in ('steering_scale', 'max_inner_angle', 'cmd_timeout', 'require_yolo_ready')}),
 
         # DaBai DC1 runs on astra_stereo_u3.launch.py. Color only; the driver's own TF has a
         # unit error (29 m), so publish_tf is off and we publish the TF above.
@@ -83,6 +127,17 @@ def generate_launch_description():
             }.items(),
             condition=IfCondition(LaunchConfiguration('use_camera'))),
 
+        # one C++ subscriber to the raw image instead of every slow consumer taking 30 Hz in Python
+        # (docs/PIPELINE_LOAD_PLAN.md 0.1, step 4). apt: ros-humble-topic-tools
+        # throttle passes a frame once 1/rate s have gone by: 10.0 on the 30 Hz camera waited for the
+        # 4th frame half the time (8.8 Hz on limo2), 12.0 (83 ms) takes every 3rd frame = 10 Hz
+        Node(
+            package='topic_tools',
+            executable='throttle',
+            name='image_10hz',
+            arguments=['messages', '/camera/color/image_raw', '12.0', '/camera/color/image_10hz'],
+            condition=IfCondition(LaunchConfiguration('use_image_10hz'))),
+
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(PathJoinSubstitution(
                 [FindPackageShare('ydlidar_ros2_driver'), 'launch', 'ydlidar.launch.py'])),
@@ -93,12 +148,9 @@ def generate_launch_description():
                 [FindPackageShare('robot_localization'), 'launch', 'limo_ekf_launch.py'])),
             condition=IfCondition(LaunchConfiguration('use_ekf'))),
 
-        Node(
-            package='twist_mux',
-            executable='twist_mux',
-            name='twist_mux',
-            output='screen',
-            parameters=[twist_mux_params],
-            remappings=[('cmd_vel_out', '/cmd_vel')],
-        ),
+        # require_arm: add the /estop lock (twist_mux_arm.yaml), autonomy needs a heartbeat
+        twist_mux_node([twist_mux_params, twist_mux_arm_params],
+                       IfCondition(LaunchConfiguration('require_arm'))),
+        twist_mux_node([twist_mux_params],
+                       UnlessCondition(LaunchConfiguration('require_arm'))),
     ])

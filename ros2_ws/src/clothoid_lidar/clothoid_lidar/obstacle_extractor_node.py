@@ -13,10 +13,11 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.obstacle_extractor import (ExtractorParams, extract_obstacles, transform_points)
 
 
-class ObstacleExtractorNode(Node):
+class ObstacleExtractorNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('obstacle_extractor')
 
@@ -37,6 +38,7 @@ class ObstacleExtractorNode(Node):
         self.declare_parameter('cluster_gap', d.cluster_gap)
         self.declare_parameter('min_points', d.min_points)
         self.declare_parameter('max_width', d.max_width)
+        self.declare_parameter('min_width', d.min_width)
         self.declare_parameter('cone_radius', d.cone_radius)
 
         self.params = self._build(lambda n: self.get_parameter(n).value)
@@ -58,7 +60,7 @@ class ObstacleExtractorNode(Node):
             range_min=value('range_min'), range_max=value('range_max'),
             angle_min_deg=value('angle_min_deg'), angle_max_deg=value('angle_max_deg'),
             cluster_gap=value('cluster_gap'), min_points=value('min_points'),
-            max_width=value('max_width'), cone_radius=value('cone_radius'))
+            max_width=value('max_width'), min_width=value('min_width'), cone_radius=value('cone_radius'))
 
     def on_parameters(self, params):
         proposed = {p.name: p.value for p in params}

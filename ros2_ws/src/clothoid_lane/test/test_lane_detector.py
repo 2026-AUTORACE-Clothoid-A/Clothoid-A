@@ -197,3 +197,13 @@ def test_target_step_limit():
     x, y = limit_step((0.0, 0.0), (30.0, 40.0), 8.0)                    # a 50 px jump moves 8 px
     assert abs(x - 4.8) < 1e-9 and abs(y - 6.4) < 1e-9
     assert limit_step((0.0, 0.0), (30.0, 40.0), 0.0) == (30.0, 40.0)    # 0 = off
+
+
+def test_speed_scaled_gain_keeps_speed_times_gain():
+    from clothoid_lane.steering import speed_scaled_gain
+    assert speed_scaled_gain(0.33, 0.8, 0.8, 1.0) == 0.33           # at base speed: as tuned
+    assert speed_scaled_gain(0.33, 0.8, 1.0, 1.0) == 0.33           # never lower
+    assert abs(speed_scaled_gain(0.33, 0.8, 0.4, 1.0) - 0.66) < 1e-9  # lane.yaml: 0.4 m/s -> ~0.65
+    assert speed_scaled_gain(0.33, 0.8, 0.2, 1.0) == 1.0            # 1.32 capped
+    assert speed_scaled_gain(0.33, 0.8, 0.0, 1.0) == 0.33           # stopped / nonsense: unchanged
+    assert speed_scaled_gain(1.2, 0.8, 0.2, 1.0) == 1.2             # a gain above the cap stays

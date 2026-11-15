@@ -5,18 +5,20 @@ Publishes `/speed_limit` (Float32) while a mark is under the car and for `hold_s
 It never publishes a release value: lane_main drops the limit by itself when the heartbeat
 stops, and a release from here would also cancel a limit set by another node (e.g. YOLO sign).
 """
+import cv2
 import rclpy
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.speed_zone import (SpeedZoneDetector, SpeedZoneHold, SpeedZoneParams)
 
 
-class SpeedZoneNode(Node):
+class SpeedZoneNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('speed_zone')
 
@@ -44,7 +46,7 @@ class SpeedZoneNode(Node):
         self.debug_pub = self.create_publisher(
             Image, self.get_parameter('debug_image_topic').value, 1)
         self.create_subscription(
-            Image, self.get_parameter('image_topic').value, self.on_image, qos_profile_sensor_data)
+            Image, self.get_parameter('image_topic').value, self.on_image, IMAGE_QOS)
 
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info('speed_zone started')
@@ -87,6 +89,11 @@ class SpeedZoneNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SpeedZoneNode()
+    # one OpenCV thread per process: several camera nodes each spawning a pool fight over the
+    # cores (lane_shared does the same with shared_opencv_threads); 0 keeps OpenCV's default
+    threads = node.declare_parameter('opencv_threads', 1).value
+    if threads:
+        cv2.setNumThreads(threads)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

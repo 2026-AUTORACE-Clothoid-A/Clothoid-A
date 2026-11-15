@@ -6,9 +6,18 @@
   ros__parameters:
     # sensors
     image_topic: /camera/color/image_raw
+    # every 3rd colour frame (~10 Hz), bringup use_image_10hz:=true (topic_tools throttle). For
+    # consumers that do not need 30 Hz; such a node declares image_10hz_topic and subscribes to it
+    image_10hz_topic: /camera/color/image_10hz
     scan_topic: /scan
     odom_topic: /odom
     imu_topic: /imu
+    # limo_base also publishes 25 Hz copies (every 4th /imu, every 2nd /odom; rates averaged, states
+    # of the last: slow_topic.hpp). Python nodes need no more: each message costs the rclpy executor
+    # more than the node's own work. A node moves by setting its imu_topic / odom_topic to these in
+    # its own yaml (lane_main, parking; docs/requests/imu_odom_25hz.md)
+    imu_slow_topic: /imu_25hz
+    odom_slow_topic: /odom_25hz
 
     # lidar obstacle centres in base_link (geometry_msgs/PoseArray), shared by the cone and
     # static obstacle missions
@@ -21,6 +30,7 @@
     direction_topic: /direction_flag      # std_msgs/Int32, 0 left lane, 1 right lane
     parking_topic: /parking_flag          # std_msgs/Bool
     speed_limit_topic: /speed_limit       # std_msgs/Float32, <=0 releases the limit
+    bump_approach_topic: /bump/approaching # std_msgs/Bool, mission heartbeat for bounded lane gaps
     stopline_topic: /stopline_detected    # std_msgs/Bool, stop line / crosswalk stripes ahead
     parking_done_topic: /parking_done     # std_msgs/Bool, true once after the parking sequence ends
 

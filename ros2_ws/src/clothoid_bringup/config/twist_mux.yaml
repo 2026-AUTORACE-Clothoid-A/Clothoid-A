@@ -12,11 +12,19 @@ twist_mux:
         topic: cmd_vel_state
         timeout: 0.3
         priority: 100
-      parking:
+      parking:               # above state: a false stop must not freeze the car inside the parking run
         topic: cmd_vel_parking
         timeout: 0.3
+        priority: 110
+      finish:                # after parking: yellow line to the end line (clothoid_finish)
+        topic: cmd_vel_finish
+        timeout: 0.3
+        priority: 110
+      cone:                  # rubber cone course (clothoid_lidar cone_follower); above avoid: the
+        topic: cmd_vel_cone  # cone walls can look like obstacles to static_avoid
+        timeout: 0.3
         priority: 90
-      avoid:                 # static obstacle avoidance, rubber cones
+      avoid:                 # static obstacle avoidance (clothoid_lidar static_avoid)
         topic: cmd_vel_avoid
         timeout: 0.3
         priority: 80

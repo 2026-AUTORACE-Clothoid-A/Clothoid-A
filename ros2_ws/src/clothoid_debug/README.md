@@ -11,7 +11,8 @@
 | 센서, `limo_base`, `twist_mux`, 미션 노드 | 켜짐 | 켜짐 |
 | 조향 명령 `/cmd_vel_*` | 발행 | 발행 |
 | 디버그 이미지, `/lane/*_warp` | 발행 안 함 | 발행 |
-| `decision_viz` 노드 | 안 뜸 | 뜸 |
+| `decision_viz` 노드 | 안 뜸 | 안 뜸 (`viz:=true`일 때만 뜸) |
+| 카메라 오버레이 `/viz/overlay` | - | 차에서는 끔(`viz.launch.py`의 `overlay` 기본값 `false`, raw 영상을 구독하지 않음), `bag.launch.py`에서는 켬 |
 
 주행 노드를 끄는 인자는 따로 있다: `use_lane`, `use_yolo`, `use_lidar_missions`, `use_parking`, `use_mission`.
 
@@ -63,6 +64,8 @@ ros2 launch clothoid_debug rviz.launch.py use_sim_time:=false
 | 파랑·노랑·초록 경로 | 콘 코스의 왼쪽 경계, 오른쪽 경계, 중심선 |
 | Overlay 패널 | 카메라 영상 + 변환 영역(보라) + 차선 점 + 추종점(십자) + 상태 글자 |
 | Warped lane windows 패널 | 변환 이미지와 슬라이딩 윈도우 |
+| `Avoid costmap / candidates / path`, `LIMO clusters` (기본 꺼짐) | 정적 장애물 회피: 비용 지도(밝을수록 위험), 후보 경로(초록~빨강 = 비용, 회색 = 막힘), 고른 경로(분홍), LIMO 크기 군집. `full.launch.py`(`use_avoid`, 기본 켜짐) 또는 `ros2 launch clothoid_lidar avoid.launch.py`가 돌 때 나온다 |
+| `Lidar clusters A/B`, `Cone zones` (기본 꺼짐) | 라이다 군집 판정: 초록 채택, 빨강 폭 초과, 보라 빔 부족, 라벨 "폭cm/빔수". A는 `lidar.yaml` 값, B는 비교용. `ros2 launch clothoid_lidar lidar_debug.launch.py`를 같이 띄워야 나온다(bag이면 `use_sim_time:=true`) |
 
 ## lane_viewer: bag에서 차선 탐지와 추종점 보기
 
@@ -102,5 +105,5 @@ ros2 run clothoid_debug lane_viewer ../bag/lane_1107_201620 --tune
 ## 기존 코드에서 바꾼 부분
 - `clothoid_lane/lane_detector.py`: `LaneResult`에 `left_points`, `right_points` 추가. 조향과 추종점 계산은 그대로다.
 - `clothoid_lane/lane_main.py`: `debug`가 켜졌을 때만 `/lane/target_warp`, `/lane/left_warp`, `/lane/right_warp` 발행.
-- `clothoid_bringup/launch/full.launch.py`: `debug:=true`일 때 `viz.launch.py` 포함.
+- `clothoid_bringup/launch/full.launch.py`: `viz:=true`일 때 `viz.launch.py` 포함 (`debug:=true`만으로는 안 뜸).
 - `clothoid_bringup/package.xml`: `clothoid_debug` 의존성 추가.

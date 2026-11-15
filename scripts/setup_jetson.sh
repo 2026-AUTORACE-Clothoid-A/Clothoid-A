@@ -24,6 +24,7 @@ done
 
 APT_PACKAGES=(
     ros-humble-twist-mux
+    ros-humble-topic-tools
     ros-humble-diagnostic-updater
     ros-humble-robot-localization
     ros-humble-tf2-tools

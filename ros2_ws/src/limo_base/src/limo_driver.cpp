@@ -49,6 +49,22 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
     steering_scale_ = this->declare_parameter<double>("steering_scale", 2.47);
     max_inner_angle_ = this->declare_parameter<double>("max_inner_angle", 0.48869);
     cmd_timeout_ = this->declare_parameter<double>("cmd_timeout", 0.5);
+    require_yolo_ready_ = this->declare_parameter<bool>("require_yolo_ready", false);
+    if (require_yolo_ready_) {
+        yolo_ready_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+            "/yolo/ready", rclcpp::QoS(1).reliable().transient_local(),
+            [this](const std_msgs::msg::Bool::SharedPtr msg) {
+                if (msg->data != yolo_ready_) {
+                    RCLCPP_INFO(this->get_logger(), "YOLO ready: %s; automatic commands %s",
+                                msg->data ? "true" : "false", msg->data ? "enabled" : "held at zero");
+                }
+                yolo_ready_ = msg->data;
+                if (!yolo_ready_ && port_) {
+                    setMotionCommand(0, 0, 0, 0);
+                }
+            });
+        RCLCPP_INFO(this->get_logger(), "Waiting for first successful YOLO inference; holding automatic commands at zero");
+    }
 
     std::cout << "Loading parameters: " << std::endl;
     std::cout << "- port name: " << port_name << std::endl;
@@ -73,6 +89,22 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
     odom_publisher_=this->create_publisher<nav_msgs::msg::Odometry>("/odom",50);
     status_publisher_ = this->create_publisher<limo_msgs::msg::LimoStatus>("/limo_status",50);
     imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu",10);
+    // slow copies for the Python nodes (slow_topic.hpp): every imu_slow_every-th /imu (100 Hz -> 25 Hz)
+    // and odom_slow_every-th /odom (50 Hz -> 25 Hz), rates averaged; 0 = not published
+    const int imu_every = this->declare_parameter<int>("imu_slow_every", 4);
+    const int odom_every = this->declare_parameter<int>("odom_slow_every", 2);
+    const auto imu_slow_topic = this->declare_parameter<std::string>("imu_slow_topic", "/imu_25hz");
+    const auto odom_slow_topic = this->declare_parameter<std::string>("odom_slow_topic", "/odom_25hz");
+    if (imu_every > 0) {
+        imu_slow_ = std::make_unique<limo_base::ImuSlow>(imu_every);
+        imu_slow_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>(imu_slow_topic, 10);
+    }
+    if (odom_every > 0) {
+        odom_slow_ = std::make_unique<limo_base::OdomSlow>(odom_every);
+        odom_slow_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>(odom_slow_topic, 50);
+    }
+    RCLCPP_INFO(this->get_logger(), "slow topics: %s every %d, %s every %d (0 = off)",
+                imu_slow_topic.c_str(), imu_every, odom_slow_topic.c_str(), odom_every);
 
     motion_cmd_sub_= this->create_subscription<geometry_msgs::msg::Twist>(
         "/cmd_vel",10,std::bind(&LimoDriver::twistCmdCallback,this,std::placeholders::_1));
@@ -83,11 +115,16 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
     // motion_cmd_sub_ = nh.subscribe<geometry_msgs::Twist>("/cmd_vel", 5, &LimoDriver::twistCmdCallback, this);
     
     // connect to the serial port
-    if (port_name.find("tty") != port_name.npos){ 
-        port_name = "/dev/" + port_name;
+    if (port_name.find("tty") != port_name.npos || (!port_name.empty() && port_name.front() == '/')) {
+        if (port_name.front() != '/') {
+            port_name = "/dev/" + port_name;
+        }
         keep_running_=true;
         this->connect(port_name, B460800);
         this->enableCommandedMode();
+        if (require_yolo_ready_) {
+            setMotionCommand(0, 0, 0, 0);
+        }
         RCLCPP_INFO(this->get_logger(),"Open the serial port:'%s'",port_name.c_str());
         // twist_mux goes silent when all its inputs time out, so stop the car here. 0 disables this.
         if (cmd_timeout_ > 0.0) {
@@ -430,6 +467,12 @@ void LimoDriver::twistCmdCallback(const geometry_msgs::msg::Twist::SharedPtr msg
 {
     has_cmd_ = true;
     last_cmd_ = std::chrono::steady_clock::now();
+    // This is the last ROS command boundary, after twist_mux: covers lane,
+    // cones, parking and finish without depending on their startup order.
+    if (require_yolo_ready_ && !yolo_ready_) {
+        setMotionCommand(0, 0, 0, 0);
+        return;
+    }
     switch (motion_mode_) {
         case MODE_FOUR_DIFF: {
             setMotionCommand(msg->linear.x, msg->angular.z, 0, 0);
@@ -513,6 +556,10 @@ void LimoDriver::publishIMUData(double stamp) {
     imu_msg.orientation_covariance[8] = 1e-6;
 
     imu_publisher_->publish(imu_msg);
+    sensor_msgs::msg::Imu slow_msg;
+    if (imu_slow_ && imu_slow_->add(imu_msg, slow_msg)) {
+        imu_slow_publisher_->publish(slow_msg);
+    }
 }
 
 void LimoDriver::publishOdometry(double stamp, double linear_velocity,
@@ -635,6 +682,10 @@ void LimoDriver::publishOdometry(double stamp, double linear_velocity,
     odom_msg.pose.covariance[35] = 1.0;
 
     odom_publisher_->publish(odom_msg);
+    nav_msgs::msg::Odometry slow_msg;
+    if (odom_slow_ && odom_slow_->add(odom_msg, slow_msg)) {
+        odom_slow_publisher_->publish(slow_msg);
+    }
 }
 
 void LimoDriver::publishLimoState(double stamp, uint8_t vehicle_state, uint8_t control_mode,

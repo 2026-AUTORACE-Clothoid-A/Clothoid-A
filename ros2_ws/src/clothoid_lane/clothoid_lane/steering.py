@@ -18,6 +18,15 @@ def steer_angle(target_x: float, target_y: float, warp_w: int, warp_h: int,
     return max(-max_steer, min(max_steer, steer))
 
 
+def speed_scaled_gain(gain: float, base_speed: float, speed: float, max_gain: float) -> float:
+    """steer_gain for a slower speed: speed x gain kept about constant (lane.yaml tuning: 0.8 x 0.33,
+    0.3 x 1.0), at most `max_gain`. At or above base_speed, or with nonsense input, `gain` as it is;
+    never below `gain`."""
+    if speed <= 0.0 or base_speed <= 0.0 or speed >= base_speed:
+        return gain
+    return max(gain, min(max_gain, gain * base_speed / speed))
+
+
 def angular_z(speed: float, steer: float, wheelbase: float = WHEELBASE) -> float:
     """Bicycle model: w = v * tan(delta) / wheelbase."""
     return speed * math.tan(steer) / wheelbase

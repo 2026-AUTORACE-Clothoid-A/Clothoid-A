@@ -8,18 +8,25 @@ from clothoid_mission.mission_logic import (  # noqa: E402
     DRIVE, STOPPED_LIGHT, STOPPED_PEDESTRIAN, Inputs, MissionLogic, MissionParams)
 
 
-def run(logic, now, *seen, stopline=False):
-    return logic.step(Inputs(now=now, seen=set(seen), stopline=stopline))
+def run(logic, now, *seen, stopline=False, line=False, phase=None, speed=None):
+    return logic.step(Inputs(now=now, seen=set(seen), stopline=stopline, parking_line=line,
+                             line_phase=phase, line_speed=speed))
+
+
+def flag_params(**kw):
+    """2025 behaviour: stop on the stripe flag (the scenarios below were written for it)."""
+    kw.setdefault('require_cone_for_parking', False)
+    return MissionParams(use_stop_line=False, **kw)
 
 
 def test_idle_drive_has_no_outputs():
-    out = run(MissionLogic(MissionParams()), 0.0)
+    out = run(MissionLogic(flag_params()), 0.0)
     assert out.state == DRIVE and not out.stop
     assert out.speed_limit is None and out.direction is None and not out.parking_flag
 
 
 def test_slow_sign_limits_speed_then_expires():
-    logic = MissionLogic(MissionParams(slow_speed=0.2, slow_hold_sec=4.0))
+    logic = MissionLogic(flag_params(slow_speed=0.2, slow_hold_sec=4.0))
     assert run(logic, 0.0, 'sign_slow').speed_limit == 0.2
     assert run(logic, 3.9).speed_limit == 0.2          # sign out of view, still inside the hold
     assert run(logic, 4.1).speed_limit is None
@@ -27,7 +34,7 @@ def test_slow_sign_limits_speed_then_expires():
 
 
 def test_pedestrian_sign_stops_at_stop_line_waits_and_goes():
-    logic = MissionLogic(MissionParams(pedestrian_wait_sec=3.5))
+    logic = MissionLogic(flag_params(pedestrian_wait_sec=3.5))
     assert not run(logic, 0.0, 'sign_pedestrian').stop        # armed, no stop line yet
     assert not run(logic, 1.0).stop
     out = run(logic, 2.0, stopline=True)
@@ -38,11 +45,11 @@ def test_pedestrian_sign_stops_at_stop_line_waits_and_goes():
 
 
 def test_stop_line_without_a_sign_does_not_stop():
-    assert not run(MissionLogic(MissionParams()), 0.0, stopline=True).stop
+    assert not run(MissionLogic(flag_params()), 0.0, stopline=True).stop
 
 
 def test_cooldown_prevents_a_second_stop_for_the_same_mission():
-    logic = MissionLogic(MissionParams(pedestrian_wait_sec=1.0, cooldown_sec=15.0))
+    logic = MissionLogic(flag_params(pedestrian_wait_sec=1.0, cooldown_sec=15.0))
     run(logic, 0.0, 'sign_pedestrian', stopline=True)
     run(logic, 1.5)                                            # released at 1.5
     assert not run(logic, 3.0, 'sign_pedestrian', stopline=True).stop
@@ -50,13 +57,13 @@ def test_cooldown_prevents_a_second_stop_for_the_same_mission():
 
 
 def test_arm_expires_without_a_stop_line():
-    logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
+    logic = MissionLogic(flag_params(arm_timeout_sec=8.0))
     run(logic, 0.0, 'sign_pedestrian')
     assert not run(logic, 9.0, stopline=True).stop
 
 
 def test_red_light_holds_until_green():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(flag_params())
     run(logic, 0.0, 'traffic_light_red')
     out = run(logic, 1.0, 'traffic_light_red', stopline=True)
     assert out.stop and out.state == STOPPED_LIGHT
@@ -65,36 +72,135 @@ def test_red_light_holds_until_green():
 
 
 def test_green_light_on_approach_does_not_stop():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(flag_params())
     run(logic, 0.0, 'traffic_light_red')
     run(logic, 0.5, 'traffic_light_green')                     # turned green before the line
     assert not run(logic, 1.0, stopline=True).stop
 
 
 def test_yellow_light_follows_the_stop_on_yellow_switch():
-    stops = MissionLogic(MissionParams(stop_on_yellow=True))
+    stops = MissionLogic(flag_params(stop_on_yellow=True))
     run(stops, 0.0, 'traffic_light_yellow')
     assert run(stops, 1.0, stopline=True).stop
 
-    passes = MissionLogic(MissionParams(stop_on_yellow=False))
+    passes = MissionLogic(flag_params(stop_on_yellow=False))
     run(passes, 0.0, 'traffic_light_yellow')
     assert not run(passes, 1.0, stopline=True).stop
 
 
 def test_light_takes_priority_over_pedestrian_when_both_armed():
-    logic = MissionLogic(MissionParams())
+    logic = MissionLogic(flag_params())
     run(logic, 0.0, 'sign_pedestrian', 'traffic_light_red')
     assert run(logic, 1.0, stopline=True).state == STOPPED_LIGHT
 
 
 def test_fork_signs_set_the_direction_for_lane_main():
-    logic = MissionLogic(MissionParams(fork_left_direction=0, fork_right_direction=1))
+    logic = MissionLogic(flag_params(fork_left_direction=0, fork_right_direction=1))
     assert run(logic, 0.0, 'sign_left').direction == 0
     assert run(logic, 1.0).direction == 0                      # latched after the sign leaves view
     assert run(logic, 2.0, 'sign_right').direction == 1
 
 
-def test_parking_sign_latches_the_parking_flag():
-    logic = MissionLogic(MissionParams())
+def test_parking_sign_arms_and_the_stop_line_raises_the_flag():
+    logic = MissionLogic(flag_params())
+    assert not run(logic, 0.0, 'sign_parking').parking_flag    # sign seen from afar: armed only
+    assert not run(logic, 2.0).parking_flag                      # sign out of view, still armed
+    assert not run(logic, 2.5, stopline=True).parking_flag       # crosswalk stripes: not this one
+    assert run(logic, 3.0, line=True).parking_flag               # the single stop line in front
+    assert run(logic, 10.0).parking_flag                         # latched
+
+
+def test_stop_line_without_the_sign_does_not_park():
+    logic = MissionLogic(flag_params())
+    assert not run(logic, 0.0, line=True).parking_flag
+
+
+def test_parking_at_the_sign_when_asked():
+    logic = MissionLogic(flag_params(parking_at_stopline=False))
     assert run(logic, 0.0, 'sign_parking').parking_flag
-    assert run(logic, 10.0).parking_flag
+
+
+# ---- stop on clothoid_finish stop_line (use_stop_line, the default) ----
+
+def test_sign_arms_stop_line_and_its_arrival_holds_the_car():
+    logic = MissionLogic(MissionParams(pedestrian_wait_sec=3.5))
+    out = run(logic, 0.0, 'sign_pedestrian')
+    assert out.stop_arm and not out.stop and out.speed_limit == 0.2   # until stop_line answers
+    assert run(logic, 1.0, phase='search', speed=0.2).stop_arm
+    out = run(logic, 2.0, phase='commit', speed=0.09)
+    assert out.speed_limit == 0.09 and not out.stop                    # finish's ramp
+    out = run(logic, 3.0, phase='arrived', speed=0.0)
+    assert out.stop and out.state == STOPPED_PEDESTRIAN and not out.stop_arm
+    assert run(logic, 6.0).stop
+    out = run(logic, 6.6)
+    assert not out.stop and not out.stop_arm and out.speed_limit is None
+
+
+def test_stripes_alone_do_not_stop_with_stop_line():
+    logic = MissionLogic(MissionParams())
+    run(logic, 0.0, 'sign_pedestrian')
+    assert not run(logic, 1.0, stopline=True, phase='search').stop
+
+
+def test_committed_line_keeps_the_arm_past_the_timeout():
+    logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
+    run(logic, 0.0, 'traffic_light_red')
+    assert run(logic, 9.0, phase='commit', speed=0.06).stop_arm
+    assert run(logic, 12.0, phase='arrived').state == STOPPED_LIGHT
+    assert not run(logic, 13.0, 'traffic_light_green').stop
+
+
+def test_search_without_a_line_expires():
+    logic = MissionLogic(MissionParams(arm_timeout_sec=8.0))
+    run(logic, 0.0, 'sign_pedestrian')
+    assert not run(logic, 9.0, phase='search').stop_arm
+
+
+def test_cone_gate_blocks_parking_before_cone_and_unlocks_after():
+    logic = MissionLogic(MissionParams(parking_at_stopline=False, cone_confirm_sec=1.5))
+    # Seen near the bump / start before cone course: ignored
+    assert not logic.step(Inputs(now=0.0, seen={'sign_parking'})).parking_flag
+    assert not logic.parking_armed
+    # Brief cone_active (< 1.5 s) does not latch, and dropping to False resets the timer
+    logic.step(Inputs(now=1.0, cone_active=True))
+    logic.step(Inputs(now=2.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=2.1, cone_active=False))
+    assert not logic.cone_entered
+    # Sustained cone_active >= 1.5 s latches cone_entered, and it stays unlocked after leaving
+    logic.step(Inputs(now=3.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=4.5, cone_active=True))
+    assert logic.cone_entered
+    assert not logic.step(Inputs(now=5.0, cone_active=False)).parking_flag
+    assert logic.step(Inputs(now=6.0, seen={'sign_parking'}, cone_active=False)).parking_flag
+
+
+def test_cone_gate_blocks_bump_after_cone_entry():
+    logic = MissionLogic(MissionParams(slow_speed=0.2, cone_confirm_sec=1.5))
+    # Before cone: bump arms normally; brief cone_active (< 1.5 s) does not block bump
+    assert logic.step(Inputs(now=0.0, seen={'sign_bump'})).speed_limit == 0.2
+    assert logic.step(Inputs(now=1.0, cone_active=True)).speed_limit == 0.2
+    # Once cone_active holds >= 1.5 s, cone_entered latches and clears/blocks bump
+    assert logic.step(Inputs(now=2.5, cone_active=True)).speed_limit is None
+    assert logic.cone_entered
+    # After cone: sign_bump is ignored even after cone_active returns False
+    assert logic.step(Inputs(now=3.0, seen={'sign_bump'}, cone_active=False)).speed_limit is None
+
+
+def test_cone_active_during_and_right_after_avoidance_does_not_latch():
+    """1114_0028: a false cone start during the static avoidance latched cone_entered."""
+    logic = MissionLogic(MissionParams(cone_confirm_sec=1.5, avoid_release_hold=2.0))
+    for t in (0.0, 1.0, 2.0, 3.0):
+        logic.step(Inputs(now=t, cone_active=True, avoid_active=True))
+    assert not logic.cone_entered
+    # avoidance ended at 3.0: cone_active up to 5.0 is still ignored
+    logic.step(Inputs(now=4.0, cone_active=True))
+    logic.step(Inputs(now=4.9, cone_active=True))
+    assert not logic.cone_entered
+    # the real cone course afterwards latches as before (1.5 s from 5.0)
+    logic.step(Inputs(now=5.0, cone_active=True))
+    logic.step(Inputs(now=6.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=6.5, cone_active=True))
+    assert logic.cone_entered

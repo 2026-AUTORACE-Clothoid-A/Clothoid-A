@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Rubber cone driving node (ROS2 port of 2025 `rubber_cone_node`).
 
-Publishes a Twist on `cmd_topic` (twist_mux input `avoid`). Steering from pure pursuit is
+Publishes a Twist on `cmd_topic` (twist_mux input `cone`, 90). Steering from pure pursuit is
 converted with the bicycle model: w = v * tan(delta) / wheelbase. A short reverse
 recovery is allowed only when cones remain but no boundary path is usable, after
 checking its body sweep against the fresh full laser scan.
@@ -19,6 +19,7 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Header
 from tf2_ros import Buffer, TransformException, TransformListener
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.cone_follower import (ConeFollower, FollowerParams, FollowResult,
                                            compute_steering, look_ahead_point)
 from clothoid_lidar.cone_exit import ExitPathMemory, clearance
@@ -30,11 +31,11 @@ def path_to_array(msg: Path) -> np.ndarray:
     return np.array([[p.pose.position.x, p.pose.position.y] for p in msg.poses]).reshape(-1, 2)
 
 
-class ConeFollowerNode(Node):
+class ConeFollowerNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('cone_follower')
 
-        self.declare_parameter('cmd_topic', '/cmd_vel_avoid')
+        self.declare_parameter('cmd_topic', '/cmd_vel_cone')
         self.declare_parameter('left_boundary_topic', '/cone/left_boundary')
         self.declare_parameter('right_boundary_topic', '/cone/right_boundary')
         self.declare_parameter('mission_active_topic', '/cone/mission_active')

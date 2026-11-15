@@ -23,5 +23,25 @@ ros2 topic echo /detections
 ```
 Without a model, `backend:=none` (default) publishes empty arrays.
 
+## Startup readiness
+
+`/yolo/ready` (`std_msgs/Bool`, reliable/transient-local, depth 1) starts false and
+becomes true after the first successfully processed camera image. An empty
+detection array is a successful result; model loading alone is not readiness.
+`backend:=none`, invalid images and failed inference do not mark the node ready.
+Readiness is published only on the initial state and the first success.
+
+`clothoid_bringup full.launch.py` enables `wait_for_yolo:=true` by default when
+`use_yolo:=true`. The base driver holds every ROS motion command at zero until
+ready, including commands from cones, parking and finish. No additional node or
+image processing is used. RC hardware control remains available to the operator.
+`use_yolo:=false` disables this startup wait automatically; an intentional partial
+stack can also use `wait_for_yolo:=false`.
+
+This is startup readiness, not a continuous inference watchdog. `/cmd_vel` can
+still contain requested velocities during the wait; the base driver transmits
+zero motion to the body. Look for `Waiting for first successful YOLO inference`
+and `YOLO ready: true` in the base log to confirm the transition.
+
 ## Tests
 `pytest ros2_ws/src/clothoid_yolo/test` (no model or GPU needed: post-processing only).

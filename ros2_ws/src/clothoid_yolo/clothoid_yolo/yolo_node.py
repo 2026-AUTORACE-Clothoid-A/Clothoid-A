@@ -6,14 +6,18 @@
 import os
 from pathlib import Path
 
+import cv2
 import numpy as np
 import rclpy
 from clothoid_interfaces.msg import Detection, DetectionArray
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy
 from sensor_msgs.msg import Image
+from std_msgs.msg import Bool
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.quiet_node import QuietEventsMixin
+from clothoid_common.qos import IMAGE_QOS
 from clothoid_yolo.yolo_detector import UltralyticsBackend, filter_boxes
 
 
@@ -75,11 +79,15 @@ def resolve_model_path(path_str: str) -> str:
     return path_str
 
 
-class YoloNode(Node):
+class YoloNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('yolo')
 
         self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('image_10hz_topic', '/camera/color/image_10hz')
+        # '10hz': image_10hz_topic every frame (avoids 30 Hz raw deserialization in Python);
+        # 'raw': image_topic every image_every-th frame.
+        self.declare_parameter('image_source', '10hz')
         self.declare_parameter('detections_topic', '/detections')
         self.declare_parameter('debug_image_topic', '/yolo/debug_image')
         self.declare_parameter('backend', 'ultralytics')   # ultralytics | none
@@ -90,6 +98,7 @@ class YoloNode(Node):
         self.declare_parameter('min_confidence', 0.5)      # threshold for what is published
         # model class name -> message class name, as "model_name:message_name" strings
         self.declare_parameter('class_aliases', [''])
+        self.declare_parameter('image_every', 3)           # 30 Hz raw camera -> every 3rd frame (~10 Hz)
         self.declare_parameter('debug', False)
         self.declare_parameter('show', False)
 
@@ -108,13 +117,31 @@ class YoloNode(Node):
 
         self.aliases = dict(item.split(':', 1) for item in get('class_aliases') if ':' in item)
         self.warned_unknown = set()
+        # Transient local: a base driver started after inference also gets readiness.
+        # Initial false is published before loading the first image. backend=none
+        # deliberately never signals successful inference.
+        self.ready = False
+        self._frame_count = 0
+        self.ready_pub = self.create_publisher(Bool, '/yolo/ready', QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.ready_pub.publish(Bool(data=False))
 
         self.pub = self.create_publisher(DetectionArray, get('detections_topic'), 1)
         self.debug_pub = self.create_publisher(Image, get('debug_image_topic'), 1)
-        self.create_subscription(Image, get('image_topic'), self.on_image, qos_profile_sensor_data)
-        self.get_logger().info(f"yolo started (backend={get('backend')})")
+        self.image_source = get('image_source')
+        self.image_topic = get('image_10hz_topic') if self.image_source == '10hz' else get('image_topic')
+        self.create_subscription(Image, self.image_topic, self.on_image, IMAGE_QOS)
+        self.get_logger().info(
+            f"yolo started (backend={get('backend')}, image_source={self.image_source}, "
+            f"topic={self.image_topic}, image_every={get('image_every')})")
 
     def on_image(self, msg: Image):
+        every = 1 if self.image_source == '10hz' else max(1, int(self.get_parameter('image_every').value))
+        if self.ready and every > 1:
+            self._frame_count += 1
+            if self._frame_count % every != 0:
+                return
         out = DetectionArray()
         out.header = msg.header
         boxes = []
@@ -139,6 +166,10 @@ class YoloNode(Node):
             d.x_min, d.y_min, d.x_max, d.y_max = box.x_min, box.y_min, box.x_max, box.y_max
             out.detections.append(d)
         self.pub.publish(out)
+        if self.backend is not None and not self.ready:
+            self.ready = True
+            self.ready_pub.publish(Bool(data=True))
+            self.get_logger().info('first YOLO inference complete; automatic driving may start')
 
         need_debug = self.get_parameter('debug').value
         need_show = self.get_parameter('show').value
@@ -163,13 +194,15 @@ class YoloNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = YoloNode()
+    threads = node.declare_parameter('opencv_threads', 1).value
+    if threads:
+        cv2.setNumThreads(threads)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
         try:
-            import cv2
             cv2.destroyAllWindows()
         except Exception:
             pass

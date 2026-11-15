@@ -61,6 +61,21 @@ def test_recovered_cone_zone_resumes_normal_tracking():
     assert m.running and not m.exiting
 
 
+def test_static_avoid_start_hold_preserves_timestamped_exit_handshake():
+    m = ConeMission(ConeSorter(SorterParams()), hold_exit=True)
+    cones = np.array([[x, y] for y in [-.4, .4] for x in [.2, .5, .8]])
+    m.update(cones, 0., may_start=False)
+    assert not m.running
+    m.update(cones, .1, may_start=True)
+    assert m.running and not m.exiting
+    assert m.update(cones, .2, may_start=False) is not None
+    m.update(np.zeros((0, 2)), .3, may_start=False)
+    assert m.running and m.exiting
+    assert m.finish_exit()
+    m.update(cones, .4, may_start=False)
+    assert not m.running and not m.exiting
+
+
 def test_lane_handover_waits_for_front_axle_to_reach_observed_endpoint():
     m=ExitPathMemory();assert m.remember(line(),(0.,0.,0.),.35,.05)
     assert m.front_axle_remaining((.69,0.,0.),.1,.2)==pytest.approx(.01)

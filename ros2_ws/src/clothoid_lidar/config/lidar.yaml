@@ -41,6 +41,13 @@ cone_sorter:
     ing_y_min: -1.0
     ing_y_max: 1.0
     ing_min_count: 4
+    # no course START while /avoid/active (static_avoid) is true: LIMOs side by side pass the start
+    # test (1112/1113 avoid runs: 1~8 starts each, 1114_0028 aborted the avoidance). An older message
+    # than this is ignored, so without static_avoid the course starts as before.
+    avoid_active_timeout: 0.5
+    # and this long after it ends (11-09 bags: an end among the LIMOs started the course 0~0.14 s
+    # later; 2 s holds all three, the later starts at 4.2 s and more stay)
+    avoid_release_hold: 2.0
 
 cone_follower:
   ros__parameters:
@@ -57,3 +64,35 @@ cone_follower:
     path_relaxation_enabled: true   # trial: bounded local path bending reduction
     corner_endpoint_enabled: true  # straight endpoint / observed outer-turn midpoint path
     exit_clearance: 0.2      # minimum path distance to current detected obstacle centres
+
+# Second extractor instance for the static obstacle mission: LIMO-sized objects, no cones
+# (from namgyu/static-obstacle-avoidance). Retune min_width / min_points with a real LIMO scan.
+limo_extractor:
+  ros__parameters:
+    obstacles_topic: /lidar/limos
+    target_frame: base_link
+    use_tf: true
+    range_min: 0.1
+    range_max: 2.0
+    angle_min_deg: -110.0
+    angle_max_deg: 110.0
+    cluster_gap: 0.08
+    min_points: 3
+    min_width: 0.12          # LIMO body 0.22 m wide; cones (~0.07) are dropped
+    max_width: 0.45
+    cone_radius: 0.1         # centre = surface centroid pushed back by this
+
+# Camera red/orange share for the cone course check (/camera/red_ratio, Float32 0..1).
+# HSV: flat list, 6 numbers per range (h_lo, s_lo, v_lo, h_hi, s_hi, v_hi), OR-ed. Integers.
+# 1105 bags (full frame, 2025 red): cone course 20-39 %, obstacle zone (cone stand-ins) <= 6 %,
+# start threshold candidate 0.10 (0.07-0.15 all worked). NOT final: competition cone colour and
+# camera white balance are unknown. The threshold belongs to the consumer (cone course start).
+red_ratio:
+  ros__parameters:
+    image_topic: /camera/color/image_raw
+    output_topic: /camera/red_ratio
+    every_n: 3
+    hsv_ranges: [0, 100, 100, 10, 255, 255, 170, 100, 0, 180, 255, 255]
+    width: 160
+    roi_top: 0.0
+    roi_bottom: 1.0

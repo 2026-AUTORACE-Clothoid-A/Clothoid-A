@@ -2,6 +2,12 @@
 # (640x480 usb_cam, yellow lane) and must be re-tuned on the LIMO (DaBai DC1).
 lane_main:
   ros__parameters:
+    # 25 Hz copies from limo_base (topics.yaml imu_slow_topic): only the newest pitch / yaw / pose is
+    # read per 30 Hz frame. 1113_auto_05: |frame - newest IMU stamp| p95 26 ms, max < 40 ms at 25 Hz,
+    # so steering_lock_sync_tolerance 0.04 still holds. Old bags have no /imu_25hz: for a replay set
+    # these back to /imu and /odom in a params file given last (tools/load_profile/run.sh)
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     # 0.8 since 2026-11-08: the 02:27 / 02:55 drives at 0.8 (zigzag 0.2) did a lap in about 40 s with no
     # line crossing outside the A/B fork. The rule book recommends 0.3~0.4 m/s: check it before the
     # competition. With another speed, scale steer_gain inversely (see below).
@@ -10,6 +16,19 @@ lane_main:
     zigzag_speed: 0.2          # m/s while the zigzag is seen; 0 = no change
     zigzag_hold_sec: 0.5       # bags: the zone state drops for 0.2 s at most inside the zone
     lost_hold_sec: 0.0         # >0 keeps the last heading when the lane is lost
+    # Only during a fresh bump approach, bridge a near-straight lane occlusion.
+    # Either distance or time ends the continuation, even if the car is stuck.
+    bump_gap_speed: 0.2
+    bump_gap_max_distance: 0.6  # m of wheel odometry since the last measured lane
+    bump_gap_max_duration: 4.0 # s since that lane frame
+    bump_gap_max_steer_deg: 5.0
+    bump_gap_max_yaw_error_deg: 8.0
+    bump_gap_max_lateral_error: 0.1 # m from the arc of the retained steering command
+    steering_lock_timeout: 1.5 # seconds since mission heartbeat; prevents a stale lock persisting
+    steering_lock_level_deg: 1.2 # cache steering while level, before the camera tilts
+    steering_lock_reference_timeout: 1.0
+    steering_lock_imu_timeout: 0.25
+    steering_lock_sync_tolerance: 0.04 # camera/IMU sensor-stamp difference when caching level steering
     # the steered-to target moves at most this many warped px per frame (0 = off); see lane_main.py
     target_max_step_px: 8.0
     # Cone exit: cap speed until consecutive detections and the control target agree.
@@ -20,6 +39,11 @@ lane_main:
     # jumps per minute); the dawn lap was 0.3 x 1.0. E.g. 0.6 m/s -> about 0.45, 0.4 m/s -> 0.65.
     # The cone section steers with its own pure pursuit (cone_follower), not with this.
     steer_gain: 0.33
+    # below base_speed (stop line approach, slow sign, zigzag) the gain rises as base_speed / speed so
+    # speed x gain stays at 0.26, at most steer_gain_max (the 0.3 m/s dawn lap drove with 1.0). Without
+    # it the 0.2 m/s stop line approach in a corner turned a quarter of what it needed (2026-11-09).
+    steer_gain_speed_scaling: true
+    steer_gain_max: 1.0
     # left boundary first (2026-11-08): in right corners the inner (right) line leaves the view and the
     # target jumped to the left line; following the left (outer) line cut the boundary switches about
     # 3x in the bags. On two-lane parts the left boundary is the dashed divider.
