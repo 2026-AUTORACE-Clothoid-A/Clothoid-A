@@ -271,7 +271,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                                  if len(limos) else limos))
         had = avoid.event
         ended = avoid.control(tracker.latest(), inh) is None
-        if avoid.event != had and avoid.event.startswith('stuck'):          # as the node logs it
+        if avoid.event != had and avoid.event.startswith(('sign look', 'stuck')):   # as the node logs it
             rec['events'].append((s, avoid.event))
         if ended:
             rec['events'].append((s, 'END ' + avoid.event))

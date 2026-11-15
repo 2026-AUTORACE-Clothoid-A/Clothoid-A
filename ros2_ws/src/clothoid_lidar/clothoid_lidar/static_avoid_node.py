@@ -460,7 +460,9 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         pose = self.tracker.latest()
         had_event = self.avoid.event
         cmd = self.avoid.control(pose, self.inhibit(), self.now())
-        if self.avoid.event != had_event and self.avoid.event.startswith('stuck'):
+        if self.avoid.event != had_event and self.avoid.event.startswith('sign look'):
+            self.get_logger().info(self.avoid.event)
+        elif self.avoid.event != had_event and self.avoid.event.startswith('stuck'):
             self.get_logger().warn(f'static obstacle {self.avoid.event}')
         if cmd is not None:
             self.watch_progress(cmd[0])

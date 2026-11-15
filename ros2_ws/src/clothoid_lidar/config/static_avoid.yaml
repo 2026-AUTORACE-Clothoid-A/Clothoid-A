@@ -99,3 +99,22 @@ static_avoid:
     slow_speed: 0.20
     lookahead: 0.45
     max_steer: 0.49
+    # sign look (AvoidParams.sign_look): direction unknown, island front look_end~look_start m ahead,
+    # lane 1 / 3, road clear to the island -> slow, heading so the fork sign is in view. The
+    # lane beside the island fixes A / B: 3 of 7 hand-overs there were 'no sign' with the sign in place
+    sign_look: true
+    look_start: 3.0
+    look_end: 0.6                # still room to change lane 1 <-> 3 before the island tip
+    look_view_deg: 10.0          # turn only until the sign is this close to the camera axis (1113: read up to ~20 deg)
+    look_max_deg: 45.0
+    look_inner: 0.40             # the car centre stays this far from lane 2's centre (island tip clear)
+    look_speed: 0.15             # while the look steers (sign out of view); in view the plan drives
+    look_gain: 1.5
+    # turn on the spot when the forward turn would not fit before look_end: forward / back at full
+    # lock, each arc checked first; at most 2 cycles and 0.4 m back
+    look_reverse: true
+    look_turn_radius: 0.9        # conservative: car 7 turns at 0.455 / 0.48 m (full lock, ODOM_STEERING_TEST.md)
+    look_step: 0.15
+    look_reverse_speed: 0.10
+    look_cycles_max: 2
+    look_reverse_max: 0.40
