@@ -189,9 +189,13 @@ class AvoidParams:
     stuck_time: float = 0.5           # s with every path blocked
     stuck_log_after: float = 0.5      # s blocked before the one 'stuck' log line (no line for a blip)
     recovery_until: float = 0.5       # m driven on a plan again: back to the normal candidates
-    recovery_reverse: bool = False    # also back up when still stuck (launch argument `reverse`)
+    recovery_reverse: bool = True     # also back up when still stuck (launch argument `reverse`)
     reverse_after: float = 1.5        # s stuck
-    reverse_distance: float = 0.20    # m per back-up, straight back along the way the car came
+    # m per back-up, along the way the car came (its own recorded poses, so the space is free; the
+    # lidar's +-110 deg does not see behind), driven to its end; then an escape path first if one is
+    # free (the normal plan from there would stop at the same place again)
+    reverse_distance: float = 0.20
+    reverse_lookahead: float = 0.15   # m back along the recorded way, steered at
     reverse_max: float = 0.40         # m in all, per mission
     reverse_speed: float = 0.15
     # stuck for stuck_time: search once (again every escape_retry s) curvature-limited paths of three
@@ -199,16 +203,24 @@ class AvoidParams:
     # about straight, and drive it slowly with a short look-ahead. 1113 auto 05 stopped 14 s where
     # only such a quick swerve (right at full lock, then left) went through; the lane-centre
     # S-curves never contain it
-    # off for now (11-13 car: with reverse on, escape paths turned the car near 90 deg and the
-    # back-up then drove it off the track; fixed on a later branch)
-    escape: bool = False
-    escape_radius: float = 0.47       # m, car 7 at full lock
+    # on, with the back-up (launch arguments `escape` / `reverse`). Sim: stopped right behind two
+    # LIMOs after a late start, the car stood for good with both off and got through with them on
+    # (8 / 8, 3.5~10.5 cm clearance). The 11-13 car that turned ~90 deg and left the track (1113 auto
+    # 01 / 02) was not this: cone_follower then published on /cmd_vel_avoid (its own /cmd_vel_cone since
+    # 11-13 17:54); no back-up or escape command of this node is in those bags
+    escape: bool = True
+    # m, car 7 at full lock through /cmd_vel: 0.455 left / 0.48 right (ODOM_STEERING_TEST.md, circle
+    # diameters 91 / 96 cm); the wider one, a path the car cannot follow is worse than a wide one
+    escape_radius: float = 0.48
     escape_curvatures: Tuple[float, ...] = (-1.0, -0.5, 0.0, 0.5, 1.0)
     escape_lengths: Tuple[float, ...] = (0.2, 0.4, 0.6)
     escape_end_heading_deg: float = 35.0
     escape_lookahead: float = 0.30
     escape_speed: float = 0.15
-    escape_margin: float = 0.03       # m of clearance more than safety: full-lock arcs are cut a little
+    # m of clearance more (+) or less (-) than safety for an escape path. Not more than the normal
+    # plans: the last resort, driven at escape_speed, must not be the stricter one (it was +0.03, and
+    # +0.15 off the car, see swerve_margin). Sim (tools/static_avoid/sim_layouts.py) decides the value
+    escape_margin: float = 0.0
     escape_w_near: float = 0.02       # per obstacle cost point (0..100), against m of progress
     escape_retry: float = 1.0         # s
     # the first metres of every path start where the car is now: if the car is already inside the
@@ -223,7 +235,9 @@ class AvoidParams:
     # the look-ahead and the car's front overhang.
     min_turn_radius: float = 0.48
     escape_offset: float = 0.30
-    escape_margin: float = 0.15
+    # was a second `escape_margin` (the later field won: 0.15 in the tests, the simulation and the
+    # replays, but the yaml's 0.03 on the car, where the swerve distance so was 0.475 m, not 0.595)
+    swerve_margin: float = 0.15
     w_lethal_far: float = 400.0       # x share of path samples lethal beyond the escape distance
     w_obstacle: float = 1.0
     w_centre: float = 40.0            # per m^2 off the nearest lane centre
@@ -583,12 +597,23 @@ class Costmap:
         occupied = self.count >= p.occupied_count
         if not occupied.any():
             self.cost[:] = 0.0
+            self.dist = None
             return
         d = distance_transform_edt(~occupied) * p.resolution
+        self.dist = d                    # m to the nearest occupied cell (clearance checks)
         inscribed = p.car_half_width + p.safety
         cost = np.where(d < p.inflation_radius,
                         100.0 * np.exp(-p.inflation_decay * np.maximum(d - inscribed, 0.0)), 0.0)
         self.cost = np.where(d < inscribed, LETHAL, cost)
+
+    def clearance(self, pts: np.ndarray) -> np.ndarray:
+        """m from each point to the nearest occupied cell (inf: none, or outside the grid)."""
+        out = np.full(len(pts), np.inf)
+        if getattr(self, 'dist', None) is None:
+            return out
+        i, j, ok = self.cells(pts)
+        out[ok] = self.dist[i[ok], j[ok]]
+        return out
 
     def lookup(self, pts: np.ndarray) -> np.ndarray:
         i, j, ok = self.cells(pts)
@@ -647,7 +672,7 @@ def target_centre(direction: Optional[int], p: AvoidParams) -> Optional[float]:
 def escape_distance(p: AvoidParams) -> float:
     """Path length within which a lethal cell cannot be swerved around any more (m)."""
     r, y = p.min_turn_radius, min(p.escape_offset, p.min_turn_radius)
-    return math.sqrt(max(2.0 * r * y - y * y, 0.0)) + p.escape_margin
+    return math.sqrt(max(2.0 * r * y - y * y, 0.0)) + p.swerve_margin
 
 
 def _hermite(ds: np.ndarray, d0: float, m0: float, E: np.ndarray, Lt: np.ndarray):
@@ -1036,10 +1061,12 @@ def path_blocker(s0: float, costmap: 'Costmap', lane_rel: Optional['SectionFrame
                  island: Tuple[float, float], p: AvoidParams, margin: float = 0.0):
     """blocked(s, d, heading) per sample, lane coordinates: a footprint circle on a lethal cell (past
     lethal_free_start), a corner over the yellow outer line, or on the island (its pointed tip
-    allowed), as the lane-sequence planner checks. margin: m of clearance more than safety."""
+    allowed), as the lane-sequence planner checks. margin: m of clearance more (+) or less (-) than
+    safety."""
     w = p.lane_width
     off = np.asarray(p.footprint_offsets)
     limit = LETHAL if margin <= 0.0 else 100.0 * math.exp(-p.inflation_decay * margin) - 1e-6
+    reach = p.car_half_width + p.safety + margin       # margin < 0: circle centre to an occupied cell
 
     def blocked(s, d, h):
         fs = s[:, None] + off * np.cos(h)[:, None]
@@ -1047,8 +1074,11 @@ def path_blocker(s0: float, costmap: 'Costmap', lane_rel: Optional['SectionFrame
         q = np.column_stack((fs.ravel(), fd.ravel()))
         if lane_rel is not None:
             q = lane_rel.points_from(q)
-        c = costmap.lookup(q).reshape(fs.shape)
-        lethal = (c >= limit).any(axis=1) & (s - s0 > p.lethal_free_start)
+        if margin < 0.0:
+            hit = (costmap.clearance(q) < reach).reshape(fs.shape)
+        else:
+            hit = costmap.lookup(q).reshape(fs.shape) >= limit
+        lethal = hit.any(axis=1) & (s - s0 > p.lethal_free_start)
         corner = np.abs(d) + p.car_half_length * np.abs(np.sin(h)) + p.car_half_width * np.cos(h)
         out = corner > 1.5 * w - p.line_margin + 1e-6
         tip = np.clip(np.minimum(s - island[0], island[1] - s) / p.island_tip, 0.0, 1.0)
@@ -1175,6 +1205,8 @@ class StaticAvoid:
         self.event = ''                      # last state change, for the log
         self.reset_recovery()
         self.done = False                    # the section is behind us, avoided or not
+        self.trail: List[Tuple[float, float, float]] = []    # world poses, the way the car came
+        self.now_world = (0.0, 0.0, 0.0)
         # course map, race start: start on the section start line (request_line_start), at
         # approach_speed until the first blocker
         self.line_start: Optional[Tuple[float, float, float]] = None    # the line's pose, pending
@@ -1211,6 +1243,7 @@ class StaticAvoid:
         p = self.p
         blocked = self.blocked(limos, entry_back)
         self.seen_entry = entry_pose
+        self.remember(pose_world)        # also before the start: the mission can be stuck right after it
         if self.state == ACTIVE:
             if blocked:
                 self.approach = False
@@ -1553,13 +1586,14 @@ class StaticAvoid:
         self.stuck_since: Optional[float] = None
         self.recovering = False
         self.recovered_from: Optional[float] = None   # s where a plan was found again
-        self.backing_from: Optional[float] = None     # s where the back-up started
+        self.backing_from: Optional[Tuple[float, float]] = None   # world x, y where the back-up started
         self.reversed = 0.0
         self.stuck_log = None           # (t, where, logged) since every path got blocked (for the log)
+        self.prefer_escape = False      # after a back-up: an escape path first, if one is free
 
     def _stuck(self, t: Optional[float], s: float) -> Tuple[float, float]:
         """Every path blocked: stop; after stuck_time plan with the sharper recovery candidates; after
-        reverse_after back up (if allowed) straight along the way the car came, which is free."""
+        reverse_after back up (if allowed) along the way the car came (its recorded poses)."""
         p = self.p
         self.recovered_from = None
         if t is None:
@@ -1570,16 +1604,67 @@ class StaticAvoid:
         if stuck >= p.stuck_time and not self.recovering:
             self.recovering = True
             self.event = 'stuck: recovery candidates'
-        if p.recovery_reverse and stuck >= p.reverse_after and self.reversed < p.reverse_max:
-            if self.backing_from is None:
-                self.backing_from = s
-                self.event = 'stuck: backing up'
-            backed = self.backing_from - s
-            if backed < min(p.reverse_distance, p.reverse_max - self.reversed):
-                return -p.reverse_speed, 0.0
-            self.reversed += backed
-            self.backing_from, self.stuck_since = None, t          # wait for a plan again
+        if (p.recovery_reverse and stuck >= p.reverse_after and self.reversed < p.reverse_max
+                and self.backing_from is None and self._rewind_target() is not None):
+            self.backing_from = (self.now_world[0], self.now_world[1])
+            self.event = 'stuck: backing up along the way the car came'
+            return self._back_up(t) or (0.0, 0.0)
         return 0.0, 0.0
+
+    def remember(self, pose_world) -> None:
+        """Keep the way the car came (world poses every 2 cm, the last 1.5 m) for the back-up."""
+        if pose_world is None:
+            return
+        if self.trail and math.hypot(pose_world[0] - self.trail[-1][0],
+                                     pose_world[1] - self.trail[-1][1]) < 0.02:
+            return
+        if self.backing_from is None:            # not while backing: that way is being driven back
+            self.trail.append(tuple(pose_world))
+            del self.trail[:-75]
+
+    def _rewind_target(self) -> Optional[Tuple[float, float]]:
+        """The recorded point reverse_lookahead back along the way the car came (the oldest one within
+        reach if the record is shorter), None without a point at least 3 cm behind the rear axle."""
+        p = self.p
+        x, y, yaw = self.now_world
+        rx, ry = x - p.rear_axle_x * math.cos(yaw), y - p.rear_axle_x * math.sin(yaw)
+        best = None
+        for px, py, pyaw in reversed(self.trail):
+            qx, qy = px - p.rear_axle_x * math.cos(pyaw), py - p.rear_axle_x * math.sin(pyaw)
+            dx, dy = qx - rx, qy - ry
+            lx = math.cos(yaw) * dx + math.sin(yaw) * dy          # in the car's frame
+            ly = -math.sin(yaw) * dx + math.cos(yaw) * dy
+            if lx > -0.03:
+                continue
+            best = (lx, ly)
+            if math.hypot(lx, ly) >= p.reverse_lookahead:
+                break
+        return best
+
+    def _back_up(self, t: Optional[float]) -> Optional[Tuple[float, float]]:
+        """(v, wz) of the back-up being driven (rear axle on the circle through the recorded point),
+        None when it is done: reverse_distance driven, the limit reached or the record used up."""
+        p = self.p
+        backed = math.hypot(self.now_world[0] - self.backing_from[0],
+                            self.now_world[1] - self.backing_from[1])
+        target = self._rewind_target()
+        if target is None or backed >= min(p.reverse_distance, p.reverse_max - self.reversed):
+            self.reversed += backed
+            self.backing_from, self.stuck_since = None, t
+            self.prefer_escape = True
+            while self.trail and math.hypot(self.trail[-1][0] - self.now_world[0],
+                                            self.trail[-1][1] - self.now_world[1]) > 0.02 \
+                    and self._ahead(self.trail[-1]):
+                self.trail.pop()                # the part driven back is ahead again
+            return None
+        lx, ly = target
+        kappa = 2.0 * ly / (lx * lx + ly * ly)
+        delta = max(-p.max_steer, min(p.max_steer, math.atan(p.wheelbase * kappa)))
+        return -p.reverse_speed, -p.reverse_speed * math.tan(delta) / p.wheelbase
+
+    def _ahead(self, pose) -> bool:
+        x, y, yaw = self.now_world
+        return math.cos(yaw) * (pose[0] - x) + math.sin(yaw) * (pose[1] - y) > 0.0
 
     def control(self, pose_now_world, inhibit: Inhibit,
                 t: Optional[float] = None) -> Optional[Tuple[float, float]]:
@@ -1594,6 +1679,8 @@ class StaticAvoid:
             self.stop('abort: ' + reason)
             return None
         pose = self.lane_pose(pose_now_world)
+        self.now_world = pose_now_world
+        self.remember(pose_now_world)
         if p.handover_after_island:
             if self.past_island_ready(pose):
                 return None
@@ -1619,7 +1706,20 @@ class StaticAvoid:
             return None
         # an escape path is driven to its end while it stays free: a plan found half way out starts
         # inside the safety margin (lethal_free_start) and took the car too close
+        if self.backing_from is not None:           # a back-up is driven to its end
+            cmd = self._back_up(t)
+            if cmd is not None:
+                return cmd
         esc = self._escape_free(pose)
+        if esc is None and self.prefer_escape:
+            self.prefer_escape = False
+            if p.escape and self.costmap is not None:
+                esc = escape_path(pose, self.costmap, self.lane_in_costmap(), self.island,
+                                  self.direction, p)
+                self.escape_plan, self.escape_tried = esc, t
+                if esc is not None:
+                    self.event = ('stuck: escape path after the back-up to s %.2f d %+.2f'
+                                  % (esc.path[-1, 0], esc.end_offset))
         if esc is None and (self.plan is None or not self.plan.feasible):
             esc = self._escape(t, pose)
             if esc is None:
@@ -1637,9 +1737,6 @@ class StaticAvoid:
         if esc is not None:
             delta = pure_pursuit(esc.path, pose, replace(p, lookahead=p.escape_lookahead))
             return p.escape_speed, p.escape_speed * math.tan(delta) / p.wheelbase
-        if self.backing_from is not None:                  # a plan again while backing up
-            self.reversed += max(self.backing_from - pose[0], 0.0)
-            self.backing_from = None
         self.stuck_since = None
         if self.stuck_log is not None:
             if self.stuck_log[2]:
