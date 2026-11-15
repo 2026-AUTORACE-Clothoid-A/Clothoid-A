@@ -6,7 +6,6 @@ Pipeline (unchanged from 2025): blur -> HSV mask OR Canny -> perspective warp ->
 histogram for the start x of each lane -> sliding windows -> target point.
 """
 from dataclasses import dataclass, field
-import math
 from typing import Optional
 
 import cv2
@@ -56,8 +55,6 @@ class LaneResult:
     zigzag: bool = False
     # track2026 only: boundary the target was built from, 'left', 'right', 'both' or '' (lost)
     reference: str = ''
-    # Heading in the warped image, only at an observed part of the boundary.
-    heading_deg: Optional[float] = None
 
 
 def make_warp_matrix(params: LaneParams) -> np.ndarray:
@@ -177,15 +174,6 @@ class LaneDetector:
         if debug:
             cv2.circle(canvas, (avex, avey), 5, (0, 255, 255), -1)
 
-        heading = None
-        selected = ([left_points] if side == SIDE_LEFT else [right_points]
-                    if side == SIDE_RIGHT else [left_points, right_points])
-        if found and all(len(points) >= 4 and min(y for _, y in points) <= avey
-                         <= max(y for _, y in points) for points in selected):
-            slopes = [float(np.polyfit(np.array(points)[:, 1], np.array(points)[:, 0], 1)[0])
-                      for points in selected]
-            heading = math.degrees(math.atan(sum(slopes)/len(slopes)))
-
         return LaneResult(found=found, target_x=float(avex), target_y=float(avey),
                           debug_image=canvas, left_points=left_points,
-                          right_points=right_points, heading_deg=heading)
+                          right_points=right_points)

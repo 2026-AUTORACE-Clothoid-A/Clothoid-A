@@ -82,7 +82,6 @@ class Line:
 class _Side:
     bottom_x: Optional[float] = None
     missed: int = 0
-    line: Optional[Line] = None
 
 
 @dataclass
@@ -107,108 +106,8 @@ class LaneTracker:
 
     def reset(self) -> None:
         self._sides = {SIDE_LEFT: _Side(), SIDE_RIGHT: _Side()}
-        self._continuity = False
-        self._clear_reference()
         self._zigzag_left = 0     # frames the school zone state still lasts
         self._attempts = []       # (windows, became a line) of every trace this frame, debug image
-
-    def set_boundary_continuity(self, enabled: bool) -> None:
-        """Start exit reacquisition without inheriting lines seen inside the cone course."""
-        if enabled and not self._continuity:
-            self._sides = {SIDE_LEFT: _Side(), SIDE_RIGHT: _Side()}
-            self._clear_reference()
-        self._continuity = enabled
-
-    def _clear_reference(self):
-        self._reference = self._pending_reference = ''
-        self._reference_target = self._pending_target = None
-        self._reference_misses = self._pending_hits = 0
-
-    def _confirmed_target(self, target, reference):
-        if target is None:
-            self._reference_misses += 1
-            self._pending_reference, self._pending_target, self._pending_hits = '', None, 0
-            if self._reference_misses > self.t.track_hold:
-                self._clear_reference()
-            return False
-        self._reference_misses = 0
-        if (self._reference_target is not None and reference != self._reference
-                and math.dist(target, self._reference_target) > self.t.track_gate):
-            if (reference != self._pending_reference or self._pending_target is None
-                    or math.dist(target, self._pending_target) > self.t.track_gate):
-                self._pending_hits = 0
-            self._pending_reference, self._pending_target = reference, target
-            self._pending_hits += 1
-            if self._pending_hits < 3:
-                return False
-        self._reference, self._reference_target = reference, target
-        self._pending_reference, self._pending_target, self._pending_hits = '', None, 0
-        return True
-
-    def _continuous_pick(self, lines, lane_width, w):
-        # Match on common *observed* rows. A bottom extrapolation of a short,
-        # slanted line can cross the car centre even while it is the same boundary.
-        # A distant short fragment must not acquire control through extrapolation.
-        lines = [line for line in lines if line.points[:, 1].min() <= self.t.look_row
-                 <= line.points[:, 1].max()]
-        matches = []
-        for side, state in self._sides.items():
-            old = state.line
-            if old is None:
-                continue
-            for i, line in enumerate(lines):
-                lo = max(old.points[:, 1].min(), line.points[:, 1].min())
-                hi = min(old.points[:, 1].max(), line.points[:, 1].max())
-                if hi - lo < self.p.warp_h / self.p.nwindows:
-                    continue
-                rows = np.linspace(lo, hi, 5)
-                distance = float(np.median(abs(np.polyval(old.coeff, rows)
-                                              - np.polyval(line.coeff, rows))))
-                if distance <= self.t.track_gate:
-                    matches.append((distance + (0 if line.color == old.color else self.p.margin/4),
-                                    side, i))
-        chosen, used = {}, set()
-        for _, side, i in sorted(matches):
-            if side not in chosen and i not in used:
-                chosen[side] = lines[i]
-                used.add(i)
-        # Reserve matched boundaries before acquiring another side. Do not give
-        # the same line two labels or immediately replace a temporarily lost side.
-        for side in (SIDE_LEFT, SIDE_RIGHT):
-            if side in chosen or self._sides[side].line is not None:
-                continue
-            candidates = [(abs(line.bottom_x-w/2), i) for i, line in enumerate(lines)
-                          if i not in used and (line.bottom_x < w/2 if side == SIDE_LEFT
-                                                else line.bottom_x > w/2)]
-            if candidates:
-                _, i = min(candidates)
-                chosen[side] = lines[i]
-                used.add(i)
-        left, right = chosen.get(SIDE_LEFT), chosen.get(SIDE_RIGHT)
-        if left is not None and right is not None:
-            # Check actual common support, not the unobserved image bottom.
-            lo = max(left.points[:, 1].min(), right.points[:, 1].min())
-            hi = min(left.points[:, 1].max(), right.points[:, 1].max())
-            row = float(np.clip(self.t.look_row, lo, hi))
-            gap = right.x_at(row)-left.x_at(row)
-            if lo > hi or not self.t.min_gap_ratio*lane_width <= gap <= self.t.max_gap_ratio*lane_width:
-                # Prefer a continued observation over a newly acquired boundary.
-                if self._sides[SIDE_RIGHT].line is not None and self._sides[SIDE_LEFT].line is None:
-                    left = None
-                else:
-                    right = None
-        self._remember_sides(left, right)
-        return left, right
-
-    def _remember_sides(self, left, right):
-        for side, line in ((SIDE_LEFT, left), (SIDE_RIGHT, right)):
-            state = self._sides[side]
-            if line is not None:
-                state.bottom_x, state.line, state.missed = line.bottom_x, line, 0
-            else:
-                state.missed += 1
-                if state.missed > self.t.track_hold:
-                    state.bottom_x = state.line = None
 
     # --- masks ------------------------------------------------------------------
     def _masks(self, bgr: np.ndarray):
@@ -355,8 +254,6 @@ class LaneTracker:
 
     # --- boundaries -------------------------------------------------------------
     def _pick(self, lines: List[Line], lane_width: float, w: int):
-        if self._continuity:
-            return self._continuous_pick(lines, lane_width, w)
         t = self.t
         car_x = w / 2.0
         chosen = {}
@@ -384,7 +281,14 @@ class LaneTracker:
                     right = None
                 else:
                     left = None
-        self._remember_sides(left, right)
+        for side, line in ((SIDE_LEFT, left), (SIDE_RIGHT, right)):
+            state = self._sides[side]
+            if line is not None:
+                state.bottom_x, state.missed = line.bottom_x, 0
+            else:
+                state.missed += 1
+                if state.missed > t.track_hold:
+                    state.bottom_x = None
         return left, right
 
     def _expected(self, side: int, car_x: float, lane_width: float) -> float:
@@ -443,16 +347,12 @@ class LaneTracker:
         # rules: 450 mm between the inner tips, 690 mm between the outer tips)
         half_lane = float(lane_width) * (self.t.zigzag_width_ratio if zigzag_zone else 1.0)
         target = None
-        heading = None
         reference = ''      # which boundary the target was built from
         bases = []          # point(s) on the boundary at look_row the target is measured from
         if side == SIDE_BOTH and left is not None and right is not None:
             y = float(self.t.look_row)
             target = ((left.x_at(y) + right.x_at(y)) / 2.0, y)
             reference = 'both'
-            if all(line.points[:, 1].min() <= y <= line.points[:, 1].max()
-                   for line in (left, right)):
-                heading = math.degrees(math.atan((left.slope_at(y)+right.slope_at(y))/2))
             bases = [(left.x_at(y), y), (right.x_at(y), y)]
         else:
             order = (right, left) if side == SIDE_RIGHT else (left, right)
@@ -461,14 +361,8 @@ class LaneTracker:
                     toward = +1 if line is left else -1
                     target = self._offset_point(line, toward, half_lane)
                     reference = 'left' if line is left else 'right'
-                    # A fitted line beyond its observed support is not alignment evidence.
-                    y = float(self.t.look_row)
-                    if line.points[:, 1].min() <= y <= line.points[:, 1].max():
-                        heading = math.degrees(math.atan(line.slope_at(y)))
                     bases = [(line.x_at(float(self.t.look_row)), float(self.t.look_row))]
                     break
-        if self._continuity and not self._confirmed_target(target, reference):
-            target, reference, heading, bases = None, '', None, []
         found = target is not None
         tx, ty = target if found else (w / 2.0, h / 2.0)
 
@@ -481,7 +375,7 @@ class LaneTracker:
 
         return LaneResult(found=found, target_x=float(tx), target_y=float(ty), debug_image=canvas,
                           left_points=as_points(left), right_points=as_points(right),
-                          zigzag=zigzag_zone, reference=reference, heading_deg=heading)
+                          zigzag=zigzag_zone, reference=reference)
 
     # --- debug image ------------------------------------------------------------
     LEFT_COLOUR, RIGHT_COLOUR = (255, 80, 0), (0, 0, 255)       # BGR: blue, red

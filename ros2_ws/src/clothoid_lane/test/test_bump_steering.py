@@ -11,8 +11,6 @@ from rclpy.duration import Duration
 from rclpy.parameter import Parameter
 from std_msgs.msg import Bool, Float32, Header
 from sensor_msgs.msg import Imu
-from nav_msgs.msg import Odometry
-from rclpy.time import Time
 
 for package in ('clothoid_lane', 'clothoid_common'):
     sys.path.insert(0, str(Path(__file__).parents[2] / package))
@@ -54,71 +52,6 @@ def test_cone_handover_cap_preserves_normal_speed_scaled_steering(lane):
     node.on_speed_limit(Float32(data=.2))
     frame(node)
     assert node.last_cmd.linear.x == pytest.approx(.2)
-
-
-def test_cone_exit_command_waits_for_real_travel_alignment_and_ramps(lane, monkeypatch):
-    node, result = lane
-    result.target_x, result.target_y, result.heading_deg = 160., 120., 0.
-    seconds = [100.]
-    clock = SimpleNamespace(now=lambda: Time(seconds=seconds[0]))
-    monkeypatch.setattr(node, 'get_clock', lambda: clock)
-
-    def step(t, fresh=True):
-        seconds[0] = 100.+t
-        if fresh:
-            odom = Odometry()
-            odom.header.stamp = clock.now().to_msg()
-            odom.pose.pose.position.x = .3*t
-            odom.pose.pose.orientation.w = 1.
-            node.on_odom(odom)
-        frame(node)
-        return node.last_cmd.linear.x
-
-    step(0.)
-    node.on_cone_active(Bool(data=True))
-    node.cone_handover.request_exit(True)
-    for i in range(1, 13):
-        assert step(i*.05) == .3
-    assert node.cone_handover.ready
-    node.on_cone_active(Bool(data=False))
-    node.cone_handover.request_exit(False)
-    for i in range(13, 42):
-        assert step(i*.05) == .3
-    speeds = [step(i*.05) for i in range(42, 74)]
-    assert speeds == sorted(speeds)
-    assert .3 < max(speeds[:-10]) <= .8
-    assert speeds[-1] == .8
-
-
-@pytest.mark.parametrize('heading,target', [(None, (160., 120.)), (45., (160., 120.)),
-                                           (0., (230., 185.))])
-def test_cone_exit_missing_alignment_or_stale_odometry_keeps_speed_cap(
-        lane, monkeypatch, heading, target):
-    node, result = lane
-    result.target_x, result.target_y = target
-    seconds = [100.]
-    monkeypatch.setattr(node, 'get_clock', lambda: SimpleNamespace(
-        now=lambda: Time(seconds=seconds[0])))
-    node.on_cone_active(Bool(data=True))
-    node.on_cone_active(Bool(data=False))
-    for i in range(120):
-        seconds[0] += .05
-        # Alternate missing heading and missing odometry; neither may authorize acceleration.
-        result.heading_deg = heading if i < 60 else 0.
-        if i >= 60:
-            result.target_x, result.target_y = 160., 120.
-        if i < 60:
-            node.odom_stamp = Time(seconds=seconds[0])
-            node.odom_travel = i*.03
-        frame(node)
-        assert node.last_cmd.linear.x == .3
-
-
-def test_invalid_cone_recovery_parameters_are_rejected(lane):
-    node, _ = lane
-    for name, value in [('cone_exit_min_distance', -.1), ('cone_exit_ramp_sec', 0.),
-                        ('cone_exit_max_heading_deg', float('nan'))]:
-        assert not node.set_parameters([Parameter(name, value=value)])[0].successful
 
 
 def test_bump_locked_target_cannot_confirm_cone_lane_handover(lane):

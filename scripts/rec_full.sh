@@ -15,6 +15,5 @@ exec ros2 bag record -o "$OUT" \
   /cmd_vel /cmd_vel_lane /cmd_vel_state /cmd_vel_cone /cmd_vel_avoid /cmd_vel_parking /cmd_vel_finish \
   /detections /direction_flag /parking_flag /speed_limit /mission/state \
   /cone/mission_active /lidar/obstacles /lidar/limos \
-  /cone/exiting /cone/exit_complete /lane/cone_exit_ready /lane/target_warp \
   /avoid/active /avoid/done /avoid/lane /avoid/path /avoid/cues \
   /camera/color/image_10hz /camera/color/camera_info /rosout
