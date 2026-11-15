@@ -7,6 +7,7 @@ import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
 from std_msgs.msg import Float32
+from sensor_msgs.msg import Imu
 from clothoid_interfaces.msg import Detection, DetectionArray
 from clothoid_mission.mission_logic import classes_seen
 from clothoid_mission.mission_node import MissionNode
@@ -35,8 +36,8 @@ def detection(x, size, confidence=.9):
                      x_min=x, y_min=180, x_max=x+size, y_max=180+size)
 
 
-@pytest.mark.parametrize('x,size', [(8,28), (100,32), (300,36), (600,28)])
-def test_configured_node_confirms_roadside_sign_and_requests_slow_speed(mission, x, size):
+@pytest.mark.parametrize('x,size', [(8,24), (100,32), (300,36), (600,24)])
+def test_configured_node_confirms_roadside_sign_and_waits_for_line_or_pitch(mission, x, size):
     import time
     node, _, ex, limits = mission
     for index in range(2):
@@ -46,14 +47,21 @@ def test_configured_node_confirms_roadside_sign_and_requests_slow_speed(mission,
     node.on_detections(DetectionArray(detections=[detection(x+2,size)]))
     assert node.seen == {'sign_bump'}
     node.on_timer()
-    assert node.logic.bump_state == 'approaching'
+    assert node.logic.bump_state == 'idle' and node.logic.bump_line_armed_at is not None
+    assert not limits
+    # Contact still activates the speed limit if the start line was missed.
+    imu = Imu()
+    imu.orientation.y, imu.orientation.w = .04, .9992
+    node.on_imu(imu)
+    node.on_timer()
+    assert node.logic.bump_state == 'on_bump'
     deadline = time.monotonic()+2.
     while not limits and time.monotonic()<deadline:
         ex.spin_once(timeout_sec=.01)
     assert limits and limits[-1] == pytest.approx(.2)
 
 
-@pytest.mark.parametrize('x,size,confidence', [(20,30,.59), (0,30,.9), (20,27,.9)])
+@pytest.mark.parametrize('x,size,confidence', [(20,30,.59), (0,30,.9), (20,23,.9)])
 def test_low_confidence_clipped_and_unresolvable_signs_still_fail(mission, x, size, confidence):
     node, _, _, _ = mission
     for _ in range(5):
@@ -86,7 +94,7 @@ def test_bump_height_can_be_tuned_without_restarting_the_node(mission):
 
 
 @pytest.mark.parametrize('name,small,large', [('sign_parking',27,28),
-                                          ('sign_pedestrian',27,28), ('sign_slow',30,50)])
+                                          ('sign_pedestrian',27,28), ('sign_slow',27,28)])
 def test_other_signs_keep_their_own_size_gate(mission, name, small, large):
     node, _, _, _ = mission
     from rclpy.parameter import Parameter

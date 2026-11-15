@@ -11,6 +11,8 @@ Confirmed sign tracks prepare local observers. They do not transfer driving cont
 The light/pedestrian observer starts a speed limit only after confirming its crosswalk stop line.
 Parking needs a separate entry line and fresh passive lidar bay evidence. Floor processing is
 shared by those observers; parking-only preparation caps image decoding at 6 Hz.
+Slow and bump signs prepare a start-line observer; arrival activates their speed limit without
+stopping. The bump IMU contact fallback also remains active while waiting for that line.
 lane_main keeps steering during the stop-line approach; its STOP holds the car.
 Its steering is not used (it follows the left yellow line, which the zigzag before the pedestrian
 crosswalk turned 9 deg off in the sim), so its left-line-lost abort is off (`lost_hold_sec` 1e9).
@@ -140,6 +142,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('require_scene_confirmation', d.require_scene_confirmation)
         self.declare_parameter('parking_enabled', d.parking_enabled)
         self.declare_parameter('slow_arms_bump', d.slow_arms_bump)
+        self.declare_parameter('slow_at_stopline', d.slow_at_stopline)
+        self.declare_parameter('bump_at_stopline', d.bump_at_stopline)
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
         self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
@@ -174,6 +178,8 @@ class MissionNode(QuietEventsMixin, Node):
             require_scene_confirmation=get('require_scene_confirmation'),
             parking_enabled=get('parking_enabled'),
             slow_arms_bump=get('slow_arms_bump'),
+            slow_at_stopline=get('slow_at_stopline'),
+            bump_at_stopline=get('bump_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
             cone_confirm_sec=get('cone_confirm_sec'),
@@ -461,10 +467,13 @@ class MissionNode(QuietEventsMixin, Node):
         cv2.putText(img, text, (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
         return img
 
-    def line_stop_step(self, now: float, arm: bool):
+    def line_stop_step(self, now: float, arm: bool, require_crosswalk: bool = True):
         """Arm / disarm FinishCore; its speed for lane_main while it runs, else None."""
         if self.core is None:
             return None
+        if arm:
+            self.core.require_crosswalk = bool(
+                self.get_parameter('line_require_crosswalk').value and require_crosswalk)
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
         elif not arm and self.core.phase != Phase.IDLE:
@@ -526,7 +535,7 @@ class MissionNode(QuietEventsMixin, Node):
         if self.logic.cone_entered and not self.cone_entered_logged:
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered')
-        self.line_speed = self.line_stop_step(now, out.stop_arm)
+        self.line_speed = self.line_stop_step(now, out.stop_arm, out.stop_require_crosswalk)
         self._image_on(out.stop_arm or out.parking_prepare)
         self._publish_changed('parking_prepare', out.parking_prepare,
                               lambda v: self.prepare_pub.publish(Bool(data=bool(v))))
@@ -542,7 +551,9 @@ class MissionNode(QuietEventsMixin, Node):
             self.light_target_id = None
             self.sign_tracker.pin(None)
         armed = [n for n, a in (('pedestrian', self.logic.pedestrian_armed_at),
-                                ('light', self.logic.light_armed_at)) if a is not None]
+                                ('light', self.logic.light_armed_at),
+                                ('slow', self.logic.slow_armed_at),
+                                ('bump_line', self.logic.bump_line_armed_at)) if a is not None]
         core = self.core
         left = core.remaining() if core is not None and core.phase != Phase.IDLE else None
         self.mission_state_pub.publish(String(data=json.dumps({

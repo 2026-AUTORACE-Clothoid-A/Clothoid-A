@@ -17,9 +17,9 @@ mission:
     # The valid roadside bump warning is far off centre in this camera.
     bump_max_offset_height_ratio: 0.0 # <=0 disables only the bump lateral gate
     bump_min_area: 0.0
-    bump_min_height: 28.0      # bag_1111_065554: own warning retained, adjacent warning rejected
-    slow_min_area: 2500.0
-    slow_min_height: 40.0
+    bump_min_height: 24.0      # prepare before the bump's start stop line
+    slow_min_area: 0.0
+    slow_min_height: 28.0      # prepare before the slow zone's start stop line
     parking_min_area: 0.0
     parking_min_height: 28.0   # prepare before entry/bay handover; retain source quality checks
     pedestrian_min_area: 0.0
@@ -73,6 +73,9 @@ mission:
     fork_right_direction: 1
     # Only used when require_scene_confirmation is explicitly disabled (legacy mode).
     parking_at_stopline: true
+    # Signs prepare these missions; their start stop line activates the slow speed.
+    slow_at_stopline: true
+    bump_at_stopline: true
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true

@@ -4,7 +4,10 @@ from types import SimpleNamespace
 import pytest
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CameraInfo
+from nav_msgs.msg import Odometry
+from clothoid_finish.bev import CameraModel
+from clothoid_finish.finish_core import Phase
 from clothoid_interfaces.msg import Detection, DetectionArray
 from clothoid_mission.mission_node import MissionNode
 from clothoid_mission.mission_logic import STOPPED_LIGHT, DRIVE
@@ -106,16 +109,66 @@ def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
     n, clock = node
     flags = []
     n.bump_approach_pub = SimpleNamespace(publish=lambda msg: flags.append(msg.data))
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+                         k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, 'sign_bump')
     n.on_timer()
-    assert flags == [True]
+    assert flags == [False]
+    n.core.phase = Phase.STOP
+    n.on_timer()
+    assert flags == [False, True]
     clock[0] += 1.1
     n.on_timer()
-    assert flags == [True, True]
+    assert flags == [False, True, True]
     clock[0] += n.logic.p.bump_arm_timeout_sec
     n.on_timer()
-    assert flags == [True, True, False]
+    assert flags == [False, True, True, False]
+
+
+@pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump'])
+def test_stopline_mission_uses_camera_distance_and_measured_travel_before_slowing(node, sign):
+    from test_line_stop import render
+
+    n, clock = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+                         k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda msg: limits.append(msg.data))
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, sign)
+    n.on_timer()
+    core = n.core
+    assert core.phase == Phase.FOLLOW and not core.require_crosswalk
+    assert n.image_sub is not None and not limits
+
+    image = render(cam, 1.3, 0., 0., crosswalk=False, letters=False)
+    for _ in range(3):
+        clock[0] += .05
+        msg = n.bridge.cv2_to_imgmsg(image, 'bgr8')
+        msg.header.stamp.sec = int(clock[0])
+        msg.header.stamp.nanosec = int(round((clock[0] - int(clock[0])) * 1e9))
+        n.on_image(msg)
+        n.on_timer()
+        assert not limits
+    assert core.phase == Phase.COMMIT and core.remaining() > .4
+
+    # The line can leave the image. Use measured 0.8 m/s, independently of the 0.2 slow setting.
+    for _ in range(30):
+        clock[0] += .05
+        msg = Odometry()
+        msg.header.stamp.sec = int(clock[0])
+        msg.header.stamp.nanosec = int(round((clock[0] - int(clock[0])) * 1e9))
+        msg.twist.twist.linear.x = .8
+        n.on_odom(msg)
+        n.on_timer()
+        if limits:
+            break
+    assert core.phase == Phase.STOP
+    assert limits == [pytest.approx(.2)]
+    assert not n.logic.parking_flag and n.image_sub is None
 
 
 def test_roadside_candidate_does_not_stop_or_park_without_scene(node):
