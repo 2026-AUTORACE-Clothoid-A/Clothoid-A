@@ -5,12 +5,14 @@ Publishes a Twist on `cmd_topic` (twist_mux input `cone`, 90). Steering from pur
 converted with the bicycle model: w = v * tan(delta) / wheelbase. A short reverse
 recovery is allowed only when cones remain but no boundary path is usable, after
 checking its body sweep against the fresh full laser scan.
+After rear-axle exit arrival, retain priority while connecting to freshly
+detected lane steering; release only after the IMU / speed response agrees.
 """
 import math
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import PointStamped, PoseArray, Twist
+from geometry_msgs.msg import PointStamped, PoseArray, Twist, TwistStamped
 from nav_msgs.msg import Path, Odometry
 from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
@@ -26,6 +28,8 @@ from clothoid_lidar.cone_exit import ExitPathMemory, clearance
 from clothoid_lidar.cone_sorter_node import to_path
 from clothoid_lidar.cone_recovery import current_boundaries, recovery_confirmed, reverse_sweep_clear
 from clothoid_lidar.cone_odometry import ConeOdometry
+from clothoid_lidar.cone_lane_connection import (ConnectionParams, LaneConnection,
+                                               central_limit, forward_arc)
 
 
 def path_to_array(msg: Path) -> np.ndarray:
@@ -60,6 +64,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.declare_parameter('corner_endpoint_enabled', d.corner_endpoint_enabled)
         self.declare_parameter('path_relaxation_enabled', d.path_relaxation_enabled)
         self.declare_parameter('exit_clearance', 0.2)  # path to detected obstacle centre, metres
+        for name, value in vars(ConnectionParams()).items():
+            self.declare_parameter('exit_connect_' + name, value)
 
         self.follower = ConeFollower(self._build(lambda n: self.get_parameter(n).value))
         self.odometry = ConeOdometry(self.follower.p.rear_axle_x, self.follower.p.boundary_timeout)
@@ -67,6 +73,9 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.active = False
         self.exiting = False
         self.exit_memory = ExitPathMemory()
+        self.connection = LaneConnection(self._connection_params(lambda n: self.get_parameter(n).value))
+        self.lane_candidate = self.lane_candidate_time = self.lane_candidate_stamp = None
+        self.last_command_steering = 0.
         self.pose = None
         self.pose_time = None
         self.pose_header_age = None
@@ -102,8 +111,10 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             Bool, self.get_parameter('mission_active_topic').value, self.on_active, 1)
 
         self.exit_done_pub = self.create_publisher(Bool, '/cone/exit_complete', 1)
+        self.connecting_pub = self.create_publisher(Bool, '/cone/connecting', 1)
         self.create_subscription(Bool, '/cone/exiting', self.on_exiting, 1)
         self.create_subscription(Bool, '/lane/cone_exit_ready', self.on_lane_ready, 1)
+        self.create_subscription(TwistStamped, '/lane/cone_exit_candidate', self.on_lane_candidate, 1)
         # Pose is a high-rate sensor input. Prefer its latest sample rather
         # than waiting for retransmission of a lost reliable sample.
         self.create_subscription(Odometry, self.get_parameter('odom_topic').value, self.on_odom,
@@ -118,7 +129,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
 
     @staticmethod
     def _build(value) -> FollowerParams:
-        return FollowerParams(
+        params = FollowerParams(
             speed=value('speed'), reverse_speed=value('reverse_speed'),
             reverse_steer_deg=value('reverse_steer_deg'), wheelbase=value('wheelbase'),
             rear_axle_x=value('rear_axle_x'), lfd=value('lfd'), centerline_ds=value('centerline_ds'),
@@ -126,12 +137,16 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             lsq_window_size=value('lsq_window_size'), boundary_timeout=value('boundary_timeout'),
             corner_endpoint_enabled=value('corner_endpoint_enabled'),
             path_relaxation_enabled=value('path_relaxation_enabled'))
+        central_limit(params.wheelbase)
+        return params
 
     def on_parameters(self, params):
         proposed = {p.name: p.value for p in params}
         try:
             candidate = self._build(lambda n: proposed.get(n, self.get_parameter(n).value))
             estimator = ConeOdometry(candidate.rear_axle_x, candidate.boundary_timeout)
+            connection_params = self._connection_params(
+                lambda n: proposed.get(n, self.get_parameter(n).value))
         except Exception as exc:
             return SetParametersResult(successful=False, reason=str(exc))
         if candidate.rear_axle_x != self.follower.p.rear_axle_x:
@@ -140,7 +155,18 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         else:
             self.odometry.timeout = candidate.boundary_timeout
         self.follower.p = candidate
+        self.connection.p = connection_params
         return SetParametersResult(successful=True)
+
+    @staticmethod
+    def _connection_params(value):
+        return ConnectionParams(**{n: value('exit_connect_' + n)
+                                   for n in ConnectionParams.__dataclass_fields__})
+
+    def reset_connection(self):
+        self.connection.clear()
+        self.lane_candidate = self.lane_candidate_time = self.lane_candidate_stamp = None
+        self.connecting_pub.publish(Bool(data=False))
 
     def on_left(self, msg: Path):
         self.left_scan_stamp = (msg.header.stamp.sec, msg.header.stamp.nanosec)
@@ -166,6 +192,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
     def on_active(self, msg: Bool):
         was_active, self.active = self.active, msg.data
         if self.active and not was_active:
+            self.reset_connection()
             self.start_scan_stamp = self.obstacles_scan_stamp
             self.exit_memory.clear()
             self.follower.reset()
@@ -176,6 +203,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             if self.left_time is not None or self.right_time is not None:
                 self.boundary_updated()
         elif was_active and not self.active:
+            self.reset_connection()
             self.exiting = False
             self.exit_memory.clear()
             self.follower.reset()
@@ -188,6 +216,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             self.boundary_wait_since = None
 
     def on_exiting(self, msg):
+        if self.exiting and not msg.data:
+            self.reset_connection()
         if msg.data and not self.exiting:
             self.lane_ready = False
             self.lane_ready_time = None
@@ -196,6 +226,18 @@ class ConeFollowerNode(QuietEventsMixin, Node):
     def on_lane_ready(self, msg):
         self.lane_ready = msg.data
         self.lane_ready_time = self.get_clock().now()
+
+    def on_lane_candidate(self, msg):
+        now = self.get_clock().now()
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        age = now.nanoseconds * 1e-9 - stamp
+        if (msg.header.frame_id != 'base_link' or not 0. <= age <= self.follower.p.boundary_timeout
+                or (self.lane_candidate_stamp is not None and stamp <= self.lane_candidate_stamp)
+                or not all(math.isfinite(v) for v in (msg.twist.linear.x, msg.twist.angular.z))
+                or msg.twist.linear.x < 0.):
+            return
+        self.lane_candidate = msg.twist
+        self.lane_candidate_time, self.lane_candidate_stamp = now, stamp
 
     def on_odom(self, msg):
         self.odom_received += 1
@@ -237,6 +279,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
 
     def _reset_pose_memory(self):
         self.exit_memory.clear()
+        self.reset_connection()
         self.follower.reset()
         self.pose = self.pose_time = None
         self.pose_generation = self.odometry.generation
@@ -297,9 +340,9 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         p = self.follower.p
         pose = self.pose if self.pose is not None and self._fresh(self.pose_time) else None
         lane_ready = self.lane_ready and self._fresh(self.lane_ready_time)
-        if pose is not None and lane_ready and self.exit_memory.handover_ready(
-                pose, p.rear_axle_x):
-            self.exit_done_pub.publish(Bool(data=True))
+        arrived = pose is not None and self.exit_memory.handover_ready(pose, p.rear_axle_x)
+        if self.connection.active or arrived:
+            self.connect_lane(pose, lane_ready)
             return
         if lane_ready and pose is not None:
             remaining = self.exit_memory.rear_axle_remaining(pose, p.rear_axle_x)
@@ -313,7 +356,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
                   and clearance(center, self.obstacles) >= self.get_parameter('exit_clearance').value)
         if not usable:
             # Keep the cone MUX input stopped rather than fall through to an unready lane.
-            self.cmd_pub.publish(Twist())
+            self.publish_stop()
             if self.center_pub.get_subscription_count():
                 self.center_pub.publish(to_path(center, Header(frame_id='base_link')))
             message = ('cone EXIT: no observed endpoint; waiting for measured path'
@@ -324,6 +367,50 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             return
         self.publish_result(FollowResult(p.speed, steering_from_target(target, p),
                                          center=center, target=target))
+
+    def publish_stop(self):
+        self.last_command_steering = 0.
+        self.cmd_pub.publish(Twist())
+
+    def connect_lane(self, pose, lane_ready):
+        p = self.follower.p
+        now = self.get_clock().now().nanoseconds * 1e-9
+        candidate_fresh = (self.lane_candidate is not None and self._fresh(self.lane_candidate_time)
+                           and 0. <= now - self.lane_candidate_stamp <= p.boundary_timeout)
+        if pose is None or not candidate_fresh or not self._fresh(self.obstacles_time):
+            if self.connection.active:
+                self.connection.pause(now)
+            self.publish_stop()
+            return
+        if not self.connection.active:
+            self.connection.start(now, pose, self.last_command_steering, p.wheelbase)
+            self.get_logger().info('cone EXIT: rear axle arrived; connecting to live lane at low speed')
+        self.connecting_pub.publish(Bool(data=True))
+        measured_speed = self.odometry.speed
+        measured_yaw_rate = self.odometry.gyro - self.odometry.bias
+        speed, steering, ready = self.connection.step(
+            now, pose, self.lane_candidate.linear.x, self.lane_candidate.angular.z,
+            p.wheelbase, p.speed, measured_speed, measured_yaw_rate,
+            lane_ready, p.boundary_timeout)
+        # Check both the requested turn and the measured turn while the steering
+        # catches up. This uses the same fresh obstacle clearance as cone pursuit.
+        measured = (math.atan(p.wheelbase * measured_yaw_rate / measured_speed)
+                    if measured_speed > .03 else 0.)
+        paths = [forward_arc(angle, p.wheelbase, p.rear_axle_x, p.lfd, p.centerline_ds)
+                 for angle in (steering, measured)]
+        clear = all(clearance(path, self.obstacles) >= self.get_parameter('exit_clearance').value
+                    for path in paths)
+        if speed <= 0. or not clear:
+            self.connection.pause(now)
+            self.publish_stop()
+            self.get_logger().warn('cone EXIT: lane connection stopped (stale, blocked or bounded out)',
+                                   throttle_duration_sec=1.)
+            return
+        self.publish_result(FollowResult(speed, steering, center=paths[0], source='lane_connection'))
+        if ready:
+            # Keep publishing through the acknowledgement, so the last priority
+            # command and the lane command describe the same steering arc.
+            self.exit_done_pub.publish(Bool(data=True))
 
     def _fresh(self, stamp) -> bool:
         if stamp is None:
@@ -348,7 +435,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
                                       pose, obstacles, self.get_parameter('exit_clearance').value,
                                       allow_reverse=confirmed and started)
         if result is None:
-            self.cmd_pub.publish(Twist())
+            self.publish_stop()
             return
         if result.reverse:
             remaining = self.follower.p.lfd-(self.follower.corridor.travelled-self.follower.reverse_start_travel)
@@ -379,6 +466,9 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.publish_result(result)
 
     def publish_result(self, result):
+        self.last_command_steering = (float(np.clip(result.steering,
+            -central_limit(self.follower.p.wheelbase), central_limit(self.follower.p.wheelbase)))
+            if result.speed > 0. else 0.)
         cmd = Twist()
         cmd.linear.x = float(result.speed)
         cmd.angular.z = float(

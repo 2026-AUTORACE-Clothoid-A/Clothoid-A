@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import math
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -67,6 +68,33 @@ def test_bump_locked_target_cannot_confirm_cone_lane_handover(lane):
     node.on_steering_lock(Bool(data=True))
     frame(node)
     assert not node.cone_handover.ready
+
+
+def test_connection_candidate_is_only_a_new_unlocked_detection(lane):
+    node, result = lane
+    node.cone_candidate_pub = Mock()
+    node.on_cone_active(Bool(data=True))
+    node.cone_handover.request_exit(True)
+    frame(node)
+    msg = node.cone_candidate_pub.publish.call_args.args[0]
+    assert msg.header.frame_id == 'base_link'
+    assert msg.header.stamp.sec > 0
+    assert msg.twist == node.last_cmd
+    node.cone_candidate_pub.publish.reset_mock()
+    node.on_steering_lock(Bool(data=True))
+    frame(node)
+    node.cone_candidate_pub.publish.assert_not_called()
+    node.steering_locked = False
+    result.found = False
+    frame(node)
+    node.cone_candidate_pub.publish.assert_not_called()
+
+
+def test_normal_lane_driving_does_not_publish_connection_candidates(lane):
+    node, _ = lane
+    node.cone_candidate_pub = Mock()
+    frame(node)
+    node.cone_candidate_pub.publish.assert_not_called()
 
 
 def test_lock_retains_the_actual_speed_scaled_angle_and_current_speed(lane):
