@@ -120,8 +120,10 @@ class SignTracker:
             b = Observation(d.class_name, float(d.confidence), d.x_min, d.y_min, d.x_max, d.y_max)
             if self.box_reason(b, width, height) is None:
                 boxes.append(b)
-        # One physical light may be returned twice with different colours. Conflicting
-        # overlapping colours are unknown, rather than a green permission to depart.
+        # The same housing can yield overlapping colours. Prefer a quality green;
+        # it still needs three source-frame hits on this same signal to permit going.
+        priority = {'traffic_light_green': 2, 'traffic_light_red': 1,
+                    'traffic_light_yellow': 0}
         result = []
         for b in sorted(boxes, key=lambda b: -b.confidence):
             same = next((i for i, old in enumerate(result) if family(b.class_name) == family(
@@ -130,8 +132,8 @@ class SignTracker:
                 result.append(b)
             elif family(b.class_name) == 'traffic_light' and b.class_name != result[same].class_name:
                 old = result[same]
-                result[same] = Observation('traffic_light_unknown', old.confidence,
-                                           old.x_min, old.y_min, old.x_max, old.y_max)
+                if priority.get(b.class_name, -1) > priority.get(old.class_name, -1):
+                    result[same] = b
         return result
 
     def update(self, stamp, detections, width=640, height=480):

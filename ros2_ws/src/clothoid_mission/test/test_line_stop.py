@@ -22,7 +22,7 @@ HALF_LANE, LINE_W = 0.26, 0.02
 STOP_X = 2.0                       # near edge of the white stop line, world x
 
 
-def render(cam, x, y, yaw, crosswalk=True, letters=True):
+def render(cam, x, y, yaw, crosswalk=True, letters=True, boundary=True, diamond=False):
     h, w = 480, 640
     v, u = np.mgrid[0:h, 0:w].astype(np.float64)
     below = np.arctan((v - cam.cy) / cam.fy) + cam.pitch
@@ -36,7 +36,9 @@ def render(cam, x, y, yaw, crosswalk=True, letters=True):
     img = np.full((h, w, 3), (40, 45, 50), np.uint8)
     inside = ok & (np.abs(wy) < HALF_LANE)
     img[ok & (np.abs(np.abs(wy) - HALF_LANE) < LINE_W / 2)] = YELLOW
-    white = inside & (wx >= STOP_X) & (wx < STOP_X + 0.05)
+    white = inside & (wx >= STOP_X) & (wx < STOP_X + 0.05) & boundary
+    if diamond:
+        white |= inside & (np.abs(np.abs(wx-(STOP_X-.2))+np.abs(wy)-.14) < .012)
     if crosswalk:                   # 4 bars along the lane from 6 cm past the line, far edge line
         bars = (wx >= STOP_X + 0.11) & (wx < STOP_X + 0.51)
         for cy in (-0.165, -0.055, 0.055, 0.165):
@@ -51,10 +53,10 @@ def render(cam, x, y, yaw, crosswalk=True, letters=True):
     return img
 
 
-def run(x0=0.8, y0=0.0, yaw0_deg=0.0, **scene):
+def run(x0=0.8, y0=0.0, yaw0_deg=0.0, params=None, **scene):
     cam = CameraModel()
     core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam),
-                        FinishParams(rear_offset=0.1, odom_scale=1.0))
+                        params or FinishParams(rear_offset=0.1, odom_scale=1.0))
     x, y, yaw, v, steer = x0, y0, math.radians(yaw0_deg), 0.0, 0.0
     dt, t = 0.01, 0.0
     core.start(t)
@@ -122,6 +124,20 @@ def test_committed_target_cannot_jump_to_a_nearer_marking():
     assert core.target == target
 
 
+def test_rejected_later_line_is_not_reported_as_the_active_stop_measurement():
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam),
+                        FinishParams(band=.22))
+    core.start(0.)
+    for t in (0., .05, .1):
+        core._sighting(t, 1.)
+    target = core.target
+    core.dist = .6  # the committed line is now below the camera
+    core.image(.2, render(cam, 1.3, 0., 0., crosswalk=False, letters=False))
+    assert core.observation.lines  # another white line is present in the image
+    assert core.cross_x is None and core.target == target
+
+
 def test_stale_line_sightings_do_not_form_a_confirmation():
     core = LineStopCore(Bev(LaneParams(), CameraModel()))
     core.start(0.)
@@ -142,3 +158,36 @@ def test_mission_line_requires_crosswalk_context():
     for k in range(5, 10):
         core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=True, letters=False))
     assert core.phase == Phase.COMMIT
+
+
+def test_mission_stop_reference_is_the_front_axle_without_changing_finish_defaults():
+    params = FinishParams(front=.1, stop_gap=.03, rear_offset=.1, odom_scale=1.)
+    core, x = run(params=params)
+    assert core.phase == Phase.STOP
+    assert -.01 <= STOP_X-(x+.1) <= .04
+    assert FinishParams().front == .161
+
+
+def test_oblique_mission_boundary_is_visible_without_becoming_a_crosswalk_stop():
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam),
+                        FinishParams(band=.22))
+    core.require_crosswalk = True
+    core.observe_entry = True
+    core.start(0.)
+    for k in range(3):
+        core.image(k*.05, render(cam, 1.3, 0., math.radians(8), crosswalk=False, letters=False))
+    assert core.phase == Phase.FOLLOW and core.cross_x is None
+    assert len(core.observation.entry_lines) == 1
+    assert .65 < core.observation.entry_lines[0] < .75
+
+
+def test_entry_component_fit_rejects_diamond_and_letter_markings():
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam),
+                        FinishParams(band=.22))
+    core.observe_entry = True
+    for yaw in (0., .15):
+        core.image(0., render(cam, 1.1, 0., yaw, crosswalk=False,
+                              boundary=False, letters=True, diamond=True))
+        assert not core.observation.entry_lines

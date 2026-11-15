@@ -53,6 +53,8 @@ class LineStopCore(FinishCore):
         self._last_sighting = None
         self.require_crosswalk = False
         self.observe_scene = False
+        self.observe_entry = False
+        self.entry_min_span = .26  # partial boundary at the edge of view during a turn
         self.observation = FloorObservation()
         # the band (|y| <= p.band ahead of base_link) never moves in the warped image: only its
         # columns are converted and scanned
@@ -94,11 +96,39 @@ class LineStopCore(FinishCore):
     def _sighting(self, now: float, line_at: float):
         if self.phase == Phase.COMMIT and self.target is not None and abs(
                 line_at - (self.target + self.p.front + self.p.stop_gap)) > self.p.confirm_tolerance:
-            return                      # keep tracking this line, in either direction
+            return False                # unrelated markings must not appear as accepted measurements
         if self._last_sighting is not None and now-self._last_sighting > self.max_frame_gap:
             self._sightings.clear()
         self._last_sighting = now
         super()._sighting(now, line_at)
+        return True
+
+    def _entry_lines(self, white):
+        """Fit transverse white components; entry lines need not be image-horizontal.
+
+        The pedestrian section starts while the car is still turning. A long run
+        in one image row misses that boundary even though it spans the lane.
+        Crosswalk bars/letters are too narrow laterally; a diamond is too thick.
+        """
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(white.astype(np.uint8), 8)
+        gy = self.bev.gy[:, self._c0:self._c1]
+        lines = []
+        for label in range(1, count):
+            if stats[label, cv2.CC_STAT_AREA] < 20:
+                continue
+            component = labels == label
+            x, y = self._gx[component], gy[component]
+            if np.ptp(y) < self.entry_min_span:
+                continue
+            centred = y-y.mean()
+            slope = np.dot(centred, x-x.mean())/np.dot(centred, centred)
+            if abs(slope) > np.tan(np.deg2rad(30.)):
+                continue
+            intercepts = x-slope*y
+            near, far = np.percentile(intercepts, (5, 95))
+            if self.min_thickness <= far-near <= self.max_thickness:
+                lines.append(float(near))
+        return tuple(sorted(lines))
 
     def remaining(self):
         return None if self.target is None else self.target - self.dist
@@ -136,12 +166,14 @@ class LineStopCore(FinishCore):
                 if (not self.require_crosswalk or self.phase == Phase.COMMIT or
                         behind):
                     candidates.append(near)
-        self.observation = FloorObservation(tuple(lines), crosswalks)
+        entry_lines = self._entry_lines(white) if self.observe_entry else ()
+        self.observation = FloorObservation(tuple(lines), crosswalks, entry_lines)
         if candidates:
             near = max(candidates)
             self.cross_x = float(np.min(self._gx[near][self._band[near]]))   # near edge of the line
             if self.phase in (Phase.FOLLOW, Phase.COMMIT):
-                self._sighting(now, self.dist + self.cross_x)
+                if not self._sighting(now, self.dist + self.cross_x):
+                    self.cross_x = None
         elif self.phase == Phase.FOLLOW:
             self._sightings.clear()                 # confirmation requires consecutive images
             self._last_sighting = None

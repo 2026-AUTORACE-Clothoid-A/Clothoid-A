@@ -104,7 +104,7 @@ def test_bump_arm_timeout():
 def test_bump_rearm_after_cooldown_respects_the_stopline_switch(at_stopline):
     logic = MissionLogic(MissionParams(bump_at_stopline=at_stopline, bump_cooldown_sec=1.0))
     logic.step(Inputs(now=0.0, seen={'sign_bump'}, imu_pitch=0.0))
-    logic.step(Inputs(now=0.5, line_phase='arrived', imu_pitch=0.0))
+    logic.step(Inputs(now=0.5, entry_slow=True, imu_pitch=0.0))
     logic.step(Inputs(now=1.0, imu_pitch=5.0))
     logic.step(Inputs(now=1.5, imu_pitch=-3.0))
     logic.step(Inputs(now=2.0, imu_pitch=0.0))
@@ -116,9 +116,9 @@ def test_bump_rearm_after_cooldown_respects_the_stopline_switch(at_stopline):
     # A visible sign on the first tick past cooldown must use the configured trigger.
     out = logic.step(Inputs(now=3.5, seen={'sign_bump'}, imu_pitch=0.0))
     if at_stopline:
-        assert logic.bump_state == BUMP_IDLE and out.stop_arm
+        assert logic.bump_state == BUMP_IDLE and out.entry_arm and not out.stop_arm
         assert out.speed_limit is None
-        out = logic.step(Inputs(now=4.0, line_phase='arrived', imu_pitch=0.0))
+        out = logic.step(Inputs(now=4.0, entry_slow=True, imu_pitch=0.0))
     assert logic.bump_state == BUMP_APPROACHING and out.speed_limit == 0.2
     assert not out.stop_arm
 

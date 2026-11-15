@@ -86,3 +86,14 @@ angles still need measuring, see Open points.
   goes out as `/speed_limit` (lane_main keeps steering), its STOP as zero on `/cmd_vel_state`.
   `/mission/state` (`std_msgs/String`, JSON) and `/mission/line_debug_image` (debug) are for
   clothoid_debug `stop_viz` / `rviz/stop.rviz`. `/stopline_detected` (2025 stripes) is commented out.
+- **Mission start boundary:** a separate white transverse line before the road markings is tracked
+  independently of the crosswalk stop line. A quality sign/light candidate prepares passive sensing;
+  a confirmed mission is required to reduce speed. Two odometry-consistent line images confirm the
+  boundary, including oblique lines while turning. Braking lead uses measured speed,
+  `entry_reaction_sec`, and `entry_deceleration`. `front_axle_x` is the front-wheel reference for
+  entry and crosswalk stops; finish and parking retain their existing geometric references.
+  `/mission/state` adds `entry_phase`, `entry_active`, `mission_entry` (integrated travel coordinate),
+  `entry_remaining` (metres to front wheels), `entry_slow`, and `entry_reached`.
+  `entry_rate_hz` caps the extra entry analysis at 10 Hz; active crosswalk stop processing keeps
+  its camera rate. Overlapping accepted traffic-light colours prefer green, with three-frame
+  confirmation on the selected signal retained.

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import rclpy
 from geometry_msgs.msg import PoseStamped
-from sensor_msgs.msg import CameraInfo
+from sensor_msgs.msg import CameraInfo, Image
 from nav_msgs.msg import Odometry
 from clothoid_finish.bev import CameraModel
 from clothoid_finish.finish_core import Phase
@@ -58,6 +58,46 @@ def test_selected_red_is_not_released_by_another_green(node):
         detections(n, clock, now, 'traffic_light_green')
         n.on_timer()
     assert n.logic.state == DRIVE
+
+
+def test_overlapping_green_on_selected_signal_releases_only_after_three_frames(node):
+    n, clock = node
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, 'traffic_light_red')
+    n.on_timer()
+    n.logic.state = STOPPED_LIGHT
+    for k, now in enumerate((1000.3, 1000.4, 1000.5)):
+        message = detections(n, clock, now, 'traffic_light_red')
+        # Use a new, later source frame containing both overlapping colours.
+        clock[0] += .01
+        message.header.stamp.nanosec += 10_000_000
+        message.detections.append(Detection(class_name='traffic_light_green', confidence=.7,
+            x_min=100, x_max=120, y_min=200, y_max=220))
+        n.on_detections(message)
+        n.on_timer()
+        assert n.logic.state == (DRIVE if k == 2 else STOPPED_LIGHT)
+
+
+@pytest.mark.parametrize('stop_observer', [False, True])
+def test_entry_analysis_is_limited_to_ten_slots_without_throttling_active_stop(node, stop_observer):
+    n, clock = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+        k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    detections(n, clock, 1000., 'sign_pedestrian')
+    n.on_timer()
+    if stop_observer:
+        n.core.start(1000.)
+    calls = []
+    n.core.image = lambda *args: calls.append(n.core.observe_entry)
+    for k in range(30):
+        clock[0] = 1000.+k/30
+        message = Image(height=1, width=1, encoding='bgr8', step=3, data=[0, 0, 0])
+        message.header.stamp.sec = 1000
+        message.header.stamp.nanosec = round(k/30*1e9)
+        n.on_image(message)
+    assert len(calls) == (30 if stop_observer else 10)
+    assert sum(calls) == 10
 
 
 def test_delayed_source_data_and_duplicates_do_not_refresh_evidence(node):
@@ -116,7 +156,7 @@ def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
         detections(n, clock, now, 'sign_bump')
     n.on_timer()
     assert flags == [False]
-    n.core.phase = Phase.STOP
+    n.mission_entry.entry_at = n.travel + .1
     n.on_timer()
     assert flags == [False, True]
     clock[0] += 1.1
@@ -128,7 +168,7 @@ def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
 
 
 @pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump'])
-def test_stopline_mission_uses_camera_distance_and_measured_travel_before_slowing(node, sign):
+def test_mission_start_brakes_before_front_wheel_entry_without_committing_a_stop(node, sign):
     from test_line_stop import render
 
     n, clock = node
@@ -141,8 +181,17 @@ def test_stopline_mission_uses_camera_distance_and_measured_travel_before_slowin
         detections(n, clock, now, sign)
     n.on_timer()
     core = n.core
-    assert core.phase == Phase.FOLLOW and not core.require_crosswalk
+    assert core.phase == Phase.IDLE and n.mission_entry_active
     assert n.image_sub is not None and not limits
+
+    def odom(speed):
+        msg = Odometry()
+        msg.header.stamp.sec = int(clock[0])
+        msg.header.stamp.nanosec = int(round((clock[0] - int(clock[0])) * 1e9))
+        msg.twist.twist.linear.x = speed
+        n.on_odom(msg)
+
+    odom(.8)
 
     image = render(cam, 1.3, 0., 0., crosswalk=False, letters=False)
     for _ in range(3):
@@ -151,24 +200,23 @@ def test_stopline_mission_uses_camera_distance_and_measured_travel_before_slowin
         msg.header.stamp.sec = int(clock[0])
         msg.header.stamp.nanosec = int(round((clock[0] - int(clock[0])) * 1e9))
         n.on_image(msg)
+        odom(0.)  # fixed synthetic image, then resume measured approach below
+        n.latest_speed = .8
         n.on_timer()
         assert not limits
-    assert core.phase == Phase.COMMIT and core.remaining() > .4
+    assert core.phase == Phase.IDLE and n.mission_entry.entry_at is not None
 
     # The line can leave the image. Use measured 0.8 m/s, independently of the 0.2 slow setting.
     for _ in range(30):
         clock[0] += .05
-        msg = Odometry()
-        msg.header.stamp.sec = int(clock[0])
-        msg.header.stamp.nanosec = int(round((clock[0] - int(clock[0])) * 1e9))
-        msg.twist.twist.linear.x = .8
-        n.on_odom(msg)
+        odom(.8)
         n.on_timer()
         if limits:
             break
-    assert core.phase == Phase.STOP
+    assert core.phase == Phase.IDLE
+    assert n.mission_entry.remaining(n.travel, .1) > .2
     assert limits == [pytest.approx(.2)]
-    assert not n.logic.parking_flag and n.image_sub is None
+    assert not n.logic.parking_flag and n.logic.state == DRIVE
 
 
 def test_roadside_candidate_does_not_stop_or_park_without_scene(node):
@@ -194,6 +242,30 @@ def test_scene_candidate_quality_gates_remain(node):
     for k in range(5):
         msg=detections(n,clock,1000.+k*.1,'sign_pedestrian',x=0)
     assert 'sign_pedestrian' not in n.seen
+
+
+def test_entry_observation_prepares_before_sign_confirmation_without_sending_speed(node):
+    from test_line_stop import render
+
+    n, clock = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+                         k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    detections(n, clock, 1000., 'sign_pedestrian')  # only one candidate frame
+    n.on_timer()
+    assert n.mission_entry_active and not n.logic._armed() and not limits
+    image = render(cam, 1.3, 0., .1, crosswalk=False, letters=False)
+    for _ in range(3):
+        clock[0] += .05
+        msg = n.bridge.cv2_to_imgmsg(image, 'bgr8')
+        msg.header.stamp.sec = int(clock[0])
+        msg.header.stamp.nanosec = int(round((clock[0]-int(clock[0]))*1e9))
+        n.on_image(msg)
+        n.on_timer()
+    assert n.mission_entry.entry_at is not None and not limits
+    assert n.core.phase == Phase.IDLE and n.logic.state == DRIVE
 
 
 def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():

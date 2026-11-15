@@ -8,11 +8,12 @@ Publishes
   `state_topic` (String, JSON): state, what armed it, the line stop (for clothoid_debug stop_viz)
 
 Confirmed sign tracks prepare local observers. They do not transfer driving control.
-The light/pedestrian observer starts a speed limit only after confirming its crosswalk stop line.
+Mission boundaries start approach slowing before the front wheels enter the section.
+The light/pedestrian stop target is a separate line immediately before the crosswalk.
 Parking needs a separate entry line and fresh passive lidar bay evidence. Floor processing is
 shared by those observers; parking-only preparation caps image decoding at 6 Hz.
-Slow and bump signs prepare a start-line observer; arrival activates their speed limit without
-stopping. The bump IMU contact fallback also remains active while waiting for that line.
+Slow and bump signs prepare a start-line observer; measured speed sets the braking lead.
+The bump IMU contact fallback also remains active while waiting for that line.
 lane_main keeps steering during the stop-line approach; its STOP holds the car.
 Its steering is not used (it follows the left yellow line, which the zigzag before the pedestrian
 crosswalk turned 9 deg off in the sim), so its left-line-lost abort is off (`lost_hold_sec` 1e9).
@@ -43,7 +44,7 @@ from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
     BUMP_APPROACHING, Inputs, MissionLogic, MissionParams, STOPPED_LIGHT, classes_seen,
     quaternion_to_pitch_deg)
-from clothoid_mission.scene_evidence import ParkingEntryEvidence
+from clothoid_mission.scene_evidence import MissionEntryEvidence, ParkingEntryEvidence
 from clothoid_mission.sign_tracker import SignTracker
 
 # FinishCore phase -> what mission_logic expects
@@ -73,6 +74,13 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=
         self.declare_parameter('white_v_min', 150)
         self.declare_parameter('line_require_crosswalk', True)
+        self.declare_parameter('front_axle_x', 0.10)
+        self.declare_parameter('stop_line_gap', 0.03)
+        self.declare_parameter('entry_reaction_sec', 0.25)
+        self.declare_parameter('entry_deceleration', 1.5)
+        self.declare_parameter('entry_confirm_frames', 2)
+        self.declare_parameter('entry_min_span', 0.26)
+        self.declare_parameter('entry_rate_hz', 10.0)
         for name, value in [('line_band', 0.22), ('line_min_run', 0.7),
                             ('line_min_thickness', 0.008), ('line_max_thickness', 0.12),
                             ('line_max_frame_gap', 0.25)]:
@@ -202,7 +210,11 @@ class MissionNode(QuietEventsMixin, Node):
         self.parking_observing = self.parking_skipped = False
         self.parking_observing_time = self.parking_skipped_time = None
         self.travel, self._odom_stamp = 0., None
+        self.latest_speed, self.latest_speed_time = None, None
+        self.mission_entry_active = False
+        self.entry_prepare_time = None
         self._scene_stamp = None
+        self._entry_stamp = None
         self.stopline, self.stopline_time = False, None
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
@@ -236,15 +248,24 @@ class MissionNode(QuietEventsMixin, Node):
         self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
         self.create_subscription(Bool, get('avoid_active_topic'), self.on_avoid_active, 1)
 
-        # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
-        # steer here, so losing the left yellow line must not abort the stop
-        self.finish_params = FinishParams(lost_hold_sec=1e9, band=get('line_band'), speed=get('approach_speed'))
+        # The rules judge the front wheels. Finish's bumper reference stays local to finish;
+        # parking's existing geometric handover reference remains unchanged.
+        self.parking_front = FinishParams().front
+        self.finish_params = FinishParams(lost_hold_sec=1e9, band=get('line_band'),
+            speed=get('approach_speed'), front=get('front_axle_x'), stop_gap=get('stop_line_gap'))
+        if (get('front_axle_x') < 0 or get('entry_reaction_sec') < 0 or
+                get('entry_deceleration') <= 0 or get('entry_confirm_frames') < 2 or
+                not 0 < get('entry_min_span') <= 2*get('line_band') or get('entry_rate_hz') <= 0):
+            raise ValueError('invalid front axle or entry braking parameters')
         if get('parking_scene_rate_hz') <= 0 or get('parking_entry_max_travel') <= 0:
             raise ValueError('parking scene rate and entry travel must be positive')
         self.entry_evidence = ParkingEntryEvidence(
             confirm_frames=self.finish_params.confirm_frames, tolerance=self.finish_params.confirm_tolerance,
             max_frame_gap=get('line_max_frame_gap'), max_travel=get('parking_entry_max_travel'),
             crosswalk_margin=get('line_max_thickness'))
+        self.mission_entry = MissionEntryEvidence(
+            confirm_frames=get('entry_confirm_frames'), tolerance=self.finish_params.confirm_tolerance,
+            max_frame_gap=get('line_max_frame_gap'), crosswalk_margin=get('line_max_thickness'))
         self.warp = LaneParams(x_h=get('warp_x_h'), x_l=get('warp_x_l'), y_h=get('warp_y_h'),
                                y_l=get('warp_y_l'))
         self.cam = CameraModel(height=get('camera_height'), pitch=get('camera_pitch'),
@@ -301,6 +322,13 @@ class MissionNode(QuietEventsMixin, Node):
                       or classes_seen((d,), **filters)]
         tracks = self.sign_tracker.update(stamp, detections, self.warp.width, self.warp.height)
         self.confirmed_tracks = tracks
+        # Start passive floor sensing on a quality candidate, before three-frame sign
+        # confirmation. This grants no motion action; MissionLogic still requires confirmation.
+        if any(t.last_seen == stamp and t.box.class_name in (
+                'sign_bump', 'sign_slow', 'sign_pedestrian',
+                'traffic_light_red', 'traffic_light_yellow', 'traffic_light_green')
+               for t in self.sign_tracker.tracks.values()):
+            self.entry_prepare_time = stamp
         if self.light_target_id is None:
             red = [t for t in tracks if t.box.class_name in ('traffic_light_red', 'traffic_light_yellow')]
             if red:
@@ -385,6 +413,7 @@ class MissionNode(QuietEventsMixin, Node):
         core.max_frame_gap = get('line_max_frame_gap')
         core.require_crosswalk = get('line_require_crosswalk')
         core.observe_scene = True
+        core.entry_min_span = get('entry_min_span')
         core.debug = self.debug_pub is not None
         return core
 
@@ -412,6 +441,8 @@ class MissionNode(QuietEventsMixin, Node):
 
     def on_odom(self, msg: Odometry):
         stamp = self.stamp(msg, self.now_sec())
+        self.latest_speed = msg.twist.twist.linear.x
+        self.latest_speed_time = stamp
         if self._odom_stamp is not None and 0 < stamp - self._odom_stamp < .2:
             self.travel += msg.twist.twist.linear.x * (stamp - self._odom_stamp) * self.finish_params.odom_scale
         self._odom_stamp = stamp
@@ -431,7 +462,7 @@ class MissionNode(QuietEventsMixin, Node):
         if self.core is None:
             return
         stop_observer = self.core.phase in (Phase.FOLLOW, Phase.COMMIT)
-        if not stop_observer and not self.logic.parking_armed:
+        if not stop_observer and not self.mission_entry_active and not self.logic.parking_armed:
             return
         now = self.now_sec()
         stamp = self.stamp(msg, now)
@@ -439,9 +470,14 @@ class MissionNode(QuietEventsMixin, Node):
             return
         if self._scene_stamp is not None and stamp <= self._scene_stamp:
             return
-        if (not stop_observer and self._scene_stamp is not None and
-                stamp - self._scene_stamp < 1. / self.get_parameter('parking_scene_rate_hz').value):
-            return
+        entry_rate = self.get_parameter('entry_rate_hz').value
+        if not stop_observer and self._scene_stamp is not None:
+            scene_rate = max(entry_rate if self.mission_entry_active else 0.,
+                             self.get_parameter('parking_scene_rate_hz').value if self.logic.parking_armed else 0.)
+            # One image per time slot avoids dropping every other 10 Hz source frame
+            # due to tiny camera timestamp jitter around a strict 0.1 s interval.
+            if int(stamp*scene_rate) <= int(self._scene_stamp*scene_rate):
+                return
         if self._fresh(self.latest_pitch_time) and abs(self.latest_pitch) >= self.logic.p.bump_pitch_thresh:
             return                       # the fixed floor projection is invalid while tilted
         self._scene_stamp = stamp
@@ -451,7 +487,13 @@ class MissionNode(QuietEventsMixin, Node):
             bgr = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
         if bgr is None:
             return
+        entry_due = self.mission_entry_active and (
+            self._entry_stamp is None or int(stamp*entry_rate) > int(self._entry_stamp*entry_rate))
+        self.core.observe_entry = entry_due
         self.core.image(stamp, bgr)
+        if entry_due:
+            self._entry_stamp = stamp
+            self.mission_entry.observe(stamp, self.travel, self.core.observation)
         if self.logic.parking_armed:
             self.entry_evidence.observe(stamp, self.travel, self.core.observation)
         if self.debug_pub is not None:
@@ -468,6 +510,9 @@ class MissionNode(QuietEventsMixin, Node):
             img[(np.abs(gy - (off + math.tan(hd) * gx)) < 0.006) & core.bev.valid] = (0, 255, 0)
         if core.cross_x is not None:
             img[(np.abs(gx - core.cross_x) < 0.004) & core.bev.valid] = (255, 0, 255)
+        if self.mission_entry.entry_at is not None:
+            entry_x = self.mission_entry.entry_at-self.travel
+            img[(np.abs(gx-entry_x) < .004) & core.bev.valid] = (0, 180, 255)
         left = core.remaining()
         text = core.phase.value + ('' if left is None else f' {left * 100:.1f} cm')
         cv2.putText(img, text, (5, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
@@ -522,11 +567,19 @@ class MissionNode(QuietEventsMixin, Node):
         seen = set(self.seen) if self._fresh(self.seen_time) else set()
         if self._fresh(self.sign_time):
             seen.add('sign_parking')
+        value = lambda name: self.get_parameter(name).value
+        entry_slow = self.mission_entry_active and self.mission_entry.should_slow(
+            self.travel, value('front_axle_x'),
+            self.latest_speed if self._fresh(self.latest_speed_time) else None,
+            min(self.logic.p.slow_speed, self.logic.p.approach_speed),
+            value('entry_reaction_sec'), value('entry_deceleration'))
+        entry_reached = self.mission_entry_active and self.mission_entry.reached(
+            self.travel, value('front_axle_x'))
         out = self.logic.step(Inputs(
             now=self.now_sec(),
             seen=seen,
             stopline=self.stopline if self._fresh(self.stopline_time) else False,
-            parking_line=(self.entry_evidence.reached(self.travel, self.finish_params.front)
+            parking_line=(self.entry_evidence.reached(self.travel, self.parking_front)
                           if self.logic.p.require_scene_confirmation else
                           self.line if self._fresh(self.line_time) else False),
             parking_scene=self._fresh(self.parking_scene_time),
@@ -534,6 +587,7 @@ class MissionNode(QuietEventsMixin, Node):
             parking_skipped=self.parking_skipped and self._fresh(self.parking_skipped_time),
             line_phase=line_phase,
             line_speed=self.line_speed,
+            entry_slow=entry_slow, entry_reached=entry_reached,
             parking_done=self.parking_done,
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             cone_active=self.cone_active,
@@ -542,13 +596,20 @@ class MissionNode(QuietEventsMixin, Node):
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered')
         self.line_speed = self.line_stop_step(now, out.stop_arm, out.stop_require_crosswalk)
-        self._image_on(out.stop_arm or out.parking_prepare)
+        entry_observe = out.entry_arm or (self.logic.state == 'drive' and self._fresh(self.entry_prepare_time))
+        if entry_observe and not self.mission_entry_active:
+            self.mission_entry.clear()
+            self._entry_stamp = None
+        self.mission_entry_active = entry_observe
+        if self.core is not None:
+            self.core.observe_entry = entry_observe
+        self._image_on(out.stop_arm or entry_observe or out.parking_prepare)
         self._publish_changed('parking_prepare', out.parking_prepare,
                               lambda v: self.prepare_pub.publish(Bool(data=bool(v))))
         entry = self.entry_evidence.entry_at
         distance = entry-self.travel if entry is not None else None
         entry_valid = (out.parking_prepare and distance is not None and
-                       self.travel+self.finish_params.front-entry <= self.entry_evidence.max_travel)
+                       self.travel+self.parking_front-entry <= self.entry_evidence.max_travel)
         self.entry_distance_pub.publish(Float32(data=float(distance) if entry_valid else math.nan))
         if not out.parking_prepare:
             self.entry_evidence.clear()
@@ -574,6 +635,13 @@ class MissionNode(QuietEventsMixin, Node):
             'parking_observing': self.parking_observing and self._fresh(self.parking_observing_time),
             'parking_skipped': self.parking_skipped and self._fresh(self.parking_skipped_time),
             'parking_entry': self.entry_evidence.entry_at,
+            'entry_active': self.mission_entry_active,
+            'mission_entry': self.mission_entry.entry_at,
+            'entry_remaining': self.mission_entry.remaining(self.travel, value('front_axle_x')),
+            'entry_slow': entry_slow, 'entry_reached': entry_reached,
+            'entry_phase': (('entered' if entry_reached else 'braking' if entry_slow else
+                             'confirmed' if self.mission_entry.entry_at is not None else 'search')
+                            if self.mission_entry_active else None),
             'line_phase': None if core is None else LINE_PHASE[core.phase],
             'remaining': None if left is None else round(left, 4),
             'line': None if core is None or core.cross_x is None else round(core.cross_x, 4),

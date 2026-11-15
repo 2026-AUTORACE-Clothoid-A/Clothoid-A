@@ -10,9 +10,11 @@ from clothoid_mission.mission_logic import (  # noqa: E402
     DRIVE, STOPPED_LIGHT, STOPPED_PEDESTRIAN, Inputs, MissionLogic, MissionParams)
 
 
-def run(logic, now, *seen, stopline=False, line=False, phase=None, speed=None):
+def run(logic, now, *seen, stopline=False, line=False, phase=None, speed=None,
+        entry_slow=False, entry_reached=False):
     return logic.step(Inputs(now=now, seen=set(seen), stopline=stopline, parking_line=line,
-                             line_phase=phase, line_speed=speed))
+                             line_phase=phase, line_speed=speed,
+                             entry_slow=entry_slow, entry_reached=entry_reached))
 
 
 def flag_params(**kw):
@@ -235,47 +237,51 @@ def test_parking_uses_line_stop_without_crosswalk_and_without_slowing():
 
 
 @pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump'])
-def test_mission_stopline_arrival_does_not_bypass_parking_scene_confirmation(sign):
+def test_mission_entry_does_not_bypass_parking_scene_confirmation(sign):
     logic = MissionLogic(MissionParams(require_cone_for_parking=False,
                                        slow_at_stopline=True, bump_at_stopline=True))
     out = logic.step(Inputs(now=0.0, seen={'sign_parking', sign}))
-    assert out.parking_prepare and out.stop_arm and not out.parking_flag
-    # A shared line arrival can start slowing, but cannot replace parking's separate entry.
-    out = logic.step(Inputs(now=1.0, line_phase='arrived', parking_scene=True))
+    assert out.parking_prepare and out.entry_arm and not out.stop_arm and not out.parking_flag
+    # Mission entry cannot replace parking's separate entry/bay confirmation.
+    out = logic.step(Inputs(now=1.0, entry_slow=True, entry_reached=True, parking_scene=True))
     assert out.speed_limit == 0.2 and not out.parking_flag
     assert out.parking_prepare and not out.stop_arm
     out = logic.step(Inputs(now=1.1, parking_line=True, parking_scene=True))
     assert out.parking_flag
 
 
-def test_slow_at_stopline_waits_for_arrival_and_expires_without_line():
+def test_slow_entry_brakes_on_approach_and_expires_without_line():
     logic = MissionLogic(MissionParams(slow_at_stopline=True, slow_speed=0.2, slow_hold_sec=4.0,
                                        arm_timeout_sec=8.0))
     out = run(logic, 0.0, 'sign_slow')
-    assert out.stop_arm and not out.stop_require_crosswalk and out.speed_limit is None
+    assert out.entry_arm and not out.stop_arm and out.speed_limit is None
     out = run(logic, 1.5, phase='commit', speed=0.1)
-    assert out.stop_arm and out.speed_limit is None
-    out = run(logic, 2.0, phase='arrived', speed=0.0)
-    assert out.speed_limit == 0.2 and not out.stop_arm
+    assert out.entry_arm and out.speed_limit is None  # a crosswalk stop target is not mission entry
+    out = run(logic, 1.6, entry_slow=True)
+    assert out.entry_arm and out.speed_limit == .2
+    out = run(logic, 2.0, entry_reached=True)
+    assert out.speed_limit == 0.2 and not out.entry_arm
     assert run(logic, 5.9).speed_limit == 0.2
     assert run(logic, 6.1).speed_limit is None
 
     # Timeout without seeing a stop line
-    assert run(logic, 7.0, 'sign_slow').stop_arm
-    assert not run(logic, 15.5, phase='search').stop_arm
-    assert run(logic, 15.6, phase='arrived').speed_limit is None
+    assert run(logic, 7.0, 'sign_slow').entry_arm
+    assert not run(logic, 15.5, phase='search').entry_arm
+    assert run(logic, 15.6, entry_reached=True).speed_limit is None
 
 
-def test_bump_at_stopline_waits_for_line_or_pitch_fallback():
+def test_bump_waits_for_entry_braking_point_or_pitch_fallback():
     from clothoid_mission.mission_logic import BUMP_IDLE, BUMP_APPROACHING, BUMP_ON
     logic = MissionLogic(MissionParams(bump_at_stopline=True, slow_speed=0.2,
                                        bump_pitch_thresh=3.5, bump_arm_timeout_sec=8.0))
     out = logic.step(Inputs(now=0.0, seen={'sign_bump'}, imu_pitch=0.0))
-    assert logic.bump_state == BUMP_IDLE and out.stop_arm and not out.stop_require_crosswalk
+    assert logic.bump_state == BUMP_IDLE and out.entry_arm and not out.stop_arm
     assert out.speed_limit is None
 
-    out = logic.step(Inputs(now=1.5, line_phase='arrived', imu_pitch=0.0))
-    assert logic.bump_state == BUMP_APPROACHING and out.speed_limit == 0.2 and not out.stop_arm
+    out = logic.step(Inputs(now=1., line_phase='arrived', imu_pitch=0.))
+    assert logic.bump_state == BUMP_IDLE and out.speed_limit is None
+    out = logic.step(Inputs(now=1.5, entry_slow=True, imu_pitch=0.0))
+    assert logic.bump_state == BUMP_APPROACHING and out.speed_limit == 0.2 and not out.entry_arm
 
     # Fallback: if stop line is missed but vehicle hits bump, IMU pitch still enters BUMP_ON
     logic2 = MissionLogic(MissionParams(bump_at_stopline=True, slow_speed=0.2, bump_pitch_thresh=3.5))
@@ -288,12 +294,12 @@ def test_bump_at_stopline_waits_for_line_or_pitch_fallback():
 def test_visible_sign_refreshes_stopline_arm_until_the_last_sighting_expires(sign, timeout):
     logic = MissionLogic(MissionParams(slow_at_stopline=True, bump_at_stopline=True,
                                        arm_timeout_sec=timeout, bump_arm_timeout_sec=timeout))
-    assert run(logic, 0.0, sign).stop_arm
-    assert run(logic, timeout - 0.1, sign, phase='search').stop_arm
+    assert run(logic, 0.0, sign).entry_arm
+    assert run(logic, timeout - 0.1, sign, phase='search').entry_arm
     # The first sighting is stale, but the sign was just confirmed again.
     out = run(logic, timeout + 0.1, phase='search')
-    assert out.stop_arm and out.speed_limit is None
+    assert out.entry_arm and out.speed_limit is None
     # With no further sightings or committed line, the arm still expires.
     out = run(logic, 2 * timeout, phase='search')
-    assert not out.stop_arm and out.speed_limit is None
-    assert run(logic, 2 * timeout + 0.1, phase='arrived').speed_limit is None
+    assert not out.entry_arm and out.speed_limit is None
+    assert run(logic, 2 * timeout + 0.1, entry_reached=True).speed_limit is None

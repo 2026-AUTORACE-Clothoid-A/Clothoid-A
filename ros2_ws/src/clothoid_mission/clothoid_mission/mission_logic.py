@@ -3,9 +3,9 @@
 Inputs each tick: YOLO detections, "stop line ahead", "parking finished", IMU pitch.
 Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking_flag`, `steering_lock`.
 
-  * slow sign        -> optionally wait for the start stop line, then limit speed for `slow_hold_sec`;
+  * slow sign        -> optionally brake before the mission start line, then hold after entry;
                         without `slow_at_stopline`, hold after the last sign sighting
-  * bump sign + IMU  -> optionally wait for the start stop line before approaching slowly;
+  * bump sign + IMU  -> optionally brake before the mission start line before approaching slowly;
                         IMU contact also starts slowing, leveling ends it, and climb locks steering
   * pedestrian sign  -> arm; stop at the stop line, wait `pedestrian_wait_sec`, then go
   * traffic light    -> arm on red (and yellow if `stop_on_yellow`); stop at the stop line,
@@ -127,14 +127,14 @@ class MissionParams:
     # slow sign & bump speed
     slow_speed: float = 0.2            # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0         # general slow sign hold timer
-    slow_at_stopline: bool = False     # true: start slow hold when the mission stop line arrives
+    slow_at_stopline: bool = False     # legacy key: slow before the separate mission entry line
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
     bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
     bump_level_duration_sec: float = 0.3  # sec, continuous leveling to confirm exit
     bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
-    bump_at_stopline: bool = False      # true: enter BUMP_APPROACHING (slow) at the stop line
+    bump_at_stopline: bool = False      # legacy key: slow before the separate mission entry line
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
@@ -174,6 +174,8 @@ class Inputs:
     parking_observing: bool = False # bounded approach observation, not permission to turn
     parking_skipped: bool = False   # observation failed; never means parking_done
     avoid_active: bool = False                    # /avoid/active from static_avoid (fresh)
+    entry_slow: bool = False       # braking point before the separate mission boundary
+    entry_reached: bool = False    # front wheels reached that boundary (not a stop request)
 
 
 @dataclass
@@ -187,6 +189,7 @@ class Outputs:
     stop_require_crosswalk: bool = True
     steering_lock: bool = False        # lock steering during bump traversal
     parking_prepare: bool = False     # observe the parking scene, keep lane control
+    entry_arm: bool = False           # observe the mission boundary, independently of the stop line
 
 
 class MissionLogic:
@@ -237,10 +240,10 @@ class MissionLogic:
             if 'sign_slow' in seen and now >= self.slow_until:
                 self.slow_armed_at = now
             if self.slow_armed_at is not None:
-                if self._line_arrived(inputs):
+                if inputs.entry_reached:
                     self.slow_until = now + p.slow_hold_sec
                     self.slow_armed_at = None
-                elif inputs.line_phase not in ('commit', 'arrived') and now - self.slow_armed_at > p.arm_timeout_sec:
+                elif not inputs.entry_slow and now - self.slow_armed_at > p.arm_timeout_sec:
                     self.slow_armed_at = None
         elif 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
@@ -268,13 +271,13 @@ class MissionLogic:
         bump_active = self.bump_state in (BUMP_APPROACHING, BUMP_ON)
         if now < self.slow_until or bump_active:
             limits.append(p.slow_speed)
+        if self.slow_armed_at is not None and inputs.entry_slow:
+            limits.append(p.slow_speed)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
-        mission_line_arm = p.use_stop_line and self.state == DRIVE and (
-            (not p.require_scene_confirmation and self.parking_armed and not self.parking_flag
-             and p.parking_at_stopline)
-            or self.slow_armed_at is not None
-            or self.bump_line_armed_at is not None)
-        if arm and (not p.require_scene_confirmation or inputs.line_phase == 'commit'):
+        parking_line_arm = p.use_stop_line and self.state == DRIVE and (
+            not p.require_scene_confirmation and self.parking_armed and not self.parking_flag
+            and p.parking_at_stopline)
+        if arm and (not p.require_scene_confirmation or inputs.entry_slow or inputs.line_phase == 'commit'):
             limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
         return Outputs(
             state=self.state,
@@ -282,8 +285,10 @@ class MissionLogic:
             speed_limit=min(limits) if limits else None,
             direction=self.direction,
             parking_flag=self.parking_flag,
-            stop_arm=arm or mission_line_arm,
+            stop_arm=arm or parking_line_arm,
             stop_require_crosswalk=arm,
+            entry_arm=p.use_stop_line and self.state == DRIVE and (
+                arm or self.slow_armed_at is not None or self.bump_line_armed_at is not None),
             parking_prepare=self.parking_armed and not self.parking_flag,
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
@@ -321,13 +326,12 @@ class MissionLogic:
                     self.bump_level_started_at = None
                     self.bump_entry_sign = math.copysign(1., pitch)
                     self.bump_opposite_seen = False
-                elif self._line_arrived(inputs):
+                elif inputs.entry_slow or inputs.entry_reached:
                     self.bump_line_armed_at = None
                     self.bump_state = BUMP_APPROACHING
                     self.bump_level_started_at = None
                     self.bump_armed_at = now
-                elif (inputs.line_phase not in ('commit', 'arrived')
-                      and now - self.bump_line_armed_at > p.bump_arm_timeout_sec):
+                elif now - self.bump_line_armed_at > p.bump_arm_timeout_sec:
                     self.bump_line_armed_at = None
         elif bump_seen:
             if self.bump_state == BUMP_IDLE:
