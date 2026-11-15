@@ -78,8 +78,6 @@ def test_static_avoid_start_hold_preserves_timestamped_exit_handshake():
 
 def test_lane_handover_waits_for_rear_axle_to_reach_observed_endpoint():
     m=ExitPathMemory();assert m.remember(line(),(0.,0.,0.),.35,.05)
-    assert m.front_axle_remaining((.69,0.,0.),.1,.2)==pytest.approx(.01)
-    assert m.front_axle_remaining((.70,0.,0.),.1,.2)==pytest.approx(0.)
     assert m.rear_axle_remaining((.70,0.,0.),.1)==pytest.approx(.20)
     assert not m.handover_ready((.70,0.,0.),.1)
     assert not m.handover_ready((.89,0.,0.),.1)
@@ -102,7 +100,6 @@ def test_progress_is_in_observed_exit_direction_not_world_x(angle):
 
 def test_progress_uses_rear_offset_and_vehicle_heading():
     m=ExitPathMemory();m.remember(line(),(0.,0.,0.),.35,.05)
-    assert m.front_axle_remaining((.7,0.,0.),.15,.25)==pytest.approx(0.)
     assert not m.handover_ready((.94,0.,0.),.15)
     assert m.handover_ready((.95,0.,0.),.15)
     assert not m.handover_ready((.79,0.,np.pi/2),.1)
@@ -117,7 +114,8 @@ def test_front_crossing_on_a_curve_cannot_release_rear_axle_pursuit(heading):
     # Front axle is just past the endpoint while the car is still finishing the turn.
     base=np.array([.801,.08])-.1*np.array([np.cos(heading),np.sin(heading)])
     pose=(*base,heading)
-    assert m.front_axle_remaining(pose,.1,.2)<0.
+    front = transform(np.array([[.1, 0.]]), pose)[0]
+    assert front[0] > m.observed_end[0]
     assert m.rear_axle_remaining(pose,.1)>.17
     assert not m.handover_ready(pose,.1)
 
@@ -125,7 +123,6 @@ def test_front_crossing_on_a_curve_cannot_release_rear_axle_pursuit(heading):
 @pytest.mark.parametrize('pose',[None,(np.nan,0.,0.),(0.,0.,np.inf)])
 def test_known_endpoint_cannot_be_released_without_valid_pose(pose):
     m=ExitPathMemory();m.remember(line(),(0.,0.,0.),.35,.05)
-    assert m.front_axle_remaining(pose,.1,.2) is None
     assert m.rear_axle_remaining(pose,.1) is None
     assert not m.handover_ready(pose,.1)
 
