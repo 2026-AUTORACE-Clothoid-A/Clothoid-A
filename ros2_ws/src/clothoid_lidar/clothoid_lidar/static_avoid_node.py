@@ -167,6 +167,7 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         if g('island_topic'):
             self.create_subscription(PointStamped, g('island_topic'), self.on_island, 1)
         self.create_subscription(ParameterEvent, '/parameter_events', self.on_param_event, 10)
+        self.progress_from, self.no_progress = None, False   # (t, odometer) while commanding a speed
         self.load = {}                     # callback -> [count, total s, max s]
         self.odom_gap, self.last_odom_stamp = 0.0, None
         self.create_timer(0.05, self.timed('timer', self.on_timer))
@@ -457,7 +458,12 @@ class StaticAvoidNode(QuietEventsMixin, Node):
             self.lane_pub.publish(Int32(data=0))
             return
         pose = self.tracker.latest()
+        had_event = self.avoid.event
         cmd = self.avoid.control(pose, self.inhibit(), self.now())
+        if self.avoid.event != had_event and self.avoid.event.startswith('stuck'):
+            self.get_logger().warn(f'static obstacle {self.avoid.event}')
+        if cmd is not None:
+            self.watch_progress(cmd[0])
         if cmd is None:   # ended this cycle: one stop, then silence (lane_main / others take over)
             self.cmd_pub.publish(Twist())
             self.active_pub.publish(Bool(data=False))
@@ -468,6 +474,26 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         out.linear.x, out.angular.z = float(cmd[0]), float(cmd[1])
         self.cmd_pub.publish(out)
         self.lane_pub.publish(Int32(data=self.avoid.lane(pose) or 0))
+
+    def watch_progress(self, v: float):
+        """Commanding a speed but not moving (a collision, wheels caught): one warning, until the car
+        moves again. Mission commands only (lane_main's are not ours to judge)."""
+        t, odo = self.now(), self.tracker.distance
+        if abs(v) < 0.05:
+            self.progress_from = None
+            return
+        if self.progress_from is None or abs(odo - self.progress_from[1]) >= 0.03:
+            if self.no_progress:
+                self.get_logger().info('static obstacle: moving again')
+            self.progress_from, self.no_progress = (t, odo), False
+            return
+        if not self.no_progress and t - self.progress_from[0] >= 1.5:
+            self.no_progress = True
+            pose = self.avoid.lane_pose(self.tracker.latest())
+            self.get_logger().warn(f'static obstacle: not moving (commanded {v:.2f} m/s, '
+                                   f'{abs(odo - self.progress_from[1]):.2f} m in '
+                                   f'{t - self.progress_from[0]:.1f} s; a collision?) at '
+                                   + self.avoid.stuck_report(pose))
 
     # ---- debug ------------------------------------------------------------------------------
     def _header(self) -> Header:
