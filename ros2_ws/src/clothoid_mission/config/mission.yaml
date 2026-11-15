@@ -22,9 +22,14 @@ mission:
     fork_max_offset_height_ratio: 13.0  # sign_left / sign_right
     # Confirm on distinct YOLO frames; timer ticks never count as new evidence.
     detection_confirm_hits: 3
-    # Fork signs (sign_left / sign_right) confirm on 2 frames within detection_max_age: small (~20 px)
+    # Fork signs (sign_left / sign_right) confirm on 2 frames within fork_confirm_age: small (~20 px)
     # and seen between the static obstacles (1114: never confirmed with 3, the car took the default road).
+    # 1115_1709: a 2nd frame did not come within 0.5 s at YOLO 10 Hz, and a conf 0.85 box touching
+    # the left border was dropped as 'edge'; no other fork sign is around, so a cut box still tells
+    # the side. detection_confidence stays for them.
     fork_confirm_hits: 2
+    fork_confirm_age: 1.0       # s (other classes: detection_max_age)
+    fork_ignore_edge: true      # fork boxes on the image border count (other classes: detection_edge_margin)
     detection_window: 5
     detection_max_age: 0.5
     detection_confidence: 0.6

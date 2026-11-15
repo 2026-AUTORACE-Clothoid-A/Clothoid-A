@@ -97,7 +97,8 @@ class MissionNode(QuietEventsMixin, Node):
         for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
                             ('sign_min_height', 14), ('light_min_height', 8),
-                            ('detection_edge_margin', 2), ('fork_confirm_hits', 2)]:
+                            ('detection_edge_margin', 2), ('fork_confirm_hits', 2),
+                            ('fork_confirm_age', 1.0), ('fork_ignore_edge', True)]:
             self.declare_parameter(name, value)
 
         d = MissionParams()
@@ -137,7 +138,9 @@ class MissionNode(QuietEventsMixin, Node):
             max_age=get('detection_max_age'), confidence=get('detection_confidence'),
             sign_height=get('sign_min_height'), light_height=get('light_min_height'),
             edge_margin=get('detection_edge_margin'),
-            class_hits={name: get('fork_confirm_hits') for name in FORK_SIGNS})
+            class_hits={name: get('fork_confirm_hits') for name in FORK_SIGNS},
+            class_max_age={name: get('fork_confirm_age') for name in FORK_SIGNS},
+            edge_exempt=FORK_SIGNS if get('fork_ignore_edge') else ())
         self.logic = MissionLogic(MissionParams(
             slow_speed=get('slow_speed'),
             slow_hold_sec=get('slow_hold_sec'),
@@ -271,7 +274,7 @@ class MissionNode(QuietEventsMixin, Node):
                 verdict = f'IGNORED: offset {ratio:.1f} x h > {limit:.1f}'
         else:
             reason = gate.box_reason(d, self.warp.width, self.warp.height)
-            verdict = f'IGNORED: {reason}' if reason else f'IGNORED: hits {hits} within {gate.max_age:.1f} s'
+            verdict = f'IGNORED: {reason}' if reason else f'IGNORED: hits {hits} within {gate.age(name):.1f} s'
         last = self.sign_logged.get(name)
         if last is not None and now - last[0] < 1.0 and last[1] == verdict.split(' (')[0]:
             return
