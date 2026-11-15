@@ -237,12 +237,22 @@ class ConeFollowerNode(Node):
             return
         if not self.active or not self.exiting:
             return
-        if self.lane_ready and self._fresh(self.lane_ready_time):
+        p = self.follower.p
+        pose = self.pose if self.pose is not None and self._fresh(self.pose_time) else None
+        lane_ready = self.lane_ready and self._fresh(self.lane_ready_time)
+        if lane_ready and self.exit_memory.handover_ready(pose, p.rear_axle_x, p.wheelbase):
+            if self.exit_memory.observed_end is None:
+                self.get_logger().warn('cone EXIT: no observed endpoint; using lane-only handover',
+                                       throttle_duration_sec=1.0)
             self.exit_done_pub.publish(Bool(data=True))
             return
-        p = self.follower.p
-        center = (self.exit_memory.remaining(self.pose, p.rear_axle_x)
-                  if self.pose is not None and self._fresh(self.pose_time) else np.zeros((0, 2)))
+        if lane_ready and pose is not None:
+            remaining = self.exit_memory.front_axle_remaining(pose, p.rear_axle_x, p.wheelbase)
+            if remaining is not None and remaining > 0.:
+                self.get_logger().info(f'cone EXIT: lane ready; observed endpoint {remaining:.3f} m ahead of front axle',
+                                       throttle_duration_sec=1.0)
+        center = (self.exit_memory.remaining(pose, p.rear_axle_x)
+                  if pose is not None else np.zeros((0, 2)))
         target = look_ahead_point(center, p) if len(center) else None
         usable = (target is not None and target[0] > 0 and self._fresh(self.obstacles_time)
                   and clearance(center, self.obstacles) >= self.get_parameter('exit_clearance').value)
