@@ -3,6 +3,14 @@
 static_avoid:
   ros__parameters:
     cmd_topic: /cmd_vel_avoid
+    # limo_base's 25 Hz copies (topics.yaml imu_slow_topic / odom_slow_topic): only the yaw and the
+    # driven distance are used, interpolated. Taking /imu 100 Hz + /odom 50 Hz cost this node about
+    # half of its CPU on the car (PC bag replay: 7~9 % + 6 % of a core for empty callbacks); on 10
+    # bags the starts, hand-overs and lanes stay the same at 25 Hz (within 2 cm / 0.1 s). Old bags and
+    # the simulator have no 25 Hz topics: set these back to /imu and /odom in a params file given last
+    # (simul_batch.py does)
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     limos_topic: /lidar/limos
     # camera red share as a 'cone course' sign: OFF. The cone mission (namgyu/cone) starts on the lidar
     # alone, so only /cone/mission_active is used. To try it: use_red_ratio true and start red_ratio.
@@ -67,6 +75,15 @@ static_avoid:
     course_fallback_past: 1.0
     start_line_odometer: 14.2
     course_fallback_odometer: 3.0
+    # where the node started, from the first turn (AvoidParams.course_turn_deg): the race start ->
+    # the mission starts on the start line (approach_speed until the first blocker); elsewhere -> a
+    # blocker starts it anywhere; not judged yet -> no start
+    course_turn_deg: 45.0
+    course_corner_tol_deg: 20.0
+    course_corner1_x_min: 7.5
+    course_corner1_odometer_max: 11.0
+    course_test_start: 1.0       # a LIMO in our lane this soon after the launch: an avoid test, elsewhere
+    approach_speed: 0.8
     island_handover: 1.0         # handover_after_island false: m before the island front, lane_main enters A / B
     island_topic: ''             # PointStamped (base_link) island front from the lane side, if any
     # image_source: 10hz           # 10hz: image_10hz_topic, every frame; raw: image_topic, every image_every-th   (launch argument; a value here would override it)

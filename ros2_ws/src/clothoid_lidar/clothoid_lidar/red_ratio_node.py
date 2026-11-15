@@ -15,6 +15,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
 from std_msgs.msg import Float32
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.red_ratio import RedRatioParams, hsv_groups, red_ratio
 
 
@@ -28,7 +29,7 @@ def image_to_bgr(msg: Image) -> np.ndarray:
     raise ValueError(f'unsupported encoding {msg.encoding}')
 
 
-class RedRatioNode(Node):
+class RedRatioNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('red_ratio')
         d = RedRatioParams()

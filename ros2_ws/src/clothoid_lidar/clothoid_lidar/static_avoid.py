@@ -100,7 +100,20 @@ class AvoidParams:
     # whole course x2): the real line at x 8.07~8.32, y -4.25~-4.80, heading -172~180 deg, the
     # nearest other line 0.98 m away heading -92 deg (the crosswalk). Off: the dashed lane-line pair decides (a start
     # away from the race start, e.g. the avoid-only tests from the crosswalk)
-    course_map: bool = False
+    course_map: bool = True
+    # where the node started (CourseMap.origin), from the first turn: the race start drives a straight
+    # of ~9 m and turns right (1114 0217: map x 9.1); the avoid-only tests turn within 1.5 m (1113).
+    # 'pending' until judged: no start on a blocker (1114 0231 started at 3.8 m on the parking area's
+    # obstacles after losing the lane on the hill). 'race': the mission starts on the start line
+    # itself. 'elsewhere': a blocker starts it anywhere, the dashed lane-line pair finds the start line
+    course_turn_deg: float = 45.0         # heading this far off the first straight's: a turn
+    course_corner_tol_deg: float = 20.0   # within this of the next 90 deg axis: the turn is made
+    course_corner1_x_min: float = 7.5     # m of straight on the map before the first turn, at least
+    course_corner1_odometer_max: float = 11.0   # no turn yet by this odometer: not the race start
+    course_test_start: float = 1.0        # a LIMO in our lane within this odometer: an avoid test
+    # race: from the start line until the first blocker (LIMO in our lane, obstacle cost over slow_cost
+    # or a lane change) at this speed (lane_main's base speed), then speed / slow_speed to the end
+    approach_speed: float = 0.8
     start_line_x: float = 8.25
     start_line_y: float = -4.65
     start_line_radius: float = 1.0
@@ -888,6 +901,34 @@ class CourseMap:
         self.snaps: List[Tuple[float, float]] = []                # (odometer, deg) for the log
         self.min_far = math.inf
         self.fell_back = False
+        # where the node started (AvoidParams.course_turn_deg): 'pending' | 'race' | 'elsewhere'
+        self.origin = 'pending'
+        self.origin_why = ''
+        self.corner1: Optional[Tuple[float, float]] = None        # (odometer, map x) of the right turn
+
+    def set_origin(self, origin: str, why: str) -> None:
+        if self.origin == 'pending':
+            self.origin, self.origin_why = origin, why
+
+    def _judge(self, odometer: float) -> None:
+        """Race start or not, from the first turn (see AvoidParams.course_turn_deg)."""
+        p = self.p
+        if self.origin != 'pending':
+            return
+        deg = math.degrees(self.h)
+        if self.corner1 is None:
+            if abs(deg) > p.course_turn_deg and self.x < p.course_corner1_x_min:
+                self.set_origin('elsewhere', 'turned %.0f deg after %.1f m of straight (the race start '
+                                'drives %.1f m before its first turn)' % (deg, self.x, p.course_corner1_x_min))
+            elif abs(deg + 90.0) <= p.course_corner_tol_deg:
+                self.corner1 = (odometer, self.x)
+            elif abs(deg) > 90.0 - p.course_corner_tol_deg and deg > 0.0:
+                self.set_origin('elsewhere', 'the first turn went left (%.0f deg)' % deg)
+            elif odometer > p.course_corner1_odometer_max:
+                self.set_origin('elsewhere', 'no turn in the first %.1f m' % odometer)
+        elif abs(deg) <= p.course_corner_tol_deg or abs(deg - 90.0) <= p.course_corner_tol_deg:
+            self.set_origin('elsewhere', 'turned to %.0f deg after the first right turn (the race goes '
+                            'on to 180 deg)' % deg)
 
     def step(self, odometer: float, step: float, yaw: float) -> None:
         if yaw is None:
@@ -902,6 +943,7 @@ class CourseMap:
         if odometer > self.hist[-1][0] + 0.01:
             self.hist.append((odometer, self.x, self.y, self.h))
         self._snap(odometer)
+        self._judge(odometer)
 
     def _snap(self, odometer: float) -> None:
         p = self.p
@@ -965,6 +1007,7 @@ class CourseMap:
                    % (odometer, p.start_line_radius, self.min_far))
         if why:
             self.fell_back = True
+            self.set_origin('elsewhere', why)
         return why
 
 
@@ -1127,6 +1170,10 @@ class StaticAvoid:
         self.event = ''                      # last state change, for the log
         self.reset_recovery()
         self.done = False                    # the section is behind us, avoided or not
+        # course map, race start: start on the section start line (request_line_start), at
+        # approach_speed until the first blocker
+        self.line_start: Optional[Tuple[float, float, float]] = None    # the line's pose, pending
+        self.approach = False
 
     # ---- trigger --------------------------------------------------------------------------
     def blocking(self, limos: np.ndarray, since_entry: Optional[float] = None) -> np.ndarray:
@@ -1148,16 +1195,23 @@ class StaticAvoid:
     def on_limos(self, t: float, limos: np.ndarray, inhibit: Inhibit, speed: float,
                  pose_world: Optional[Tuple[float, float, float]],
                  entry_back: Optional[float] = None,
-                 entry_pose: Optional[Tuple[float, float, float]] = None) -> bool:
+                 entry_pose: Optional[Tuple[float, float, float]] = None,
+                 allowed: bool = True) -> bool:
         """Call per LIMO cluster message (base_link). Returns True when the mission starts.
         entry_back: metres driven since the base crossed the white entry line, if it was seen
         (anchors the section within entry_max_back; tells the island's sign stand from a LIMO).
-        entry_pose: world pose where the base crossed the line (frame origin and lane direction)."""
+        entry_pose: world pose where the base crossed the line (frame origin and lane direction).
+        allowed: False = a blocker does not start it (course map: not judged yet, or the race start
+        where the start line starts it); a requested line start still does."""
         p = self.p
         blocked = self.blocked(limos, entry_back)
         self.seen_entry = entry_pose
         if self.state == ACTIVE:
+            if blocked:
+                self.approach = False
             return False
+        if self.line_start is not None:
+            return self._line_start(inhibit, pose_world, entry_back, entry_pose)
         self._watch(pose_world, entry_back, entry_pose)
         if self.finished and p.one_section_per_run:
             self.blocked_scans = 0
@@ -1184,11 +1238,42 @@ class StaticAvoid:
             self.blocked_scans = 0
             return False
         self.blocked_scans += 1
-        if self.blocked_scans < p.activate_scans:
+        if self.blocked_scans < p.activate_scans or not allowed:
             return False
         if retry:      # a retry from the mission start: nothing of the old section is valid
             self.locked, self.frame, self.done = False, None, False
         self.activate(pose_world, entry_back, entry_pose)
+        return True
+
+    def request_line_start(self, line_pose: Tuple[float, float, float]) -> None:
+        """Course map, race start: the section start line was confirmed. The mission starts on the
+        next LIMO message (on_limos), as soon as no other mission inhibits it."""
+        if self.state != ACTIVE and not self.finished and not self.locked:
+            self.line_start = line_pose
+
+    def _line_start(self, inhibit: Inhibit, pose_world, entry_back, entry_pose) -> bool:
+        """entry_back / entry_pose: of the requested line itself (the node keeps its odometer). A line
+        still ahead of the base waits: on a corner the line leaves the view sideways and is placed up
+        to 1.5 m ahead; looking it up again within 1 m dropped the start (1114 23:39, no start at
+        all, the car drove into the LIMOs). Dropped only once the base is entry_max_back past it."""
+        p = self.p
+        if entry_back is not None and entry_back > p.entry_max_back:
+            self.line_start = None          # too far past it: no start from it
+            self.event = 'section start line: no start (%.2f m past it)' % entry_back
+            return False
+        if entry_back is None or entry_pose is None:
+            return False                    # not known yet: wait
+        same = math.hypot(entry_pose[0] - self.line_start[0], entry_pose[1] - self.line_start[1]) < 0.1
+        if not same:
+            self.line_start = None
+            self.event = 'section start line: no start (another line)'
+            return False
+        if inhibit.reason(p) or pose_world is None:
+            return False
+        self.line_start = None
+        self.activate(pose_world, entry_back, entry_pose)
+        self.approach = True
+        self.event = 'start on the section start line'
         return True
 
     def _watch(self, pose_world, entry_back, entry_pose) -> None:
@@ -1263,6 +1348,7 @@ class StaticAvoid:
         once (a LIMO seen later in the new lane must not be ignored). final = the car reached the
         fork: the mission is done, locked until a retry (see on_limos)."""
         self.state = IDLE
+        self.approach, self.line_start = False, None
         if final:
             self.locked, self.lock_entry, self.done = True, self.seen_entry, True
         self.armed = why.startswith('hand over')
@@ -1546,7 +1632,11 @@ class StaticAvoid:
                 self.recovering, self.recovered_from = False, None
         delta = pure_pursuit(self.plan.path, pose, p)
         changing = abs(self.plan.end_offset - pose[1]) > 0.10
+        if changing or self.plan.obstacle_cost > p.slow_cost:
+            self.approach = False
         v = p.slow_speed if (changing or self.plan.obstacle_cost > p.slow_cost) else p.speed
+        if self.approach:
+            v = p.approach_speed
         return v, v * math.tan(delta) / p.wheelbase
 
     def release_target(self, d: float) -> float:

@@ -271,7 +271,9 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN,
     map_path = write_map(tmp, cells)
     params = os.path.join(tmp, 'avoid.yaml')
     with open(params, 'w') as f:
-        yaml.safe_dump({'static_avoid': {'ros__parameters': dict({'lane_width': 0.52}, **conf)}}, f)
+        # the simulator publishes /imu and /odom only, no limo_base 25 Hz copies (static_avoid.yaml)
+        yaml.safe_dump({'static_avoid': {'ros__parameters': dict(
+            {'lane_width': 0.52, 'imu_topic': '/imu', 'odom_topic': '/odom'}, **conf)}}, f)
     sim_log, avoid_log = open(os.path.join(tmp, 'sim.log'), 'w'), open(os.path.join(tmp, 'avoid.log'), 'w')
     # headless rendering through EGL without a display (Intel / Mesa on this PC)
     sim = start(f'cd {SIM} && EGL_PLATFORM=surfaceless ./run.sh --map {map_path} --headless --spawn {spawn[0]} '
@@ -284,7 +286,8 @@ def run_one(name, cells, direction, conf, sign_at, t_max, keep_dir, spawn=SPAWN,
                     open(os.path.join(tmp, 'record.log'), 'w'), env)
     avoid = start(f'source /opt/ros/humble/setup.bash && source {WS}/install/setup.bash && '
                   f'ros2 launch clothoid_lidar avoid.launch.py camera:=limo2 use_sim_time:=true '
-                  f'ignore_cone:=true params:={params} image:={"10hz" if image_every else "raw"}',
+                  f'ignore_cone:=true course_map:=false params:={params} '
+                  f'image:={"10hz" if image_every else "raw"}',
                   avoid_log, env)
     relay = None
     if image_every:

@@ -107,7 +107,7 @@ def _can_add(points, chain, depth, candidate, side, p) -> bool:
 
 def _chains(points, graph, start, side, p) -> List[Tuple[int, ...]]:
     target = min(_reachable(graph, start), p.max_trace_length)
-    if target < 3:
+    if target < 2:
         return []
     chain = [-1] * target
     stack = [(start, 0)]
@@ -126,12 +126,32 @@ def _chains(points, graph, start, side, p) -> List[Tuple[int, ...]]:
                     stack.append((j, depth + 1))
         if not extended:
             used = chain.index(-1) if -1 in chain else target
-            if used >= 3:
+            if used >= 2:
                 found.add(tuple(chain[:used]))
     return list(found)
 
 
-def _cost(points, chain, side, p) -> float:
+def _skip_distance_cost(points, chain, side, p, graph, cache) -> float:
+    """Soft cost of skipping nearer *eligible* neighbours, per branch decision.
+
+    Prefixes share their nearest-distance result within one side of one scan.
+    A farther continuation is still allowed to win on the other chain costs.
+    """
+    total = 0.0
+    for depth, (node, chosen) in enumerate(zip(chain, chain[1:])):
+        prefix = tuple(chain[:depth + 1])
+        if prefix not in cache:
+            distances = [math.dist(points[node], points[j]) for j in graph[node]
+                         if _can_add(points, chain, depth, j, side, p)]
+            cache[prefix] = min(distances) if distances else 0.0
+        nearest = cache[prefix]
+        if nearest > 1e-6:
+            extra = max(0.0, math.dist(points[node], points[chosen]) / nearest - 1.0)
+            total += extra * extra
+    return total
+
+
+def _cost(points, chain, side, p, graph=None, distance_cache=None) -> float:
     q = [points[i] for i in chain]
     n = len(q)
     segs = [(q[i + 1][0] - q[i][0], q[i + 1][1] - q[i][1]) for i in range(n - 1)]
@@ -149,28 +169,30 @@ def _cost(points, chain, side, p) -> float:
     # gaps longer than the threshold
     limit = p.residual_dist_threshold if p.residual_dist_threshold > 0.0 else p.max_dist_between_cones
     residual = sum(max(0.0, math.hypot(*s) - limit) ** 2 for s in segs) / len(segs)
+    if graph is None:
+        graph = _neighbours(points, p.max_n_neighbors, p.max_dist_between_cones)
+    residual += _skip_distance_cost(points, chain, side, p, graph,
+                                   {} if distance_cache is None else distance_cache)
 
     number = 1.0 / n   # longer is better
     initial = _angle_between(segs[0][0], segs[0][1], 1.0, 0.0)   # first step along the car
 
     headings = [math.atan2(s[1], s[0]) for s in segs]
     turns = [_wrap(headings[i] - headings[i - 1]) for i in range(1, len(headings))]
-    change = sum(abs(turns[i] - turns[i + 1]) for i in range(len(turns) - 1)
-                 if turns[i] * turns[i + 1] < 0.0) if n >= 4 else 0.0
     # turning away from the track (left boundary turning further left)
     wrong_limit = math.radians(p.wrong_dir_threshold_deg)
     wrong = sum(abs(t) for t in turns if t * side > 0.0 and abs(t) > wrong_limit)
 
     weight = (p.w_angle_cost + p.w_residual_dist_cost + p.w_num_cones_cost + p.w_initial_dir_cost
-              + p.w_change_dir_cost + p.w_wrong_dir_cost)
+              + p.w_wrong_dir_cost)
     return (p.w_angle_cost * angle + p.w_residual_dist_cost * residual + p.w_num_cones_cost * number
-            + p.w_initial_dir_cost * initial + p.w_change_dir_cost * change
+            + p.w_initial_dir_cost * initial
             + p.w_wrong_dir_cost * wrong) / weight
 
 
 def best_chains(points: Sequence[Point], first_left: Optional[int], first_right: Optional[int],
                 params, left: int = 1, right: int = -1) -> Tuple[List[int], List[int]]:
-    """Index chains of both boundaries. A side with no chain of 3 cones returns just its first cone."""
+    """Index chains of both boundaries; preserve two observed cones at a short wall end."""
     graph = _neighbours(points, params.max_n_neighbors, params.max_dist_between_cones)
     result = []
     for first, side in ((first_left, left), (first_right, right)):
@@ -178,6 +200,7 @@ def best_chains(points: Sequence[Point], first_left: Optional[int], first_right:
             result.append([])
             continue
         chains = _chains(points, graph, first, side, params)
-        best = min(chains, key=lambda c: _cost(points, c, side, params)) if chains else (first,)
+        distance_cache = {}
+        best = min(chains, key=lambda c: _cost(points, c, side, params, graph, distance_cache)) if chains else (first,)
         result.append(list(best))
     return result[0], result[1]

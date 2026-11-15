@@ -79,9 +79,11 @@ def generate_launch_description():
                                           'every frame; raw: /camera/color/image_raw, every 3rd frame'),
         DeclareLaunchArgument('params', default_value='',
                               description='extra static_avoid parameter file, last (e.g. the simulator)'),
-        DeclareLaunchArgument('course_map', default_value='false',
-                              description='true only when launched at the race start: the section start '
-                                          'line is told by its place on the /imu + /odom course map'),
+        DeclareLaunchArgument('course_map', default_value='true',
+                              description='/imu + /odom course map from where the node starts: at the race '
+                                          'start the section start line starts the mission; elsewhere '
+                                          '(judged from the first turn) a blocker does. false: always '
+                                          'a blocker (an avoid-only test started in the section itself)'),
         DeclareLaunchArgument('reverse', default_value='false',
                               description='back up 0.2 m when every path stays blocked (recovery)'),
         OpaqueFunction(function=_nodes),

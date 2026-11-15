@@ -25,7 +25,7 @@ cone_sorter:
     max_dist_between_cones: 0.4
     max_trace_length: 20
     threshold_directional_angle_deg: 45.0
-    first_step_angle_deg: 90.0   # the corridor can be at an angle to the car at the first cone
+    first_step_angle_deg: 45.0   # greedy tracer's first segment; DFS uses its own turn rules
     angle_from_left_first_cone: 45.0
     dist_from_left_first_cone: 0.7
     dist_from_right_first_cone: 0.7
@@ -41,18 +41,29 @@ cone_sorter:
     ing_y_min: -1.0
     ing_y_max: 1.0
     ing_min_count: 4
+    # no course START while /avoid/active (static_avoid) is true: LIMOs side by side pass the start
+    # test (1112/1113 avoid runs: 1~8 starts each, 1114_0028 aborted the avoidance). An older message
+    # than this is ignored, so without static_avoid the course starts as before.
+    avoid_active_timeout: 0.5
+    # and this long after it ends (11-09 bags: an end among the LIMOs started the course 0~0.14 s
+    # later; 2 s holds all three, the later starts at 4.2 s and more stay)
+    avoid_release_hold: 2.0
 
 cone_follower:
   ros__parameters:
-    speed: 0.4               # simulator course: 0.3~0.4 pass, 0.5 and 0.2 or less hit a cone
-    reverse_speed: -0.2
+    speed: 0.25              # keep response margin for the measured ~0.2 s steering delay
+    reverse_speed: -0.2       # only recover a missing boundary path, with fresh rear-scan clearance
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
     wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
     rear_axle_x: 0.1         # rear axle behind base_link (base_link is midway between the axles)
-    lfd: 0.4                 # simulator course: 0.3 hits a cone, see the sweep in the commit message
+    lfd: 0.35                # rear-axle circle radius; smoother commands than 0.30 in bag-scene trials
+    steering_gain: 1.0       # geometric pure pursuit without extra curvature amplification
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
+    path_relaxation_enabled: true   # trial: bounded local path bending reduction
+    corner_endpoint_enabled: true  # straight endpoint / observed outer-turn midpoint path
+    exit_clearance: 0.2      # minimum path distance to current detected obstacle centres
 
 # Second extractor instance for the static obstacle mission: LIMO-sized objects, no cones
 # (from namgyu/static-obstacle-avoidance). Retune min_width / min_points with a real LIMO scan.

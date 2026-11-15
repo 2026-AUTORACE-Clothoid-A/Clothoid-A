@@ -76,12 +76,15 @@ def job(args):
     sign_at = conf.pop('sign_at', None)          # the sign first seen when the car passes x (m)
     steer_gain = conf.pop('steer_gain', 1.0)     # real wheel angle x this (car 7's table x gain)
     control_every = conf.pop('control_every', 1)  # control every n-th 0.05 s step (busy node)
+    line_start = conf.pop('line_start', False)    # race start: the entry line starts it (course map)
+    lane_speed = conf.pop('lane_speed', 0.3)      # lane_main's speed before the start (car: 0.8)
     p = replace(AvoidParams(), lane_width=W, **conf)
     track = []
     flag = direction if sign_at is None else (direction, sign_at)
     o = sim.run([(rear + HALF, y) for y, rear in layout], direction=flag, lane_width=W,
                 params=p, seed=seed, track=track, steer_gain=steer_gain,
-                control_every=control_every)
+                control_every=control_every, line_start=line_start,
+                lane_speed=lane_speed)
     why = []
     if o['min_gap'] <= 0.0:
         why.append('HIT')

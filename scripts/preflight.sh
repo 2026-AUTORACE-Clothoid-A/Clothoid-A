@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Check the car (or PC) before starting a launch again: leftover ROS processes, Fast DDS shared
-# memory left by crashed runs, DDS environment, clock, a stale colcon build.
+# memory left by crashed runs, DDS environment, Jetson clocks (jetson_clocks) and desktop load,
+# clock, a stale colcon build.
 #   scripts/preflight.sh            report only (exit 1 when something needs attention)
 #   scripts/preflight.sh --clean    also remove zombie Fast DDS shared memory (`fastdds shm clean`:
 #                                   only files no live process holds, safe while nodes run)
@@ -177,6 +178,38 @@ if [ "$CLEAN" = 1 ]; then
     shm_check report || SHM_WARN=1
 fi
 [ "${SHM_WARN:-0}" = 1 ] && WARN=1
+
+# Jetson only (PREFLIGHT_JETSON=1 forces it, for a test on the PC): the stack needs every core at its
+# top clock and as few desktop processes as possible (docs/PIPELINE_LOAD_PLAN.md 10.3 #1 #2)
+if [ -e /etc/nv_tegra_release ] || command -v nvpmodel >/dev/null || [ "${PREFLIGHT_JETSON:-0}" = 1 ]; then
+    echo "== CPU / GPU clocks"
+    command -v nvpmodel >/dev/null && nvpmodel -q 2>/dev/null | grep -m1 "Power Mode" | sed 's/^/  /'
+    govs=$(cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor 2>/dev/null | sort -u | tr '\n' ' ')
+    # jetson_clocks raises every core's minimum to its maximum: a lower minimum = not applied
+    slow=""
+    for d in /sys/devices/system/cpu/cpu[0-9]*/cpufreq; do
+        lo=$(cat "$d/scaling_min_freq" 2>/dev/null); hi=$(cat "$d/cpuinfo_max_freq" 2>/dev/null)
+        [ -n "$lo" ] && [ -n "$hi" ] && [ "$lo" -lt "$hi" ] && d=${d%/cpufreq}; slow="$slow ${d##*/}"
+    done
+    for d in /sys/class/devfreq/*; do
+        case "$(basename "$d")" in *gpu*|*ga10b*|*gv11b*|*gp10b*) ;; *) continue ;; esac
+        lo=$(cat "$d/min_freq" 2>/dev/null); hi=$(cat "$d/max_freq" 2>/dev/null)
+        [ -n "$lo" ] && [ -n "$hi" ] && [ "$lo" -lt "$hi" ] && slow="$slow gpu"
+    done
+    if [ -n "$slow" ]; then
+        warn "clocks not pinned (governor: ${govs:-?}; min < max on: $(echo $slow | cut -d" " -f1-3)$( [ $(echo $slow | wc -w) -gt 3 ] && echo " ...")): run \`sudo jetson_clocks\` (again after every reboot)"
+    else
+        ok "clocks pinned at maximum (governor: ${govs:-?})"
+    fi
+    echo "== desktop load"
+    for name in rustdesk update-manager; do
+        [ -n "$(others "$name")" ] && warn "$name is running (~0.1 core each on limo2): close it before driving"
+    done
+    if [ -n "$(others Xorg)$(others gnome-shell)" ]; then
+        echo "  info  desktop running (Xorg + gnome-shell ~0.4 core on limo2); for a race run without it:"
+        echo "        sudo systemctl isolate multi-user.target   (back: sudo systemctl isolate graphical.target)"
+    fi
+fi
 
 echo "== clock"
 if command -v timedatectl >/dev/null; then

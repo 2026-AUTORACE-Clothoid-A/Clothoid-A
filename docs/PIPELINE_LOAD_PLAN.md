@@ -348,6 +348,8 @@ PC 수치는 bag 01을 노드별 프로세스로 돌려 얻었다. `LAZY=false O
 - 측정 전에 `scripts/preflight.sh`를 돌린다. 이전 실행에서 남은 프로세스와 `/dev/shm` 잔여물이 있으면 수치가 달라진다. 정리는 모든 launch를 끈 뒤 `--kill`, 그다음 `--clean`.
 - **브랜치를 바꿨으면 클린 빌드한다:** `cd ros2_ws && rm -rf build install log && colcon build --symlink-install`. 다른 브랜치가 만든 `build/` symlink(예: clothoid_lidar의 `avoid.launch.py`)가 남아 있으면 colcon이 실패한다. 저장소 루트에 생긴 `~/Clothoid-A/build`·`install`·`log`도 지운다. preflight가 둘 다 알려 준다.
 
+**먼저 `tools/carmon/carmon.sh`**(10절)로 잰다. 아래 명령들을 1초 단위로 한 번에 기록하고, `report.py`가 표로 정리한다. 아래는 개별로 볼 때 쓴다.
+
 ```bash
 # 0) 하드웨어 / 전원 모드
 nproc; cat /proc/cpuinfo | grep -c processor
@@ -418,3 +420,46 @@ tools/load_profile/fanout.sh ~/autorace_bags/2026-11-10/1110_avoid_01 7 /tmp/fan
 python3 tools/load_profile/gaps.py ~/autorace_bags/2026-11-10/1110_avoid_01 --split 6.4  # 3절
 source tools/load_profile/env.sh && python3 tools/load_profile/micro.py ~/autorace_bags/2026-11-10/1110_avoid_01  # 4.3절
 ```
+
+## 10. 2026-11-15 재점검 (main a5f50cf, 6.0절 뒤 110커밋)
+
+### 10.1 증상과 차 실측
+| 실행 | `/cmd_vel_lane` | `/detections` | static_avoid 영상 수신 |
+|---|---|---|---|
+| 1114_0217_full | 28.7 Hz | 21.9 Hz | 10 Hz |
+| 1114_2343_full | **13.0 Hz** | 12.3 Hz | **1.4~3 Hz**(처리 시간 9 ms → 최대 205 ms) |
+
+- 노드 구성은 같고 센서 입력은 정상이다. CPU 쪽과 GPU 쪽이 같이 느려졌다. 이 실행에서 0.8 m/s 코너 중 lane이 반대로 꺾었다(세션 B 분석).
+- **세션 B가 정지 상태에서 잰 값(full.launch만, 2026-11-15)**
+  - Orin NX **8GB, 6코어**이고 **15W가 최대 모드**다(MAXN 없음). CPU 1.51 GHz, GPU 625 MHz.
+  - governor는 schedutil이고 jetson_clocks를 적용하지 않았다. 일부 코어가 0.8~1.27 GHz로 내려간다.
+  - 온도는 58~63°C다.
+  - CPU는 6코어 평균 58%다(rustdesk를 켜면 75%). **sys가 20%**다.
+  - `ps` 누적 기준(100 = 코어 1개): lane_main 78, yolo 52, static_avoid 50, mission 42, 카메라 container 22, Xorg 21, gnome-shell 18, update-manager 10, throttle 8, finish 8, rustdesk 13, limo_base 7.5, obstacle_extractor 2개 10
+- 하드웨어로 올릴 여지가 없다. 정지 중에 이미 약 3.5코어를 쓰고, 주행하면 static_avoid·mission 처리가 늘어난다.
+- bag에는 시스템 상태가 없어서 0217과 2343의 차이는 확정하지 못했다. 다음 주행부터는 `tools/carmon`을 같이 돌린다.
+
+### 10.2 측정 도구 `tools/carmon/`
+스택 옆에서 1초마다 아래를 기록한다(사용법은 `tools/carmon/README.md`).
+- 시스템: CPU user / sys / softirq, 코어별 %와 MHz, GPU, RAM, 온도, 전력
+- 노드별: CPU와 그 user / sys, RSS, context switch
+- 핵심 토픽 Hz
+- 토픽 그래프: 카메라를 누가 받는지, 켜진 디버그 출력, 원격 구독자
+
+`report.py`는 lane이 느린 초와 정상인 초를 나눠 그때 CPU를 더 쓴 프로세스를 보여 준다. 도구 자체는 PC에서 코어의 약 2%를 쓴다. 메시지를 콜백 없이 1초에 한 번 꺼내 센다. rclpy 콜백 방식은 같은 토픽 수에서 8~13%였다.
+
+### 10.3 원인 후보와 조치 (우선순위 순)
+| # | 대상 | 근거 | 조치 | 기대(코어) | 담당 |
+|---|---|---|---|---|---|
+| 1 | 데스크톱(Xorg, gnome-shell, update-manager)과 rustdesk | ps 합계 약 0.6코어 | 주행 때 rustdesk를 끄고 update-manager를 끈다. 가능하면 화면 없이(`sudo systemctl isolate multi-user.target`) 띄운다 | ~0.6 | 운용 |
+| 2 | 클럭 | schedutil에서 코어가 0.8 GHz까지 내려간다 | 기동마다 `sudo jetson_clocks`. `scripts/preflight.sh`가 코어·GPU 최소 클럭이 최대보다 낮으면(jetson_clocks 미적용) 경고하고, rustdesk·update-manager도 경고한다 | 순간 지연 감소 | 운용(preflight 경고는 반영됨) |
+| 3 | **lane_main 우선순위** | CPU가 모자랄 때 30 Hz 제어 루프가 다른 노드와 같은 순위로 밀린다 | full.launch에서 lane_main을 제외한 무거운 Python 노드(yolo, static_avoid, mission, finish, parking, cone)에 `prefix='nice -n 5'`를 준다. 음수 nice는 root가 필요해서 반대로 다른 노드를 낮춘다. carmon으로 lane Hz 전후를 비교한다 | 부하는 같고 lane이 덜 밀린다 | 세션 A(launch) |
+| 4 | Wi-Fi 원격 구독 | 2343은 PC에서 Wi-Fi로 녹화했다. 원격 구독자가 있으면 publisher가 메시지마다 UDP로 한 번 더 보낸다(image_10hz는 9 MB/s, 조각화로 sys·softirq 증가) | 주행 녹화는 차에서 `scripts/rec_full.sh`로 한다. PC rviz도 영상 토픽은 끈다. carmon `graph.json`으로 원격 구독자를 확인한다 | sys 일부 | 운용 |
+| 5 | mission 42%, finish | 압축 영상은 finish가 처음부터 기본값(`compressed: true`)으로 썼고, mission은 FinishCore를 가져오면서 그 설정을 그대로 따랐다(`mission.yaml`: "as finish"). 차에서 압축이 필요한 이유는 기록에 없다. 신호등·횡단보도를 보면 무장해 `/camera/color/image_raw/compressed` 30 Hz를 받는다(`mission_node._image_on`). 그러면 카메라 container가 30 Hz로 JPEG를 인코딩하고, mission이 디코딩한 뒤 BEV를 만든다. 출발선에서 신호등을 보고 서 있으면 정지 중에도 계속 돈다 | ① carmon과 `/mission/state`의 armed로 확인한다. ② `compressed: false`와 `image_topic: /camera/color/image_raw`(yaml 두 줄, 코드는 이미 raw를 지원)로 바꿔 인코딩과 디코딩을 없애거나(4.2절: PC에서 raw 수신 5.3% < JPEG 수신+디코딩 7.4%, 여기에 인코딩이 더해진다), 무장 중에도 2프레임마다 처리한다(0.2 m/s 접근이면 15 Hz로 충분) | 0.2~0.4 | 세션 A(mission), 남규(finish) |
+| 6 | 카메라 container 22%, throttle 8% | throttle은 별도 프로세스라 30 Hz raw를 shm으로 받아 10 Hz로 다시 보낸다 | throttle 대신 `clothoid_image_hub`(8.1절, `image_10hz`)를 카메라 container에 intra-process로 올린다. 8.1절 측정과 함께 한다 | ~0.1 | 세션 A |
+| 7 | yolo 52% | TensorRT engine인데도 CPU를 많이 쓴다(전처리, raw 수신, ultralytics 오버헤드) | 차에서 `tools/load_profile/yolo_stages.py`로 단계별로 잰다. 입력을 15 Hz로 제한하는 안은 mission 확인 창(연속 프레임 수)과 같이 정한다 | ~0.2 | 은수, 세션 A |
+| 8 | static_avoid 50%(정지 중) | load 로그로는 영상 7~9 ms × 10 Hz ≈ 10%여야 한다 | **세션 B가 원인을 본다**(raw 수신, imu 100 Hz·odom 50 Hz 콜백, CourseMap) | ~0.3 | 세션 B |
+| 9 | lane_main 78% | PC에서 검출기 자체는 프레임당 2.4 ms다(1113_auto_05, debug 끔, 스레드 1개). 30 Hz raw 수신, rclpy, imu·odom 콜백(150건/s)의 몫이 크다 | carmon user/sys로 먼저 나눠 본다. 영상 없는 콜백을 줄이는 안(imu/odom을 lazy로, bump 구간에만)은 남규와 상의한다 | 측정 후 | 남규 |
+
+- 1, 2, 4는 코드를 고치지 않고 다음 주행에 바로 적용할 수 있다. 3은 launch 한 줄이고 되돌리기도 쉽다.
+- 5부터 9까지는 carmon 결과를 보고 담당별로 진행한다. 차에서 보는 순서: 정지 1분, 주행 한 바퀴, `report.py --from/--to`로 구간을 나눈다.

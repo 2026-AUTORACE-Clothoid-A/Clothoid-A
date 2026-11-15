@@ -8,6 +8,7 @@
   <license>TODO</license>
 
   <!-- latency_monitor -->
+  <exec_depend>clothoid_common</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>rosidl_runtime_py</exec_depend>
   <exec_depend>python3-numpy</exec_depend>

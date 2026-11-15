@@ -22,6 +22,7 @@ from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import Bool, String, Float32
 from visualization_msgs.msg import MarkerArray
 
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_parking.bay_finder import BayParams
 from clothoid_parking.core import ParkingCore
 from clothoid_parking.approach import ApproachParams, ParkingApproach
@@ -34,7 +35,7 @@ from clothoid_parking.viz import markers, layout_markers, observation_markers, p
 STALE_SEC = 0.5
 
 
-class ParkingNode(Node):
+class ParkingNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('parking')
         for name, default in (('scan_topic', '/scan'), ('imu_topic', '/imu'), ('odom_topic', '/odom'),

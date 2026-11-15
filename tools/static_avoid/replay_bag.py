@@ -83,7 +83,7 @@ def image_bgr(msg):
 
 
 def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stall=False, image_every=3,
-           legacy_odom=False, old_reference=False, overrides=None):
+           legacy_odom=False, old_reference=False, overrides=None, imu_every=1, odom_every=1):
     """Same pieces as static_avoid_node: LIMO trigger, costmap, plans, entry line (camera every
     3rd frame), island from the entry line, hand-over."""
     cam = cam or CameraModel()          # limo2 = car 7, the 11-05 bags
@@ -96,6 +96,7 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                         lane_fit_give_up=1.0, lane_ref_rate_max_deg=1e9)
     avoid = StaticAvoid(p)
     tracker = PoseTracker()
+    state = {}                      # line_odo: the requested start line; fallback: blocker start allowed
     fitter = LaneFitter(p, cam, ColourParams())
     course = None
     if p.course_map:                       # the bag must start at the race start (as the node then)
@@ -107,6 +108,16 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                crossings=[], yaw=[], starts=[], mission=[], blocked=[], course=course)
     t0 = None
     on_since, on_total = None, 0.0
+    origin_logged = ['pending']
+
+    def log_origin(s):
+        if course is None or course.origin == origin_logged[0]:
+            return
+        origin_logged[0] = course.origin
+        if course.origin != 'race':
+            entry.start_by_map = None
+        rec['events'].append((s, 'course map: %s (%s)' % (course.origin, course.origin_why)))
+        rec['origin'] = (course.origin, tracker.distance)
     s = 0.0
     drop = set()
     if stall:
@@ -114,9 +125,14 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         rec['stalls'] = (len(gaps), len(drop))
     topics = ['/scan', '/odom', '/imu', '/camera/color/image_raw', '/camera/color/image_raw/compressed',
               '/camera/color/image_10hz', '/mission/state']
+    kept = {'/imu': 0, '/odom': 0}
     for topic, t, msg in messages(bag, topics):
         if drop and (topic, int(round(t * 1e6))) in drop:      # microseconds: float seconds
             continue
+        if topic in kept:              # --imu-every / --odom-every: a slower topic (e.g. /imu_25hz)
+            kept[topic] += 1
+            if (kept[topic] - 1) % (imu_every if topic == '/imu' else odom_every):
+                continue
         t0 = t if t0 is None else t0
         s = t - t0
         if topic == '/imu':
@@ -143,10 +159,18 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                 if why:
                     entry.start_by_map = None
                     rec['events'].append((s, 'course map fallback: ' + why))
+                log_origin(s)
             for d in check_start_line(entry, bgr, cam, fitter.colours, tracker.distance, p.lane_width):
                 rec['events'].append((s, 'white line at %.2f m: %s (%s)' % (
                     d.odometer, 'SECTION START LINE' if d.start else 'not the start',
-                    d.where or 'pair ' + d.pairs)))
+                    d.where or 'pair %s' % d.pairs)))
+                if d.start and course is not None and course.corner1 is not None:
+                    course.set_origin('race', 'start line after the right turn at map x %.1f m'
+                                      % course.corner1[1])
+                    log_origin(s)
+                    if course.origin == 'race':
+                        avoid.request_line_start(tracker.line_pose(d.odometer))
+                        state['line_odo'] = d.odometer
             had = avoid.event
             fitter.on_frame(bgr, avoid, tracker, entry)
             if avoid.event != had and 'fit' in avoid.event:
@@ -193,13 +217,32 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
                                            else ''),
                                        ahead=float(np.min(np.hypot(*limos.T))) if len(limos) else None,
                                        mission=rec['mission'][-1][1] if rec['mission'] else ''))
-        started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose)
+        if avoid.line_start is not None and state.get('line_odo') is not None:   # as the node
+            entry_back, entry_pose = tracker.distance - state['line_odo'], avoid.line_start
+        had_line = avoid.line_start is not None
+        if (course is not None and course.origin == 'pending' and tracker.distance < p.course_test_start
+                and avoid.blocked(limos)):                                       # as the node
+            course.set_origin('elsewhere', 'a LIMO in our lane %.2f m after the launch' % tracker.distance)
+            log_origin(s)
+        allowed = course is None or course.origin == 'elsewhere' or state.get('fallback', False)
+        approach = avoid.approach
+        started = avoid.on_limos(s, limos, inh, tracker.speed, pose, entry_back, entry_pose, allowed)
         if avoid.done and not was_done:
             rec['events'].append((s, 'DONE: ' + avoid.event))
+        if had_line and not started and avoid.line_start is None:
+            rec['events'].append((s, avoid.event))
+            if not state.get('fallback') and course is not None and course.origin == 'race':
+                state['fallback'] = True
+                rec['events'].append((s, 'course map: race start, but no start on the line; a blocker '
+                                         'starts the mission from here'))
         if started:
             rec['events'].append((s, avoid.event.upper() + f' (odometer {tracker.distance:.2f} m)'))
             on_since = s
-            rec['starts'].append(dict(t=s, odometer=tracker.distance, yaw=avoid.frame.yaw0))
+            rec['starts'].append(dict(t=s, odometer=tracker.distance, yaw=avoid.frame.yaw0,
+                                      line=avoid.approach))
+        elif approach and not avoid.approach:
+            rec['events'].append((s, f'approach ends: LIMO in our lane (odometer {tracker.distance:.2f} m)'))
+            rec['starts'][-1]['slow'] = tracker.distance
         if avoid.state != ACTIVE:
             continue
         ok = np.isfinite(r) & (r > msg.range_min) & (r < msg.range_max)
@@ -207,6 +250,14 @@ def replay(bag, t_from, t_to, direction, ignore_cone, lane_width, cam=None, stal
         free = np.column_stack((np.cos(ang[~ok]), np.sin(ang[~ok])))
         avoid.on_scan(hits, np.array([LIDAR_X, 0.0]), pose, tracker.latest(), direction,
                       keep_candidates=True, free_dirs_base=free)
+        if avoid.approach and avoid.plan is not None and avoid.plan.feasible:   # as control()
+            now = avoid.lane_pose(tracker.latest())
+            if abs(avoid.plan.end_offset - now[1]) > 0.10 or avoid.plan.obstacle_cost > p.slow_cost:
+                avoid.approach = False
+                rec['events'].append((s, 'approach ends: %s (odometer %.2f m)' % (
+                    'lane change' if abs(avoid.plan.end_offset - now[1]) > 0.10 else
+                    'obstacle cost %.0f' % avoid.plan.obstacle_cost, tracker.distance)))
+                rec['starts'][-1]['slow'] = tracker.distance
         sec = avoid.lane_pose(tracker.latest())
         if len(limos):
             rec['limos'].extend(base_to_section(limos, avoid.section_pose(pose)).tolist())
@@ -399,6 +450,8 @@ def main():
                     help='per start: section / lane frame against the lane (IMU while following it)')
     ap.add_argument('--old-reference', action='store_true',
                     help='before 11-12: the start heading kept, 15 deg limit, fits taken while turning')
+    ap.add_argument('--imu-every', type=int, default=1, help='use every n-th /imu (4: 25 Hz)')
+    ap.add_argument('--odom-every', type=int, default=1, help='use every n-th /odom (2: 25 Hz)')
     ap.add_argument('--legacy-odom', action='store_true',
                     help='the 11-10 odometer: v * dt with gaps capped at 0.1 s, queue depths 20 / 50')
     a = ap.parse_args()
@@ -408,14 +461,16 @@ def main():
     direction = None if a.direction == 'none' else (None if a.direction == 'auto' else int(a.direction))
     rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
                  stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
-                 old_reference=a.old_reference, overrides=overrides)
+                 old_reference=a.old_reference, overrides=overrides, imu_every=a.imu_every,
+                 odom_every=a.odom_every)
     if a.direction == 'auto' and rec['trail']:
         driven = [d for t, s, d, _ in rec['trail'] if s > 0.5 and t <= a.t_to]
         end_lane = lane_of(driven[-1], rec['p']) if driven else 2
         direction = {1: 0, 3: 1}.get(end_lane)
         rec = replay(a.bag, a.t_from, a.t_to, direction, a.ignore_cone, a.lane_width,
                      stall=a.stall_like_live, legacy_odom=a.legacy_odom, image_every=a.image_every,
-                 old_reference=a.old_reference, overrides=overrides)
+                 old_reference=a.old_reference, overrides=overrides, imu_every=a.imu_every,
+                 odom_every=a.odom_every)
     if rec.get('stalls'):
         print(f'emulated busy node: {rec["stalls"][0]} stalls, {rec["stalls"][1]} messages dropped'
               f'{" (11-10 odometer)" if a.legacy_odom else ""}')

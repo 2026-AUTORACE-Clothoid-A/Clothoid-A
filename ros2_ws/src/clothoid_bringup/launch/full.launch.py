@@ -19,8 +19,11 @@ Static obstacle avoidance (`use_avoid`, clothoid_lidar/avoid.launch.py: limo_ext
 reads the camera at 10 Hz when `use_image_10hz:=true` (default), else every 3rd raw frame.
 `ignore_cone:=true` keeps it running while the cone course is active (test track only: after the cones
 it would outrank lane, avoid 80 > lane 10). `avoid_reverse` / `avoid_debug_heavy` are its `reverse` /
-`debug_heavy`. `avoid_course_map` (default true): static_avoid tells the section's start line by its
-place on the /imu + /odom course map, so launch at the race start (false when starting elsewhere).
+`debug_heavy`. `avoid_course_map` (default true): static_avoid keeps an /imu + /odom course map from
+where it was launched and judges from the first turn whether that was the race start. Race start: the
+section start line (its place on the map) starts the mission, at lane speed until the first obstacle;
+nothing starts it before. Elsewhere: an obstacle in our lane starts it as before. false: always the
+latter (an avoid-only test launched inside the section, with no turn before it).
 Keep `avoid_reverse` off: on the car it backed across the lanes and left the track (2026-11-13);
 the escape paths are off in static_avoid.yaml (`escape: false`) for the same reason.
 
@@ -89,9 +92,10 @@ def generate_launch_description():
         DeclareLaunchArgument('ignore_cone', default_value='false',
                               description='static_avoid keeps running while the cone course is active (test track)'),
         DeclareLaunchArgument('avoid_course_map', default_value='true',
-                              description='static_avoid finds the section start line by its place on the '
-                                          '/imu + /odom course map: launch at the race start; false when '
-                                          'starting elsewhere (then the dashed lane-line pair decides)'),
+                              description='static_avoid: /imu + /odom course map; launched at the race '
+                                          'start (judged from the first turn) the section start line '
+                                          'starts the mission, elsewhere an obstacle does. false: always '
+                                          'an obstacle (a test launched inside the section)'),
         DeclareLaunchArgument('avoid_reverse', default_value='false',
                               description='static_avoid backs up 0.2 m when every path stays blocked'),
         DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
@@ -115,6 +119,8 @@ def generate_launch_description():
         include('clothoid_yolo', 'yolo.launch.py',
                 {'backend': LaunchConfiguration('backend'),
                  'model_path': LaunchConfiguration('model_path'),
+                 'image': PythonExpression(["'10hz' if '", LaunchConfiguration('use_image_10hz'),
+                                            "'.lower() == 'true' else 'raw'"]),
                  'show': LaunchConfiguration('show'),
                  'debug': debug}, enabled('use_yolo')),
         include('clothoid_lidar', 'cone.launch.py', condition=enabled('use_lidar_missions')),

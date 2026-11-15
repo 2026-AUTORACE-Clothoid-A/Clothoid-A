@@ -106,7 +106,7 @@ def min_gap(car_poly, limos):
 
 def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, remove_at=None,
         seed=1, t_max=45.0, params=None, see_entry=True, skew_deg=None, start_fit=False, steer_gain=1.0,
-        control_every=1, track=None):
+        control_every=1, track=None, line_start=False, lane_speed=0.3):
     """Drive the section once. Returns a dict of what happened.
     direction: 0 / 1 / None, or (value, x) for a fork sign first seen when the car passes x.
     skew_deg: the section frame is wrong by this much until the camera lane fit, 0.5 m past the entry
@@ -114,7 +114,9 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
     camera start fit does (the entry-line fit stands for a start fit that failed).
     steer_gain: the real wheel angle is this times car 7's table (tools/static_avoid/sim_tracking.py).
     control_every: control() every n-th 0.05 s step, the command held in between (a busy node).
-    track: list to append (t, s, d of the car, the plan's path) at each control step while avoiding."""
+    track: list to append (t, s, d of the car, the plan's path) at each control step while avoiding.
+    line_start: the race start (course map): the entry line starts the mission, lane_main drives up
+    to it at approach_speed, a blocker alone starts nothing."""
     rng = np.random.default_rng(seed)
     w = lane_width
     p = params or replace(AvoidParams(), lane_width=w)
@@ -140,6 +142,8 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
             entry_odo = tracker.distance          # the camera's entry-line crossing
             if avoid.state == ACTIVE:
                 avoid.on_entry_crossing(tracker.latest())
+            if line_start:
+                avoid.request_line_start(tracker.at_distance(entry_odo))
         entry_back = tracker.distance - entry_odo if entry_odo is not None else None
         inh = inhibit or Inhibit()
         flag = direction
@@ -152,7 +156,7 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
                 extract_obstacles(r, ang[0], ang[1] - ang[0], LIMO_PARAMS), LIDAR_X, 0.0, 0.0)
             pose = tracker.latest()
             entry_pose = tracker.at_distance(entry_odo) if entry_odo is not None else None
-            if avoid.on_limos(t, obstacles, inh, cmd[0], pose, entry_back, entry_pose):
+            if avoid.on_limos(t, obstacles, inh, cmd[0], pose, entry_back, entry_pose, not line_start):
                 out['activated'] = True
                 out['events'].append((round(t, 2), 'start', round(bx, 2)))
                 out['island_source'] = avoid.island_source
@@ -187,7 +191,8 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
             xs = bx + 0.05 * np.arange(40)
             path = np.column_stack((xs, np.full(40, centre)))
             delta = pure_pursuit(path, (bx, by, th), p)
-            cmd = (0.3, 0.3 * math.tan(delta) / L)
+            v = p.approach_speed if line_start and not released else lane_speed
+            cmd = (v, v * math.tan(delta) / L)
         else:
             cmd = res
             out['stops'] += int(res[0] == 0.0)
@@ -999,7 +1004,8 @@ def test_pose_of_a_line_still_ahead():
     assert tr.line_pose(0.2) == pytest.approx(tr.at_distance(0.2))
 
 
-def _course_tracker(yaw0=0.7, placed_deg=0.0, wobble_deg=0.0):
+def _course_tracker(yaw0=0.7, placed_deg=0.0, wobble_deg=0.0,
+                    legs=((0.0, 900), (-math.pi / 2, 470), (math.pi, 200))):
     """Drive the 1114 course start: 9 m along +x, a right turn, 4.7 m down, a right turn, along -x;
     in a world frame turned by yaw0 (the IMU's own zero). placed_deg: the car set down that much
     off the track axis at the start (its IMU zero is then off too). wobble_deg: lane-following sway."""
@@ -1010,7 +1016,7 @@ def _course_tracker(yaw0=0.7, placed_deg=0.0, wobble_deg=0.0):
     pts, heads = [], []
     x, y = 0.0, 0.0
     k = 0
-    for h, n in ((0.0, 900), (-math.pi / 2, 470), (math.pi, 200)):
+    for h, n in legs:
         for _ in range(n):
             k += 1
             hh = h + math.radians(wobble_deg) * math.sin(k / 40.0)
@@ -1077,3 +1083,76 @@ def test_course_map_decides_without_the_lane_line_pair():
     tr.crossings += [a, b]
     decided = check_start_line(tr, None, None, None, 14.3, 0.5)     # no image needed
     assert decided == [a, b] and a.start is False and b.start is True
+
+
+def test_course_origin_race_start_waits_for_the_line():
+    """The 1114 course from the race start: after the right turn at x 9 still 'pending' (the start
+    line makes it 'race'); the -30 deg lane-following sway is no turn."""
+    tr, course = _course_tracker(wobble_deg=30.0, legs=((0.0, 900), (-math.pi / 2, 300)))
+    assert course.origin == 'pending' and course.corner1[1] > 7.5      # the sway shortens x
+    course.set_origin('race', 'line')
+    course.set_origin('elsewhere', 'later')                  # judged once
+    assert course.origin == 'race'
+
+
+def test_course_origin_avoid_only_test_turns_at_once():
+    """1113 avoid-only runs: a right turn after 1.2 m of straight -> not the race start."""
+    tr, course = _course_tracker(legs=((0.0, 120), (-math.pi / 2, 100)))
+    assert course.origin == 'elsewhere' and 'after 1.2 m of straight' in course.origin_why
+
+
+@pytest.mark.parametrize('legs, why', [
+    (((0.0, 1150),), 'no turn in the first'),                           # straight on past 11 m
+    (((0.0, 900), (math.pi / 2, 100)), 'went left'),                    # a left turn at x 9
+    (((0.0, 900), (-math.pi / 2, 300), (0.0, 100)), 'after the first right turn'),
+])
+def test_course_origin_not_the_race_course(legs, why):
+    tr, course = _course_tracker(legs=legs)
+    assert course.origin == 'elsewhere' and why in course.origin_why
+
+
+def test_line_start_then_approach_speed_until_a_blocker():
+    """Race start: the start line starts the mission (no blocker needed), approach_speed until a LIMO
+    in our lane; a blocker alone starts nothing while not allowed."""
+    p = AvoidParams()
+    avoid = StaticAvoid(p)
+    limo = np.array([[1.0, 0.0]])
+    for k in range(5):                                       # blocked, but not allowed
+        assert not avoid.on_limos(0.1 * k, limo, Inhibit(), 0.5, (0.0, 0.0, 0.0), None, None, False)
+    line = (0.5, 0.0, 0.0)
+    avoid.request_line_start(line)
+    assert not avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(state_command=True), 0.5,
+                              (0.6, 0.0, 0.0), 0.1, line, False)      # a mission stop: waits
+    assert avoid.on_limos(1.1, np.zeros((0, 2)), Inhibit(), 0.5, (0.6, 0.0, 0.0), 0.1, line, False)
+    assert avoid.state == ACTIVE and avoid.approach and avoid.island_source == 'entry line'
+    avoid.on_limos(1.2, limo, Inhibit(), 0.5, (0.7, 0.0, 0.0), 0.2, line, False)
+    assert not avoid.approach
+
+
+def test_line_start_dropped_for_another_line_or_far_past():
+    avoid = StaticAvoid(AvoidParams())
+    avoid.request_line_start((0.5, 0.0, 0.0))
+    assert not avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (4.0, 0.0, 0.0), 3.5,
+                              (0.5, 0.0, 0.0), False)
+    assert avoid.line_start is None and avoid.state != ACTIVE
+    other = StaticAvoid(AvoidParams())
+    other.request_line_start((0.5, 0.0, 0.0))
+    assert not other.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (0.6, 0.0, 0.0), 0.1,
+                              (2.0, 0.0, 0.0), False)
+    assert other.line_start is None and 'another line' in other.event
+
+
+def test_line_start_waits_for_a_line_not_placed_yet_and_starts_on_one_ahead():
+    """1114 23:39: the start line confirmed on a corner was placed > 1 m ahead of the base, the lookup
+    within 1 m found nothing and the start was dropped (no blocker start at the race start: the car
+    drove into the LIMOs). Unknown: wait; ahead (the node passes the requested line itself): start."""
+    avoid = StaticAvoid(AvoidParams())
+    line = (15.65, -5.0, math.pi)
+    avoid.request_line_start(line)
+    for k in range(5):
+        assert not avoid.on_limos(0.1 * k, np.zeros((0, 2)), Inhibit(), 0.5, (14.3, -5.0, math.pi),
+                                  None, None, False)
+    assert avoid.line_start == line
+    assert avoid.on_limos(1.0, np.zeros((0, 2)), Inhibit(), 0.5, (14.4, -5.0, math.pi), -1.25, line,
+                          False)
+    assert avoid.state == ACTIVE

@@ -89,6 +89,22 @@ LimoDriver::LimoDriver(std::string node_name):rclcpp::Node(node_name),keep_runni
     odom_publisher_=this->create_publisher<nav_msgs::msg::Odometry>("/odom",50);
     status_publisher_ = this->create_publisher<limo_msgs::msg::LimoStatus>("/limo_status",50);
     imu_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>("/imu",10);
+    // slow copies for the Python nodes (slow_topic.hpp): every imu_slow_every-th /imu (100 Hz -> 25 Hz)
+    // and odom_slow_every-th /odom (50 Hz -> 25 Hz), rates averaged; 0 = not published
+    const int imu_every = this->declare_parameter<int>("imu_slow_every", 4);
+    const int odom_every = this->declare_parameter<int>("odom_slow_every", 2);
+    const auto imu_slow_topic = this->declare_parameter<std::string>("imu_slow_topic", "/imu_25hz");
+    const auto odom_slow_topic = this->declare_parameter<std::string>("odom_slow_topic", "/odom_25hz");
+    if (imu_every > 0) {
+        imu_slow_ = std::make_unique<limo_base::ImuSlow>(imu_every);
+        imu_slow_publisher_ = this->create_publisher<sensor_msgs::msg::Imu>(imu_slow_topic, 10);
+    }
+    if (odom_every > 0) {
+        odom_slow_ = std::make_unique<limo_base::OdomSlow>(odom_every);
+        odom_slow_publisher_ = this->create_publisher<nav_msgs::msg::Odometry>(odom_slow_topic, 50);
+    }
+    RCLCPP_INFO(this->get_logger(), "slow topics: %s every %d, %s every %d (0 = off)",
+                imu_slow_topic.c_str(), imu_every, odom_slow_topic.c_str(), odom_every);
 
     motion_cmd_sub_= this->create_subscription<geometry_msgs::msg::Twist>(
         "/cmd_vel",10,std::bind(&LimoDriver::twistCmdCallback,this,std::placeholders::_1));
@@ -540,6 +556,10 @@ void LimoDriver::publishIMUData(double stamp) {
     imu_msg.orientation_covariance[8] = 1e-6;
 
     imu_publisher_->publish(imu_msg);
+    sensor_msgs::msg::Imu slow_msg;
+    if (imu_slow_ && imu_slow_->add(imu_msg, slow_msg)) {
+        imu_slow_publisher_->publish(slow_msg);
+    }
 }
 
 void LimoDriver::publishOdometry(double stamp, double linear_velocity,
@@ -662,6 +682,10 @@ void LimoDriver::publishOdometry(double stamp, double linear_velocity,
     odom_msg.pose.covariance[35] = 1.0;
 
     odom_publisher_->publish(odom_msg);
+    nav_msgs::msg::Odometry slow_msg;
+    if (odom_slow_ && odom_slow_->add(odom_msg, slow_msg)) {
+        odom_slow_publisher_->publish(slow_msg);
+    }
 }
 
 void LimoDriver::publishLimoState(double stamp, uint8_t vehicle_state, uint8_t control_mode,

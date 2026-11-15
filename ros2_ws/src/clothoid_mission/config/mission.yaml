@@ -3,6 +3,10 @@
 mission:
   ros__parameters:
     rate_hz: 20.0
+    # 25 Hz copies from limo_base (topics.yaml imu_slow_topic): the bump logic reads the newest pitch
+    # once per 20 Hz tick, the line stop only the odom distance. Old bags: back to /imu, /odom
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     input_timeout: 0.5          # detections / stop line / imu older than this count as "not seen"
     refresh_sec: 1.0            # direction / parking / steering_lock flag re-sent this often
     # Per-class proximity gates run before object tracking and frame confirmation.
@@ -57,6 +61,7 @@ mission:
     # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.
     require_cone_for_parking: true
     block_bump_after_cone: true
+    avoid_release_hold: 2.0     # s: ignore cone_active during avoidance and this long after
     cone_confirm_sec: 1.5
     slow_arms_bump: false      # round slow warning uses slow_hold_sec, independent of bump traversal
     # missions
@@ -72,7 +77,7 @@ mission:
     # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true
     approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
-    image_topic: /camera/color/image_raw/compressed   # overrides topics.yaml (raw), as finish
-    compressed: true
+    image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame
+    compressed: false
     white_s_max: 60             # stop line white: S <= 60, V >= 150
     white_v_min: 150

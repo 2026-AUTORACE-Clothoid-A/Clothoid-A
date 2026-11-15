@@ -24,6 +24,7 @@ import cv2
 import numpy as np
 import rclpy
 from clothoid_common.qos import IMAGE_QOS
+from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_finish.bev import Bev, CameraModel
 from clothoid_finish.finish_core import FinishParams, Phase
 from clothoid_interfaces.msg import DetectionArray
@@ -51,7 +52,7 @@ LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
               Phase.STOP: 'arrived', Phase.ABORT: 'abort'}
 
 
-class MissionNode(Node):
+class MissionNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('mission')
 
@@ -60,8 +61,8 @@ class MissionNode(Node):
         self.declare_parameter('parking_done_topic', '/parking_done')
         self.declare_parameter('state_topic', '/mission/state')   # JSON for clothoid_debug stop_viz
         # line stop (FinishCore): camera, intrinsics, gyro, wheel speed
-        self.declare_parameter('image_topic', '/camera/color/image_raw/compressed')
-        self.declare_parameter('compressed', True)
+        self.declare_parameter('image_topic', '/camera/color/image_raw')
+        self.declare_parameter('compressed', False)
         self.declare_parameter('camera_info_topic', '/camera/color/camera_info')
         self.declare_parameter('imu_topic', '/imu')
         self.declare_parameter('odom_topic', '/odom')
@@ -94,6 +95,7 @@ class MissionNode(Node):
         self.declare_parameter('parking_scene_topic', '/parking/bay_candidate')
         self.declare_parameter('parking_scene_rate_hz', 6.0)
         self.declare_parameter('parking_entry_max_travel', 3.0)
+        self.declare_parameter('avoid_active_topic', '/avoid/active')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line / imu older than this are dropped
@@ -141,6 +143,7 @@ class MissionNode(Node):
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
         self.declare_parameter('cone_confirm_sec', d.cone_confirm_sec)
+        self.declare_parameter('avoid_release_hold', d.avoid_release_hold)
 
         get = lambda name: self.get_parameter(name).value  # noqa: E731
         self.sign_tracker = SignTracker(
@@ -173,7 +176,8 @@ class MissionNode(Node):
             slow_arms_bump=get('slow_arms_bump'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
-            cone_confirm_sec=get('cone_confirm_sec')))
+            cone_confirm_sec=get('cone_confirm_sec'),
+            avoid_release_hold=get('avoid_release_hold')))
 
         self.cone_active = False
         self.cone_entered_logged = False
@@ -190,6 +194,7 @@ class MissionNode(Node):
         self.stopline, self.stopline_time = False, None
         self.latest_pitch, self.latest_pitch_time = None, None
         self.parking_done = False
+        self.avoid_active, self.avoid_time = False, None
         self.sign_time = None            # last /parking_sign true
         self.line, self.line_time = False, None
         self.parking_log = (False, False)
@@ -217,6 +222,7 @@ class MissionNode(Node):
         self.create_subscription(Bool, '/parking/observing', self.on_parking_observing, 1)
         self.create_subscription(Bool, '/parking/skipped', self.on_parking_skipped, 1)
         self.create_subscription(Bool, get('cone_active_topic'), self.on_cone_active, 1)
+        self.create_subscription(Bool, get('avoid_active_topic'), self.on_avoid_active, 1)
 
         # line stop: FinishCore defaults (front 0.161, stop_gap 0.03, ...) as finish; it does not
         # steer here, so losing the left yellow line must not abort the stop
@@ -478,6 +484,9 @@ class MissionNode(Node):
     def on_parking_done(self, msg: Bool):
         self.parking_done = msg.data
 
+    def on_avoid_active(self, msg: Bool):
+        self.avoid_active, self.avoid_time = bool(msg.data), self.now_sec()
+
     def _fresh(self, stamp) -> bool:
         return stamp is not None and -.05 <= self.now_sec() - stamp <= self.get_parameter(
             'input_timeout').value
@@ -512,7 +521,8 @@ class MissionNode(Node):
             line_speed=self.line_speed,
             parking_done=self.parking_done,
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
-            cone_active=self.cone_active))
+            cone_active=self.cone_active,
+            avoid_active=self.avoid_active and self._fresh(self.avoid_time)))
         if self.logic.cone_entered and not self.cone_entered_logged:
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered')

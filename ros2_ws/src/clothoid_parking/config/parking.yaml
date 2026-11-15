@@ -3,8 +3,10 @@
 # Every plan.* / bay.* field of planner.PlanParams / bay_finder.BayParams can be set here.
 parking:
   ros__parameters:
-    imu_topic: /imu
-    odom_topic: /odom
+    # 25 Hz copies from limo_base: gyro and speed are the mean of 4 / 2 samples, so the Tracker's
+    # rate * dt integration equals the full-rate one. Old bags: set these back to /imu, /odom
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     state_topic: /parking/state
     rate_hz: 20.0
     wheelbase: 0.2

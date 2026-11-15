@@ -39,6 +39,36 @@ def frame(node):
     node.process_bgr(np.zeros((480, 640, 3), dtype=np.uint8), Header())
 
 
+def test_cone_handover_cap_preserves_normal_speed_scaled_steering(lane):
+    node, _ = lane
+    frame(node)
+    steer = node.last_steer
+    node.on_cone_active(Bool(data=True))
+    node.cone_handover.request_exit(True)
+    frame(node)
+    assert node.last_cmd.linear.x == pytest.approx(.3)
+    assert node.last_steer == pytest.approx(steer)
+    assert node.last_cmd.angular.z == pytest.approx(angular_z(.3, steer, .2))
+    node.on_speed_limit(Float32(data=.2))
+    frame(node)
+    assert node.last_cmd.linear.x == pytest.approx(.2)
+
+
+def test_bump_locked_target_cannot_confirm_cone_lane_handover(lane):
+    node, _ = lane
+    frame(node)
+    node.on_cone_active(Bool(data=True))
+    node.cone_handover.request_exit(True)
+    now = node.get_clock().now().nanoseconds * 1e-9
+    target = node.used_target
+    for stamp in (now-.4, now-.2, now):
+        node.cone_handover.observe(stamp, True, target, target, 8., .3)
+    assert node.cone_handover.ready
+    node.on_steering_lock(Bool(data=True))
+    frame(node)
+    assert not node.cone_handover.ready
+
+
 def test_lock_retains_the_actual_speed_scaled_angle_and_current_speed(lane):
     node, result = lane
     node.on_speed_limit(Float32(data=.2))

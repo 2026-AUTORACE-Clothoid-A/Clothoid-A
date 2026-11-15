@@ -200,3 +200,21 @@ def test_cone_gate_keeps_scene_handover_checks_after_unlock():
     assert out.parking_prepare and not out.parking_flag
     assert not logic.step(Inputs(now=2.7, parking_line=True)).parking_flag
     assert logic.step(Inputs(now=2.8, parking_line=True, parking_scene=True)).parking_flag
+
+
+def test_cone_active_during_and_right_after_avoidance_does_not_latch():
+    """1114_0028: a false cone start during the static avoidance latched cone_entered."""
+    logic = MissionLogic(MissionParams(cone_confirm_sec=1.5, avoid_release_hold=2.0))
+    for t in (0.0, 1.0, 2.0, 3.0):
+        logic.step(Inputs(now=t, cone_active=True, avoid_active=True))
+    assert not logic.cone_entered
+    # avoidance ended at 3.0: cone_active up to 5.0 is still ignored
+    logic.step(Inputs(now=4.0, cone_active=True))
+    logic.step(Inputs(now=4.9, cone_active=True))
+    assert not logic.cone_entered
+    # the real cone course afterwards latches as before (1.5 s from 5.0)
+    logic.step(Inputs(now=5.0, cone_active=True))
+    logic.step(Inputs(now=6.0, cone_active=True))
+    assert not logic.cone_entered
+    logic.step(Inputs(now=6.5, cone_active=True))
+    assert logic.cone_entered

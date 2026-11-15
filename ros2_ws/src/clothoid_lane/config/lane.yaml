@@ -2,6 +2,12 @@
 # (640x480 usb_cam, yellow lane) and must be re-tuned on the LIMO (DaBai DC1).
 lane_main:
   ros__parameters:
+    # 25 Hz copies from limo_base (topics.yaml imu_slow_topic): only the newest pitch / yaw / pose is
+    # read per 30 Hz frame. 1113_auto_05: |frame - newest IMU stamp| p95 26 ms, max < 40 ms at 25 Hz,
+    # so steering_lock_sync_tolerance 0.04 still holds. Old bags have no /imu_25hz: for a replay set
+    # these back to /imu and /odom in a params file given last (tools/load_profile/run.sh)
+    imu_topic: /imu_25hz
+    odom_topic: /odom_25hz
     # 0.8 since 2026-11-08: the 02:27 / 02:55 drives at 0.8 (zigzag 0.2) did a lap in about 40 s with no
     # line crossing outside the A/B fork. The rule book recommends 0.3~0.4 m/s: check it before the
     # competition. With another speed, scale steer_gain inversely (see below).
@@ -25,6 +31,8 @@ lane_main:
     steering_lock_sync_tolerance: 0.04 # camera/IMU sensor-stamp difference when caching level steering
     # the steered-to target moves at most this many warped px per frame (0 = off); see lane_main.py
     target_max_step_px: 8.0
+    # Cone exit: cap speed until consecutive detections and the control target agree.
+    cone_exit_speed: 0.3
     # multiplies the 2025 steering law. The turn rate for a steering angle grows with the speed, so keep
     # speed x steer_gain about the same: 0.8 m/s x 0.33 = 0.26 drove best (2026-11-08 02:27 / 02:55:
     # 0-4 jumps over 8 deg per minute, straight steering sd 1.5-2.2 deg); 0.8 x 0.55 weaved (23:53, 71

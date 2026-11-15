@@ -129,7 +129,10 @@ class MissionParams:
     # Main route policy: latch cone entry before accepting parking signs.
     require_cone_for_parking: bool = True
     block_bump_after_cone: bool = True
-    cone_confirm_sec: float = 1.5
+    cone_confirm_sec: float = 1.5      # consecutive seconds of cone_active before latching cone_entered
+    # cone_active does not count while static_avoid drives and this long after (1114_0028: a false cone
+    # start during the avoidance latched cone_entered); same hold as cone_sorter avoid_release_hold
+    avoid_release_hold: float = 2.0
 
 
 @dataclass
@@ -142,10 +145,11 @@ class Inputs:
     parking_line: bool = False      # one stop line right in front (stopline node /stopline_near)
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
-    cone_active: bool = False
+    cone_active: bool = False                     # /cone/mission_active from cone_sorter
     parking_scene: bool = False    # fresh, repeated lidar bay observations
     parking_observing: bool = False # bounded approach observation, not permission to turn
     parking_skipped: bool = False   # observation failed; never means parking_done
+    avoid_active: bool = False                    # /avoid/active from static_avoid (fresh)
 
 
 @dataclass
@@ -172,6 +176,7 @@ class MissionLogic:
         self.cone_entered = False
         self.cone_active_since: Optional[float] = None
         self.parking_skip_until = -math.inf
+        self.avoid_until = -1.0                     # cone_active ignored until then
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
         self.stopped_at = 0.0
@@ -188,7 +193,9 @@ class MissionLogic:
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
 
-        if inputs.cone_active:
+        if inputs.avoid_active:
+            self.avoid_until = now + p.avoid_release_hold
+        if inputs.cone_active and now >= self.avoid_until:
             if self.cone_active_since is None:
                 self.cone_active_since = now
             if now-self.cone_active_since >= p.cone_confirm_sec:
