@@ -89,7 +89,9 @@ def core_freqs():
     out = {}
     for d in glob.glob('/sys/devices/system/cpu/cpu[0-9]*/cpufreq'):
         n = int(d.split('/')[-2][3:])
-        cur, mx = read(d + '/scaling_cur_freq').strip(), read(d + '/cpuinfo_max_freq').strip()
+        # the power mode's cap (15 W: 1.51 GHz), not the chip's cpuinfo_max_freq
+        cur = read(d + '/scaling_cur_freq').strip()
+        mx = read(d + '/scaling_max_freq').strip() or read(d + '/cpuinfo_max_freq').strip()
         if cur.isdigit():
             out[n] = (int(cur) // 1000, int(mx) // 1000 if mx.isdigit() else None)
     return out
