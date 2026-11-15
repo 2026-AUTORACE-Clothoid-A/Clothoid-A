@@ -25,10 +25,10 @@ start. Race start: the
 section start line (its place on the map) starts the mission, at lane speed until the first obstacle;
 nothing starts it before. Elsewhere: an obstacle in our lane starts it as before. false: always the
 latter (an avoid-only test launched inside the section, with no turn before it).
-`avoid_reverse` / `avoid_escape` (default off, not yet seen on the car): when every path stays blocked,
-back up 0.2 m / drive a free three-arc escape path. The 11-13 crash once blamed on them (1113 auto 01 /
-02: ~90 deg, off the track) was cone_follower publishing on /cmd_vel_avoid before it got its own
-/cmd_vel_cone (11-13 17:54); none of their commands is in those bags.
+`avoid_reverse` / `avoid_escape` (default on): when every path stays blocked, back up 0.2 m along the
+way the car came / drive a free three-arc escape path (first after a back-up). The 11-13 crash once
+blamed on them (1113 auto 01 / 02: ~90 deg, off the track) was cone_follower publishing on
+/cmd_vel_avoid before it got its own /cmd_vel_cone (11-13 17:54); none of their commands is in those bags.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
@@ -99,11 +99,12 @@ def generate_launch_description():
                                           'start (judged from the first turn) the section start line '
                                           'starts the mission, elsewhere an obstacle does. false: always '
                                           'an obstacle (a test launched inside the section)'),
-        DeclareLaunchArgument('avoid_reverse', default_value='false',
-                              description='static_avoid backs up 0.2 m when every path stays blocked'),
-        DeclareLaunchArgument('avoid_escape', default_value='false',
+        DeclareLaunchArgument('avoid_reverse', default_value='true',
+                              description='static_avoid backs up 0.2 m along the way it came when every '
+                                          'path stays blocked'),
+        DeclareLaunchArgument('avoid_escape', default_value='true',
                               description='static_avoid drives a free escape path when every path stays '
-                                          'blocked (not yet seen on the car)'),
+                                          'blocked (first after a back-up)'),
         DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
                               description='static_avoid also publishes /avoid/candidates and /avoid/costmap'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),

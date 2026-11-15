@@ -85,10 +85,10 @@ def generate_launch_description():
                                           'start the section start line starts the mission; elsewhere '
                                           '(judged from the first turn) a blocker does. false: always '
                                           'a blocker (an avoid-only test started in the section itself)'),
-        DeclareLaunchArgument('reverse', default_value='false',
-                              description='back up 0.2 m when every path stays blocked (recovery)'),
-        DeclareLaunchArgument('escape', default_value='false',
+        DeclareLaunchArgument('reverse', default_value='true',
+                              description='stuck: back up 0.2 m along the way the car came (recovery)'),
+        DeclareLaunchArgument('escape', default_value='true',
                               description='stuck: drive a free curvature-limited three-arc escape path '
-                                          '(AvoidParams.escape; not yet seen on the car)'),
+                                          '(AvoidParams.escape), first after a back-up'),
         OpaqueFunction(function=_nodes),
     ])
