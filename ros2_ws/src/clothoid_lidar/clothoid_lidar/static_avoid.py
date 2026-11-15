@@ -294,35 +294,36 @@ class AvoidParams:
     # sign look: the fork sign (on the island front) not read yet, the island front more than look_end
     # ahead, the car in lane 1 / 3, not changing lanes and nothing left in its own lane up to the
     # island (no distance limit: with the sign in view it does not steer, 2026-11-15): turn the heading
-    # just enough to bring the sign within look_view_deg of the camera
-    # axis, at look_speed. While the sign is in view the plan drives as before (a look holding the car
-    # straight lost a sign the plan's own heading kept in view); a car turned away turns back first.
-    # The lane beside the island fixes A / B, so the sign must be read before it: 3 of 7 hand-overs
-    # beside the island were 'no sign' with the sign there. Up to look_max_deg, less when the turn and
-    # the turn back (radius look_turn_radius) would take the car centre within look_inner of lane 2's
-    # centre; a look that steered is straight again by look_end. Once per section; ends when
-    # the direction comes, at look_end, or when its lane ahead is not clear.
+    # at full lock until the sign is within look_view_deg of the camera axis (up to look_max_deg).
+    # While the sign is in view the plan drives as before (a look holding the car straight lost a sign
+    # the plan's own heading kept in view); a car turned away turns back first. The lane beside the
+    # island fixes A / B, so the sign must be read before it: 3 of 7 hand-overs beside the island were
+    # 'no sign' with the sign there. The turn may take the car into lane 2 (no fixed limit: the old
+    # look_inner 0.40 cut the heading to 5~14 deg where ~20 was needed): it goes on while the car can
+    # still get back out of the island's width (centre island_half + car half width + look_exit_clear
+    # from lane 2's centre) at look_turn_radius before the island front, with look_exit_margin m to
+    # spare. Then, the sign still unread, the look steers out to its own lane and ends there. Each
+    # turning step is checked against the costmap / yellow lines / island first. Once per section;
+    # ends when the direction comes (the plan then takes its lane from where the car is), at look_end
+    # (back out first if inside), or when its own lane ahead is not clear.
     sign_look: bool = True
     # m before the island front. 0.6 ended the 1115_1709 look with the sign at the image edge
     look_end: float = 0.4
     look_view_deg: float = 10.0       # the sign this close to the camera axis (1113: read to ~20 deg)
     look_max_deg: float = 45.0
-    # m, the car centre's closest offset to lane 2's centre. Beside the island the car centre needs
-    # about 0.34 (island half width + car half width). Below that the sign was not read more often in
-    # the sim, but a car still unread at look_end stood over the island's width and could not get back
-    # out in the last 0.4 m (look_inner 0.10~0.30 all alike: random island 0 -> 4, dense 0 -> 72 of
-    # 160, every one a sign never read; sign 13 deg / 1.6 m, 2026-11-15)
-    look_inner: float = 0.40
+    look_exit_clear: float = 0.02     # m, past the island's width the way out ends
+    look_exit_margin: float = 0.15    # m before the island front the way out must be done
     look_speed: float = 0.15
     look_gain: float = 1.5            # steering per heading error
-    # turning on the spot: when the turn cannot be made forward before look_end (look_turn_radius,
-    # kept wide on purpose: car 7 turns at 0.455 / 0.48 m at full lock), alternate look_step m forward
-    # at full lock towards the sign and look_step m back at full lock the other way (both turn the same way,
-    # the moves mostly cancel). At most look_cycles_max times and look_reverse_max m back in all; each
-    # arc is checked against the costmap, the yellow lines and the island before it is driven (the
-    # lidar sees +-110 deg: what is behind is what the costmap kept while passing it).
+    # turning on the spot: when the turn cannot be made forward before look_end, alternate look_step
+    # m forward at full lock towards the sign and look_step m back at full lock the other way (both
+    # turn the same way, the moves mostly cancel). At most look_cycles_max times and look_reverse_max m
+    # back in all; each arc is checked against the costmap, the yellow lines and the island before it
+    # is driven (the lidar sees +-110 deg: what is behind is what the costmap kept while passing it).
+    # look_turn_radius: the radius the look plans with (car 7 turns at 0.455 / 0.48 m at full lock,
+    # ODOM_STEERING_TEST.md; 0.5 leaves a little for a weaker turn)
     look_reverse: bool = True
-    look_turn_radius: float = 0.9
+    look_turn_radius: float = 0.50
     look_step: float = 0.15
     look_reverse_speed: float = 0.10
     look_cycles_max: int = 2
@@ -1836,19 +1837,78 @@ class StaticAvoid:
         self.look_backed = 0.0               # m backed in all
         self.look_arc: Optional[Tuple[int, float, float]] = None   # (+1 / -1, s, d) where the arc began
         self.look_turned = False             # the look has steered (it straightens before look_end)
+        self.look_side = 1.0                 # +1 lane 1, -1 lane 3: the lane the look began in
+        self.look_exit = False               # sign unread: steering back out of the island's width
 
     def look_heading(self, d: float, gap: float) -> float:
         """Lane-frame heading that brings the sign on the island front within look_view_deg of the
-        camera axis (0 = along the lane while it already is), at most look_max_deg and at most what
-        turning there and back leaves look_inner from lane 2's centre (2 R (1 - cos psi))."""
+        camera axis (0 = along the lane while it already is), at most look_max_deg. How far into
+        lane 2 that takes the car is left to exit_need."""
         p = self.p
         b = math.atan2(-d, max(gap, 1e-3))
         want = abs(b) - math.radians(p.look_view_deg)
-        room = abs(d) - p.look_inner
-        if want <= 0.0 or room <= 0.0:
+        if want <= 0.0:
             return 0.0
-        cap = math.acos(max(-1.0, 1.0 - room / (2.0 * p.look_turn_radius)))
-        return math.copysign(min(want, math.radians(p.look_max_deg), cap), b)
+        return math.copysign(min(want, math.radians(p.look_max_deg)), b)
+
+    def exit_clear(self) -> float:
+        """Car centre offset from lane 2's centre that clears the island's width."""
+        p = self.p
+        return p.lane_width / 2.0 + p.car_half_width + p.look_exit_clear
+
+    def exit_need(self, d: float, psi: float) -> float:
+        """m along the lane the car needs, at look_turn_radius, to get from (d, psi) out of the
+        island's width on the look's side, heading along the lane: straighten (drifting further in),
+        then an S of two arcs. 0 when straightening now already leaves it outside."""
+        p = self.p
+        r = p.look_turn_radius
+        side = self.look_side
+        inward = max(0.0, -side * psi)
+        dy = self.exit_clear() - (side * d - r * (1.0 - math.cos(inward)))
+        if dy <= 0.0:
+            return 0.0
+        dy = min(dy, 2.0 * r)
+        return r * math.sin(inward) + math.sqrt(4.0 * r * dy - dy * dy)
+
+    def _end_look(self, why: str) -> None:
+        self.look, self.look_done, self.look_arc, self.look_exit = False, True, None, False
+        self.event = 'sign look end: ' + why
+        return None
+
+    def _look_out(self, pose) -> Optional[Tuple[float, float]]:
+        """The sign still unread: steer back to the look's own lane until the car is out of the
+        island's width and not heading in, then the plan drives."""
+        p = self.p
+        s, d, psi = pose
+        side = self.look_side
+        if side * d >= self.exit_clear() and side * psi >= -math.radians(3.0):
+            return self._end_look('out of the island width in lane %d, sign unread'
+                                  % lane_of(side * p.lane_width, p))
+        target = max(-math.radians(p.look_max_deg),
+                     min(math.radians(p.look_max_deg), math.atan2(side * p.lane_width - d, 0.30)))
+        delta = float(np.clip(p.look_gain * wrap(target - psi), -p.max_steer, p.max_steer))
+        return p.look_speed, p.look_speed * math.tan(delta) / p.wheelbase
+
+    def _start_exit(self, pose, why: str) -> Optional[Tuple[float, float]]:
+        self.look_exit, self.look_arc = True, None
+        self.event = 'sign look: %s, back out to lane %d' % (why, lane_of(self.look_side * self.p.lane_width,
+                                                                          self.p))
+        return self._look_out(pose)
+
+    def _steer_blocked(self, pose, delta: float, length: float = 0.25) -> bool:
+        """Driving `length` m forward at this steering hits an obstacle, a yellow line or the island."""
+        p = self.p
+        s0, d0, psi = pose
+        sigma = np.linspace(0.0, length, 8)
+        k = math.tan(delta) / p.wheelbase
+        if abs(k) < 1e-6:
+            h = np.full(len(sigma), psi)
+            s, d = s0 + sigma * math.cos(psi), d0 + sigma * math.sin(psi)
+        else:
+            h = psi + k * sigma
+            s = s0 + (np.sin(h) - math.sin(psi)) / k
+            d = d0 - (np.cos(h) - math.cos(psi)) / k
+        return bool(path_blocker(-1e9, self.costmap, self.lane_in_costmap(), self.island, p)(s, d, h).any())
 
     def _arc_blocked(self, pose, forward: bool, turn: float) -> bool:
         """The look_step arc at full lock (turn = +1 left / -1 right heading change), forward or back,
@@ -1874,26 +1934,35 @@ class StaticAvoid:
         s, d, psi = pose
         gap = self.island[0] - s
         lane = lane_of(d, p)
+        if self.look_exit:
+            if self.direction in (0, 1):        # read on the way out: the plan takes its lane
+                return self._end_look('direction %d' % self.direction)
+            return self._look_out(pose)
         why = None
         if self.direction in (0, 1):
             why = 'direction %d' % self.direction
         elif gap < p.look_end:
             why = 'island front %.2f m ahead' % gap
-        elif lane == 2:
+        elif not self.look and lane == 2:
             why = 'in lane 2'
-        elif not self.lane_clear(s + 0.2, self.island[0], d):
+        elif not self.lane_clear(s + 0.2, self.island[0],
+                                 self.look_side * p.lane_width if self.look else d):
             why = 'own lane ahead not clear'
         if not self.look:
             changing = self.plan is None or not self.plan.feasible or abs(self.plan.end_offset - d) > 0.10
             if why is not None or self.island_source == 'estimate' or changing:
                 return None
             self.look, self.look_cycle, self.look_backed, self.look_arc = True, 0, 0.0, None
+            self.look_side = 1.0 if d >= 0.0 else -1.0
             self.event = ('sign look: island front %.2f m ahead, lane %d, heading %+.0f deg'
                           % (gap, lane, math.degrees(psi)))
         elif why is not None:
-            self.look, self.look_done, self.look_arc = False, True, None
-            self.event = 'sign look end: ' + why
-            return None
+            if self.direction not in (0, 1) and self.exit_need(d, psi) > 0.0:
+                return self._start_exit(pose, why)
+            return self._end_look(why)
+        need = self.exit_need(d, psi)
+        if need > 0.0 and gap - need <= p.look_exit_margin:
+            return self._start_exit(pose, 'unread, %.2f m to get out' % need)
         # the sign within look_view_deg of the camera axis: the plan drives (a look holding the car
         # straight lost a sign the plan's own heading kept in view); else steer it there. A look that
         # steered straightens before look_end (with weak steering the plan drifted onto the island).
@@ -1936,6 +2005,11 @@ class StaticAvoid:
             delta = p.max_steer * turn * sign            # back: the other way, same heading change
             return v, v * math.tan(delta) / p.wheelbase
         delta = float(np.clip(p.look_gain * err, -p.max_steer, p.max_steer))
+        if not straighten and self._steer_blocked(pose, delta):
+            # turning further runs into a LIMO, a yellow line or the island
+            if self.exit_need(d, psi) > 0.0:
+                return self._start_exit(pose, 'turn blocked')
+            return self._end_look('turn blocked')
         return p.look_speed, p.look_speed * math.tan(delta) / p.wheelbase
 
     def free_ahead(self, s: float, reach: float = 2.0) -> List[Optional[float]]:
