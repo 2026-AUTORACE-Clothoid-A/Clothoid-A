@@ -98,7 +98,8 @@ class MissionNode(QuietEventsMixin, Node):
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
                             ('sign_min_height', 14), ('light_min_height', 8),
                             ('detection_edge_margin', 2), ('fork_confirm_hits', 2),
-                            ('fork_confirm_age', 1.0), ('fork_ignore_edge', True)]:
+                            ('fork_confirm_age', 1.0), ('fork_ignore_edge', True),
+                            ('fork_confidence', 0.55), ('fork_any_x', True)]:
             self.declare_parameter(name, value)
 
         d = MissionParams()
@@ -140,7 +141,9 @@ class MissionNode(QuietEventsMixin, Node):
             edge_margin=get('detection_edge_margin'),
             class_hits={name: get('fork_confirm_hits') for name in FORK_SIGNS},
             class_max_age={name: get('fork_confirm_age') for name in FORK_SIGNS},
-            edge_exempt=FORK_SIGNS if get('fork_ignore_edge') else ())
+            edge_exempt=FORK_SIGNS if get('fork_ignore_edge') else (),
+            class_confidence={name: get('fork_confidence') for name in FORK_SIGNS},
+            any_x=FORK_SIGNS if get('fork_any_x') else ())
         self.logic = MissionLogic(MissionParams(
             slow_speed=get('slow_speed'),
             slow_hold_sec=get('slow_hold_sec'),
