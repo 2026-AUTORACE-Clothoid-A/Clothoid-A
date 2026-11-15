@@ -1,6 +1,7 @@
 """Geometry and forward-path regressions for rear-axle target selection."""
 import numpy as np
 import pytest
+from unittest.mock import patch
 
 from clothoid_lidar.cone_follower import (
     ConeFollower, FollowerParams, compute_steering, look_ahead_point,
@@ -106,3 +107,22 @@ def test_missing_circle_intersection_alone_does_not_stop_or_reverse(x):
                              np.vstack((left, right)), allow_reverse=True)
     assert result.speed == .25 and not result.reverse
     assert result.target is not None and np.isfinite(result.steering)
+
+
+@pytest.mark.parametrize('retained', [False, True])
+def test_forward_command_and_visualisation_share_one_target_search(retained):
+    from clothoid_lidar import cone_follower
+
+    x = np.linspace(.1, 1.2, 12)
+    left = np.column_stack((x, np.full_like(x, .4)))
+    right = np.column_stack((x, np.full_like(x, -.4)))
+    follower = ConeFollower(FollowerParams())
+    follower.decide(left, right, True, True, (0., 0., 0.), np.vstack((left, right)))
+    visible_right = np.zeros((0, 2)) if retained else right
+    with patch.object(cone_follower, 'look_ahead_point', wraps=look_ahead_point) as search:
+        result = follower.decide(left, visible_right, True, not retained,
+                                 (0., 0., 0.), np.vstack((left, right)))
+        assert search.call_count == 1
+    assert result.source == ('retained_boundary' if retained else 'observed')
+    np.testing.assert_array_equal(result.target, look_ahead_point(result.center, follower.p))
+    assert result.steering == compute_steering(result.center, follower.p)

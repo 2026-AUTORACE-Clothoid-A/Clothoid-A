@@ -173,7 +173,7 @@ def analyse(path, progress=lambda value: None):
                 target = cone_follower.look_ahead_point(center, fp)
                 usable = (target is not None and target[0] > 0.
                           and cone_exit.clearance(center, points) >= config['cone_follower']['ros__parameters'].get('exit_clearance', .2))
-                command = (cone_follower.FollowResult(fp.speed, cone_follower.compute_steering(center, fp),
+                command = (cone_follower.FollowResult(fp.speed, cone_follower.steering_from_target(target, fp),
                            center=center, target=target, source='exit_path') if usable else
                            cone_follower.FollowResult(0., 0., center=center, source='exit_wait'))
                 command_rows.append((t, command.speed, command.steering));callback_results.append(command)

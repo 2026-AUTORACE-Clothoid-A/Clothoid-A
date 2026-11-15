@@ -21,7 +21,7 @@ from tf2_ros import Buffer, TransformException, TransformListener
 
 from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lidar.cone_follower import (ConeFollower, FollowerParams, FollowResult,
-                                           compute_steering, look_ahead_point)
+                                           steering_from_target, look_ahead_point)
 from clothoid_lidar.cone_exit import ExitPathMemory, clearance
 from clothoid_lidar.cone_sorter_node import to_path
 from clothoid_lidar.cone_recovery import current_boundaries, recovery_confirmed, reverse_sweep_clear
@@ -264,7 +264,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             self.get_logger().warn('cone EXIT: no fresh clear forward path; waiting for lane',
                                    throttle_duration_sec=1.0)
             return
-        self.publish_result(FollowResult(p.speed, compute_steering(center, p),
+        self.publish_result(FollowResult(p.speed, steering_from_target(target, p),
                                          center=center, target=target))
 
     def _fresh(self, stamp) -> bool:

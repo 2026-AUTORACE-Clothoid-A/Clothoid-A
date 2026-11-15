@@ -258,7 +258,11 @@ def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
     outside-circle fallbacks still use their actual rear-axle distance.
     tan(delta) = wheelbase * gain * 2*y/(x*x+y*y), in rear-axle coordinates.
     """
-    target = look_ahead_point(center, params)
+    return steering_from_target(look_ahead_point(center, params), params)
+
+
+def steering_from_target(target: Optional[np.ndarray], params: FollowerParams) -> float:
+    """Use the already selected pursuit target for the command and its visualisation."""
     if target is None:
         return 0.0
     x, y = float(target[0]) + params.rear_axle_x, float(target[1])
@@ -282,11 +286,11 @@ class ConeFollower:
         self.last_forward_steering = None
         self.reverse_start_travel = None
 
-    def _forward(self, center, source='observed'):
-        self.last_forward_steering = compute_steering(center, self.p)
+    def _forward(self, center, target, source='observed'):
+        self.last_forward_steering = steering_from_target(target, self.p)
         self.reverse_start_travel = None
         return FollowResult(self.p.speed, self.last_forward_steering, center=center,
-                            target=look_ahead_point(center, self.p), source=source)
+                            target=target, source=source)
 
     def _recover(self, left, right, pose, obstacles, allow_reverse):
         p = self.p
@@ -329,7 +333,7 @@ class ConeFollower:
             if target is not None and np.isfinite(target).all() and target[0] > 0.:
                 if usable_path(center, obstacles, min_clearance, target):
                     self.corridor.observe(left, right, center, pose, p.lfd)
-                return self._forward(center)
+                return self._forward(center, target)
         self.path_relaxation.clear()
         # An empty/one-point centre is not a steerable path, even if both
         # boundary messages are fresh. Try retained/width paths before recovery.
@@ -343,5 +347,5 @@ class ConeFollower:
                 center = center[closest:]
                 target = look_ahead_point(center, p)
                 if usable_path(center, obstacles, min_clearance, target):
-                    return self._forward(center, source)
+                    return self._forward(center, target, source)
         return self._recover(visible_left, visible_right, pose, obstacles, allow_reverse)
