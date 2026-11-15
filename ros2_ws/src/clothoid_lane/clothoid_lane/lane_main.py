@@ -151,6 +151,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.speed_limit_stamp = None
         self.parking_approach_limit = self.parking_approach_stamp = None
         self.cone_handover = ConeHandover()
+        self.cone_connecting = False
         self.steering_locked = False
         self.steering_lock_stamp = None
         self.imu_pitch = self.imu_stamp = None
@@ -202,6 +203,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.cone_candidate_pub = self.create_publisher(TwistStamped, '/lane/cone_exit_candidate', 1)
         self.create_subscription(Bool, '/cone/exiting',
                                  lambda msg: self.cone_handover.request_exit(msg.data), 1)
+        self.create_subscription(Bool, '/cone/connecting', self.on_cone_connecting, 1)
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
 
@@ -244,7 +246,20 @@ class LaneMainNode(QuietEventsMixin, Node):
 
     # --- flags from other nodes -------------------------------------------------
     def on_cone_active(self, msg: Bool):
+        if not msg.data:
+            self.cone_connecting = False
         self.cone_handover.on_cone(msg.data, self.get_clock().now().nanoseconds * 1e-9)
+
+    def on_cone_connecting(self, msg: Bool):
+        # Reacquire once at rear-axle arrival, not on every connecting heartbeat.
+        # Keep normal lane selection, target slew and school-zone state intact.
+        active = bool(msg.data) and self.cone_handover.cone_active
+        if active and not self.cone_connecting and isinstance(self.detector, LaneTracker):
+            self.detector.reset_tracks()
+            self.cone_handover._clear_evidence()
+            self.cone_ready_pub.publish(Bool(data=False))
+            self.get_logger().info('cone connection: reset lane boundary tracks once')
+        self.cone_connecting = active
 
     def on_direction(self, msg: Int32):
         # 2025: ignored once the parking mission started

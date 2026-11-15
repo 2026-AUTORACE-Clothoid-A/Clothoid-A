@@ -105,9 +105,13 @@ class LaneTracker:
         self.reset()
 
     def reset(self) -> None:
-        self._sides = {SIDE_LEFT: _Side(), SIDE_RIGHT: _Side()}
+        self.reset_tracks()
         self._zigzag_left = 0     # frames the school zone state still lasts
         self._attempts = []       # (windows, became a line) of every trace this frame, debug image
+
+    def reset_tracks(self) -> None:
+        """Forget boundary associations without changing school-zone state."""
+        self._sides = {SIDE_LEFT: _Side(), SIDE_RIGHT: _Side()}
 
     # --- masks ------------------------------------------------------------------
     def _masks(self, bgr: np.ndarray):
