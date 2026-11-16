@@ -20,7 +20,7 @@ def node():
 
 
 def sensor_topics(n):
-    return {s.topic_name for s in n.subscriptions} & {'/imu', '/odom', '/scan'}
+    return {s.topic_name for s in n.subscriptions} & {'/imu_25hz', '/odom_25hz', '/scan'}
 
 
 def feed(n):
@@ -37,7 +37,7 @@ def test_no_sensor_subscriptions_before_flag(node):
 
 def test_registered_layout_prepare_tracks_motion_without_commanding_parking(node):
     node.on_prepare(Bool(data=True))
-    assert sensor_topics(node) == {'/imu', '/odom', '/scan'}
+    assert sensor_topics(node) == {'/imu_25hz', '/odom_25hz', '/scan'}
     assert node.core.phase == Phase.IDLE and not node.core.flag
     node.on_timer()
     assert node.core.phase == Phase.IDLE
@@ -50,12 +50,12 @@ def test_handover_removes_passive_scan_before_high_rate_sensors_start(node):
     node.on_flag(Bool(data=True))
     assert node.probe_sub is None
     assert sum(s.topic_name == '/scan' for s in node.subscriptions) == 1
-    assert sensor_topics(node) == {'/imu', '/odom', '/scan'}
+    assert sensor_topics(node) == {'/imu_25hz', '/odom_25hz', '/scan'}
 
 
 def test_flag_subscribes_then_starts_when_data_arrives(node):
     node.on_flag(Bool(data=True))
-    assert sensor_topics(node) == {'/imu', '/odom', '/scan'}
+    assert sensor_topics(node) == {'/imu_25hz', '/odom_25hz', '/scan'}
     assert not node.core.flag                 # waiting for the sensors
     feed(node)
     node.on_timer()
@@ -75,7 +75,7 @@ def test_always_on_when_lazy_off():
     rclpy.init(args=['--ros-args', '-p', 'lazy_sensors:=false'])
     n = ParkingNode()
     try:
-        assert sensor_topics(n) == {'/imu', '/odom', '/scan'}
+        assert sensor_topics(n) == {'/imu_25hz', '/odom_25hz', '/scan'}
     finally:
         n.destroy_node()
         rclpy.shutdown()
@@ -97,7 +97,7 @@ def test_inspection_previews_flag_without_sending_driving_commands(monkeypatch):
     rclpy.init(args=['--ros-args', '-p', 'inspection_only:=true'])
     n = ParkingNode()
     try:
-        assert n.core.preparing and sensor_topics(n) == {'/imu', '/odom', '/scan'}
+        assert n.core.preparing and sensor_topics(n) == {'/imu_25hz', '/odom_25hz', '/scan'}
         assert not n.core.layout.p.control_enabled
         sent = []
         monkeypatch.setattr(n, 'send', lambda *args: sent.append(args))

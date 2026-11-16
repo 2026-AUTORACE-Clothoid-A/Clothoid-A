@@ -38,7 +38,7 @@ STALE_SEC = 0.5
 class ParkingNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('parking')
-        for name, default in (('scan_topic', '/scan'), ('imu_topic', '/imu'), ('odom_topic', '/odom'),
+        for name, default in (('scan_topic', '/scan'), ('imu_topic', '/imu_25hz'), ('odom_topic', '/odom_25hz'),
                               ('parking_topic', '/parking_flag'), ('cmd_topic', '/cmd_vel_parking'),
                               ('parking_prepare_topic', '/parking_prepare'),
                               ('parking_scene_topic', '/parking/bay_candidate'),

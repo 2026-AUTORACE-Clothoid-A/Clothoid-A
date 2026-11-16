@@ -47,6 +47,16 @@ def analyse(path, progress=lambda value: None):
     files = sorted(Path(path).glob('*.db3')) if Path(path).is_dir() else [Path(path)]
     if not files:
         raise ValueError('bag에 db3 파일이 없습니다.')
+    available = set()
+    for file in files:
+        with sqlite3.connect(f'file:{file}?mode=ro', uri=True) as db:
+            available.update(name for (name,) in db.execute('select name from topics'))
+    # Runtime uses the 25 Hz driver copies. Old bags may only contain raw sensors;
+    # this fallback belongs to offline replay, not to the driving nodes.
+    if odom_topic not in available and '/odom' in available:
+        odom_topic = '/odom'
+    if imu_topic not in available and '/imu' in available:
+        imu_topic = '/imu'
     sources = []; start_stamps = []
     for file in files:
         with sqlite3.connect(f'file:{file}?mode=ro', uri=True) as db:
@@ -275,4 +285,5 @@ def analyse(path, progress=lambda value: None):
     digest.update(Path(__file__).read_bytes())
     digest.update(config_path.read_bytes())
     return dict(frames=frames, cameras=cameras, recorded=recorded, flags=flags, events=events,
-                params=fp, path=str(path), source_hash=digest.hexdigest()[:12], commands=command_rows)
+                params=fp, path=str(path), source_hash=digest.hexdigest()[:12], commands=command_rows,
+                sensor_topics=dict(imu=imu_topic, odom=odom_topic))

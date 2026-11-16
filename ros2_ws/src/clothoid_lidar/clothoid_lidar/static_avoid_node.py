@@ -51,8 +51,8 @@ class StaticAvoidNode(QuietEventsMixin, Node):
     def __init__(self):
         super().__init__('static_avoid')
         topics = {
-            'limos_topic': '/lidar/limos', 'scan_topic': '/scan', 'odom_topic': '/odom',
-            'imu_topic': '/imu', 'cmd_topic': '/cmd_vel_avoid',
+            'limos_topic': '/lidar/limos', 'scan_topic': '/scan', 'odom_topic': '/odom_25hz',
+            'imu_topic': '/imu_25hz', 'cmd_topic': '/cmd_vel_avoid',
             'cone_active_topic': '/cone/mission_active', 'red_ratio_topic': '/camera/red_ratio',
             'parking_topic': '/parking_flag', 'state_cmd_topic': '/cmd_vel_state',
             'direction_topic': '/direction_flag',
