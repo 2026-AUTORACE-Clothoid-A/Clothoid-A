@@ -267,13 +267,15 @@ class LaneMainNode(QuietEventsMixin, Node):
             self.side = msg.data
 
     def on_parking(self, msg: Bool):
+        started = msg.data and not self.parking_started
         self.parking_started = msg.data
         self.bump_gap.clear()
         if msg.data:
             self.side = SIDE_RIGHT
             self.parking_width = True
             self.lane_width = self._lane_width_px(lambda name: self.get_parameter(name).value)
-            self.get_logger().info('parking lane change')
+            if started:      # mission re-sends the flag every 1 s; log the change only
+                self.get_logger().info('parking lane change')
 
     def on_speed_limit(self, msg: Float32):
         # <= 0 or NaN releases the limit

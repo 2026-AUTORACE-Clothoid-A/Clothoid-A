@@ -39,6 +39,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         super().__init__('cone_follower')
 
         self.declare_parameter('cmd_topic', '/cmd_vel_cone')
+        self.declare_parameter('exit_log_repeat', 10.0)   # s between repeats of one exit status line
         self.declare_parameter('left_boundary_topic', '/cone/left_boundary')
         self.declare_parameter('right_boundary_topic', '/cone/right_boundary')
         self.declare_parameter('mission_active_topic', '/cone/mission_active')
@@ -70,6 +71,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.pose_generation = self.odometry.generation
         self.active = False
         self.exiting = False
+        self.exit_logged = None
         self.exit_memory = ExitPathMemory()
         self.connection = LaneConnection(self._connection_params(lambda n: self.get_parameter(n).value))
         self.lane_candidate = self.lane_candidate_time = self.lane_candidate_stamp = None
@@ -181,6 +183,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         if self.active and not was_active:
             self.reset_connection()
             self.exit_memory.clear()
+            self.exit_logged = None
             p = self.follower.p
             self.get_logger().info(f'cone mission START (lfd={p.lfd:.2f}, speed={p.speed:.2f}, '
                                    f'boundary_timeout={p.boundary_timeout:.3f}); main pursuit, safe exit')
@@ -295,8 +298,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         if lane_ready and pose is not None:
             remaining = self.exit_memory.rear_axle_remaining(pose, p.rear_axle_x)
             if remaining is not None and remaining > 0.:
-                self.get_logger().info(f'cone EXIT: lane ready; observed endpoint {remaining:.3f} m ahead of rear axle',
-                                       throttle_duration_sec=1.0)
+                self._exit_log('lane ready', f'cone EXIT: lane ready; observed endpoint {remaining:.3f} m '
+                               'ahead of rear axle')
         center = (self.exit_memory.remaining(pose, p.rear_axle_x)
                   if pose is not None else np.zeros((0, 2)))
         target = look_ahead_point(center, p) if len(center) else None
@@ -310,11 +313,20 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             message = ('cone EXIT: no observed endpoint; waiting for measured path'
                        if self.exit_memory.observed_end is None else
                        'cone EXIT: no fresh clear forward path; waiting for lane')
-            self.get_logger().warn(message,
-                                   throttle_duration_sec=1.0)
+            self._exit_log(message, message, warn=True)
             return
         self.publish_result(FollowResult(p.speed, steering_from_target(target, p),
                                          center=center, target=target))
+
+    def _exit_log(self, key, message, warn=False):
+        """Exit-phase status: at once when it changes, then every exit_log_repeat s while it holds
+        (1116: a 1 s throttle repeated one waiting line for up to 190 s after the course)."""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        last = self.exit_logged
+        if last is not None and last[0] == key and now - last[1] < self.get_parameter('exit_log_repeat').value - 1e-6:
+            return
+        self.exit_logged = (key, now)
+        (self.get_logger().warn if warn else self.get_logger().info)(message)
 
     def publish_stop(self):
         self.last_command_steering = 0.
@@ -351,8 +363,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         if speed <= 0. or not clear:
             self.connection.pause(now)
             self.publish_stop()
-            self.get_logger().warn('cone EXIT: lane connection stopped (stale, blocked or bounded out)',
-                                   throttle_duration_sec=1.)
+            self._exit_log('connection stopped',
+                           'cone EXIT: lane connection stopped (stale, blocked or bounded out)', warn=True)
             return
         self.publish_result(FollowResult(speed, steering, center=paths[0]))
         if ready:

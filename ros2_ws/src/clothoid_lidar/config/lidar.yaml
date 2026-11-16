@@ -48,6 +48,11 @@ cone_sorter:
     # and this long after it ends (11-09 bags: an end among the LIMOs started the course 0~0.14 s
     # later; 2 s holds all three, the later starts at 4.2 s and more stay)
     avoid_release_hold: 2.0
+    # no course START while /parking_flag is true (1116: the bays' cones started a course in every
+    # finished run; parking / finish only masked it in the mux), nor after a course ended by the
+    # lane handover (single_course)
+    parking_hold_timeout: 2.0
+    single_course: true
 
 cone_follower:
   ros__parameters:

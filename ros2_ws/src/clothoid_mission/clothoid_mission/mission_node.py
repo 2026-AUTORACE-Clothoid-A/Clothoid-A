@@ -42,7 +42,7 @@ from std_msgs.msg import Bool, Float32, Int32, String
 
 from clothoid_mission.line_stop import LineStopCore
 from clothoid_mission.mission_logic import (
-    BUMP_APPROACHING, Inputs, MissionLogic, MissionParams, STOPPED_LIGHT, classes_seen,
+    BUMP_APPROACHING, BUMP_ON, Inputs, MissionLogic, MissionParams, STOPPED_LIGHT, classes_seen,
     quaternion_to_pitch_deg)
 from clothoid_mission.scene_evidence import MissionEntryEvidence, ParkingEntryEvidence
 from clothoid_mission.sign_tracker import SignTracker
@@ -53,6 +53,16 @@ DIRECTION_NAMES = {0: 'left', 1: 'right', 2: 'both'}
 
 LINE_PHASE = {Phase.IDLE: None, Phase.FOLLOW: 'search', Phase.COMMIT: 'commit',
               Phase.STOP: 'arrived', Phase.ABORT: 'abort'}
+
+
+def sign_log_key(verdict: str):
+    """Throttle key and repeat interval of a sign verdict: the stage word only, without the numbers
+    ('IGNORED: invalid width or h 10 < 14' and '... h 9 < 14' are one line per interval). Far signs
+    rejected for size / offset repeat every 5 s, the rest every 1 s; a new stage logs at once."""
+    if verdict.startswith('ARMED'):
+        return 'ARMED', 1.
+    stage = verdict.split(':', 1)[-1].split()[0] if ':' in verdict else verdict
+    return stage, 5. if stage in ('size', 'offset') else 1.
 
 
 class MissionNode(QuietEventsMixin, Node):
@@ -201,6 +211,9 @@ class MissionNode(QuietEventsMixin, Node):
         self.cone_active = False
         self.cone_entered_logged = False
         self.direction_logged = None
+        self.bump_logged = None
+        self.limit_logged = None
+        self.line_reason = None
         self.sign_logged = {}
         self.seen, self.seen_time = set(), None
         self.light_target_id = None
@@ -362,9 +375,9 @@ class MissionNode(QuietEventsMixin, Node):
                 verdict = 'IGNORED: association/overlap'
             else:
                 verdict = 'ARMED' if track.confirmed else 'IGNORED: hits'
-        key = verdict.split(' ')[0] if verdict.startswith('ARMED') else verdict.split(' <')[0]
+        key, interval = sign_log_key(verdict)
         last = self.sign_logged.get(name)
-        if last is not None and now-last[0] < 1. and last[1] == key:
+        if last is not None and now-last[0] < interval and last[1] == key:
             return
         self.sign_logged[name] = (now, key)
         hits = track.hits if track is not None else 0
@@ -526,6 +539,8 @@ class MissionNode(QuietEventsMixin, Node):
                 self.get_parameter('line_require_crosswalk').value and require_crosswalk)
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
+            self.line_reason = ('light' if self.logic.light_armed_at is not None else
+                                'pedestrian' if self.logic.pedestrian_armed_at is not None else 'parking')
         elif not arm and self.core.phase != Phase.IDLE:
             self.core = self.new_core()          # fresh for the next stop (tracker restarts)
         if self.core.phase == Phase.IDLE:
@@ -535,7 +550,8 @@ class MissionNode(QuietEventsMixin, Node):
         cmd = self.core.command(now) if self.core.phase == Phase.COMMIT else None
         if self.core.phase != self.core_phase:
             self.core_phase = self.core.phase
-            self.get_logger().info(f'line stop {self.core.phase.value}: {self.core.reason}')
+            reason = self.line_reason if self.core.phase == Phase.FOLLOW else self.core.reason
+            self.get_logger().info(f'line stop {self.core.phase.value}: {reason}')
         if cmd is None or self.core.phase not in (Phase.FOLLOW, Phase.COMMIT):
             return None
         return float(cmd[0])                     # speed only: lane_main steers
@@ -662,6 +678,26 @@ class MissionNode(QuietEventsMixin, Node):
         if out.state != self.state:
             self.get_logger().info(f'{self.state} -> {out.state}')
             self.state = out.state
+
+        if self.logic.bump_state != self.bump_logged:
+            if self.bump_logged is not None:
+                pitch = self.latest_pitch if self._fresh(self.latest_pitch_time) else None
+                self.get_logger().info(f'bump: {self.bump_logged} -> {self.logic.bump_state} '
+                                       f'(pitch {"none" if pitch is None else f"{pitch:+.1f} deg"})')
+            self.bump_logged = self.logic.bump_state
+        # why lane_main is slowed (sources as MissionLogic.step adds them); logged when the set
+        # changes, not on every line stop ramp value
+        limit = None
+        if out.speed_limit is not None:
+            limit = '+'.join(name for name, on in (
+                ('slow sign', now < self.logic.slow_until),
+                ('bump', self.logic.bump_state in (BUMP_APPROACHING, BUMP_ON)),
+                ('slow entry', self.logic.slow_armed_at is not None and now >= self.logic.slow_until),
+                ('line stop', out.stop_arm)) if on) or 'other'
+        if limit != self.limit_logged:
+            self.get_logger().info('speed limit off' if limit is None else
+                                   f'speed limit {out.speed_limit:.2f} ({limit})')
+            self.limit_logged = limit
 
         if out.stop:
             self.cmd_pub.publish(Twist())   # zero command
