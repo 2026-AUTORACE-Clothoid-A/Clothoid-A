@@ -153,7 +153,9 @@ def test_parking_scene_from_wrong_frame_or_expired_sensor_is_not_used(node):
 def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
     n, clock = node
     flags = []
+    preparation = []
     n.bump_approach_pub = SimpleNamespace(publish=lambda msg: flags.append(msg.data))
+    n.bump_prepare_pub = SimpleNamespace(publish=lambda msg: preparation.append(msg.data))
     cam = CameraModel()
     n.on_info(CameraInfo(width=640, height=480,
                          k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
@@ -161,6 +163,7 @@ def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
         detections(n, clock, now, 'sign_bump')
     n.on_timer()
     assert flags == [False]
+    assert preparation == [True]  # heading is frozen before the start-line braking point
     n.mission_entry.entry_at = n.travel + .1
     n.on_timer()
     assert flags == [False, True]
@@ -170,6 +173,7 @@ def test_bump_approach_is_published_refreshed_and_cleared_on_timeout(node):
     clock[0] += n.logic.p.bump_arm_timeout_sec
     n.on_timer()
     assert flags == [False, True, True, False]
+    assert preparation == [True, True, False]
 
 
 @pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump'])

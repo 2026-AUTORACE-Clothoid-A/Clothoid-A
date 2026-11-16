@@ -53,6 +53,9 @@ Pixel boxes refer to the 640x480 color image.
 | Topic | Type | Meaning | Publisher → subscriber |
 |---|---|---|---|
 | `/direction_flag` | `std_msgs/Int32` | lane to follow: 0 left, 1 right, 2 both | `clothoid_mission` → `lane_main` |
+| `/bump/preparing` | `std_msgs/Bool` | true from confirmed bump-sign arming through IMU crossing; freezes a clean approach heading before the mission entry line; refreshed every 1 s, expires after 1.5 s | `clothoid_mission` → `lane_main` |
+| `/bump/approaching` | `std_msgs/Bool` | approaching state only; retains the bounded lost-lane fallback | `clothoid_mission` → `lane_main` |
+| `/steering_lock` | `std_msgs/Bool` | IMU crossing state; prepared bump control keeps the saved yaw, legacy callers retain the saved steering angle | `clothoid_mission` → `lane_main` |
 | `/parking_flag` | `std_msgs/Bool` | parking mission started (lane width changes, parking may start) | `clothoid_mission` → `lane_main`, `clothoid_parking` |
 | `/speed_limit` | `std_msgs/Float32` | max speed in m/s; `<= 0` or NaN releases the limit. Must be refreshed within `speed_limit_timeout` (0.5 s), otherwise the limit expires. Publishers only refresh, they never send a release (a release would also cancel the other publisher's limit) | `speed_zone` (floor mark) and `clothoid_mission` (slow sign) → `lane_main` |
 

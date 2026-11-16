@@ -95,6 +95,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_topic', '/parking_flag')
         self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('bump_approach_topic', '/bump/approaching')
+        self.declare_parameter('bump_prepare_topic', '/bump/preparing')
         # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
         self.declare_parameter('parking_sign_topic', '/parking_sign')
         # one stop line right in front (clothoid_lane stopline node): where parking starts
@@ -232,6 +233,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.entry_distance_pub = self.create_publisher(Float32, '/parking/entry_distance', 1)
         self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
         self.bump_approach_pub = self.create_publisher(Bool, get('bump_approach_topic'), 1)
+        self.bump_prepare_pub = self.create_publisher(Bool, get('bump_prepare_topic'), 1)
 
         self.create_subscription(DetectionArray, get('detections_topic'), self.on_detections, 1)
         # 2025 stripe flag (clothoid_lane stopline), commented out there in 2026: the light /
@@ -648,6 +650,7 @@ class MissionNode(QuietEventsMixin, Node):
             'front': self.finish_params.front, 'entry_front': value('front_axle_x'),
             'speed_limit': out.speed_limit,
             'bump_state': self.logic.bump_state,
+            'bump_prepare': out.bump_prepare,
             'imu_pitch': self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             'steering_lock': out.steering_lock,
             'stopped_for': (round(now - self.logic.stopped_at, 2) if out.stop else None)})))
@@ -683,6 +686,8 @@ class MissionNode(QuietEventsMixin, Node):
                               lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
         self._publish_changed('bump_approaching', self.logic.bump_state == BUMP_APPROACHING,
                               lambda v: self.bump_approach_pub.publish(Bool(data=bool(v))))
+        self._publish_changed('bump_prepare', out.bump_prepare,
+                              lambda v: self.bump_prepare_pub.publish(Bool(data=bool(v))))
 
 
 def main(args=None):

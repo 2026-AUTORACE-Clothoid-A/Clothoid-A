@@ -129,9 +129,9 @@ class MissionParams:
     slow_hold_sec: float = 4.0         # general slow sign hold timer
     slow_at_stopline: bool = False     # legacy key: slow before the separate mission entry line
     # speed bump (IMU Pitch + YOLO fusion)
-    bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
-    bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
-    bump_level_duration_sec: float = 0.3  # sec, continuous leveling to confirm exit
+    bump_pitch_thresh: float = 2.0      # deg; initial tuning for the 500 mm / 20 mm contest bump
+    bump_level_thresh: float = 0.8      # deg, abs angle to detect vehicle leveled
+    bump_level_duration_sec: float = 0.4  # sec, continuous leveling after opposite tilt
     bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
     bump_at_stopline: bool = False      # legacy key: slow before the separate mission entry line
@@ -190,6 +190,7 @@ class Outputs:
     steering_lock: bool = False        # lock steering during bump traversal
     parking_prepare: bool = False     # observe the parking scene, keep lane control
     entry_arm: bool = False           # observe the mission boundary, independently of the stop line
+    bump_prepare: bool = False        # freeze a clean lane heading as soon as the sign arms
 
 
 class MissionLogic:
@@ -292,6 +293,7 @@ class MissionLogic:
             entry_arm=p.use_stop_line and self.state == DRIVE and (
                 arm or self.slow_armed_at is not None or self.bump_line_armed_at is not None),
             parking_prepare=self.parking_armed and not self.parking_flag,
+            bump_prepare=(self.bump_line_armed_at is not None or bump_active),
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
@@ -362,7 +364,7 @@ class MissionLogic:
             if self.bump_opposite_seen and pitch is not None and abs(pitch) <= p.bump_level_thresh:
                 if self.bump_level_started_at is None:
                     self.bump_level_started_at = now
-                elif now - self.bump_level_started_at >= p.bump_level_duration_sec:
+                elif now - self.bump_level_started_at >= p.bump_level_duration_sec - 1e-9:
                     # Vehicle leveled out -> Bump fully cleared!
                     self.bump_state = BUMP_COOLDOWN
                     self.bump_cooldown_until = now + p.bump_cooldown_sec
