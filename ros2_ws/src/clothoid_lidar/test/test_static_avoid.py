@@ -738,16 +738,26 @@ def test_unknown_direction_waits_for_the_car_to_be_aligned():
     assert a.control((3.6, 0.5, 0.0), Inhibit()) is None
 
 
-def test_island_forbidden_when_measured_unless_nothing_else():
+def test_island_always_forbidden_when_measured():
     p = AvoidParams()
     cm = Costmap(p)
     # direction left, right beside the island: nothing may cross it
     plan = plan_paths((4.2, 0.45, 0.0), 4.2, cm, 0, None, p, island=(4.4, 6.15), forbid_island=True)
     on = (plan.path[:, 0] >= 4.4) & (np.abs(plan.path[:, 1]) < 0.25 + p.car_half_width)
     assert plan.feasible and not on.any()
-    # on the island already: still a plan, it must not freeze
+    # on the island already: no plan over it (1117_0150 drove across it that way); the car backs up,
+    # escapes or turns on the spot instead
     plan = plan_paths((5.0, 0.0, 0.0), 5.0, cm, 0, None, p, island=(4.4, 6.15), forbid_island=True)
-    assert plan.feasible
+    assert not plan.feasible
+
+
+def test_fork_turn_on_the_spot_into_the_sign_lane_without_the_island():
+    # 1117_0150: lane 2 obstacle 0.6 m before the island, the left sign read from lane 3 close to it;
+    # it used to drive across the island to lane 1
+    c2 = 4.35 - 0.60 - LIMO_LEN / 2
+    out = run([(c2, 0.0), (3.0, 0.5)], direction=(0, 3.7), t_max=90)
+    check(out, 0.50, 1)
+    assert not out.get('island_tip'), out
 
 
 def _active_at_origin(p=None):

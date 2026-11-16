@@ -230,6 +230,14 @@ class AvoidParams:
     escape_margin: float = 0.0
     # an escape path is left for the plan once the plan is free from the car on with this much more
     # clearance than safety (the plan is driven faster and cuts its curves more than the escape)
+    # fork turn: the sign's lane known, the car in another lane near the island and every path blocked
+    # (the island is always forbidden): turn on the spot towards that lane (look_step forward at full
+    # lock, the same back at the other lock, each arc checked first; the backing counts in
+    # reverse_max) until a plan is free, up to fork_turn_deg; then the usual back-up / escape.
+    # 1117_0150: lane 2 obstacle 0.6 m before the island, the sign read from lane 3
+    fork_turn: bool = True
+    fork_turn_deg: float = 70.0
+    fork_turn_range: float = 0.8      # m before the island front at most (1.5 began before a row of obstacles and turned into it)
     escape_handover_margin: float = 0.0
     escape_handover_slow: float = 0.6   # m after the hand-over at escape_speed / escape_lookahead
     escape_w_near: float = 0.02       # per obstacle cost point (0..100), against m of progress
@@ -825,9 +833,10 @@ def _score(s0, d0, psi, ds, E, Lt, d, slope, costmap, travelled, direction, last
         cost += weight * lane2
 
     bad = lethal | out_of_road
-    # the island is forbidden only while another way exists: it must never freeze the car. A route
-    # over the island is never taken: the one-stage candidates are the other way then
-    if route or (forbid_island and tc is not None and not (bad | island_hit).all()):
+    # the island is always forbidden once it is measured and the direction known (it used to be
+    # allowed when no other way was left, so as never to freeze the car: 1117_0150 then drove
+    # across it to lane 1; a blocked car now backs up / escapes / turns on the spot instead)
+    if route or (forbid_island and tc is not None):
         bad |= island_hit
     if route:       # only a way that is clear all the way to the island: else wait as one-stage
         bad |= hit.any(axis=1)
@@ -1683,10 +1692,74 @@ class StaticAvoid:
         return not path_blocker(-1e9, self.costmap, self.lane_in_costmap(), self.island, self.p,
                                 self.p.escape_handover_margin)(ahead[:, 0], ahead[:, 1], h).any()
 
+    def _fork_turn(self, pose) -> Optional[Tuple[float, float]]:
+        """(v, wz) of a turn on the spot towards the sign's lane (see AvoidParams.fork_turn), or None.
+        Kept up, once begun, until a plan into that lane is free from the car on (as an escape is
+        handed over), so that it does not take turns with a plan that comes and goes."""
+        p = self.p
+        tc = target_centre(self.direction, p)
+        if (not p.fork_turn or self.fork_turn_off or tc is None or self.costmap is None
+                or self.island_source == 'estimate'):
+            self.fork_mode, self.fork_arc = False, None
+            return None
+        s, d, psi = pose
+        gap = self.island[0] - s
+        if lane_of(d, p) == lane_of(tc, p) or not 0.0 < gap <= p.fork_turn_range:
+            self.fork_mode, self.fork_arc = False, None
+            return None
+        plan = self.plan
+        into = plan is not None and plan.feasible and abs(plan.path[-1, 1] - tc) < p.lane_width / 2.0
+        if not self.fork_mode and into:
+            return None                     # the plan goes there itself: no turn
+        if into and self._plan_free(plan, pose):
+            if self.fork_mode:
+                self.event = 'fork turn: a plan into lane %d is free, heading %+.0f deg' % (
+                    lane_of(tc, p), math.degrees(psi))
+                self.handed_until = s + p.escape_handover_slow
+            self.fork_mode, self.fork_arc = False, None
+            return None
+        self.fork_mode = True
+        side = 1.0 if tc > d else -1.0
+        err = wrap(side * math.radians(p.fork_turn_deg) - psi)
+        turn = 1.0 if err > 0.0 else -1.0
+        if self.fork_arc is not None:
+            sign, s1, d1 = self.fork_arc
+            moved = math.hypot(s - s1, d - d1)
+            if sign < 0 and moved >= min(p.look_step, p.reverse_max - self.reversed):
+                self.reversed += moved
+                self.fork_arc = None
+            elif sign > 0 and moved >= p.look_step:
+                self.fork_arc = None
+                if self.reversed < p.reverse_max - 0.02 and not self._arc_blocked(pose, False, turn):
+                    self.fork_arc = (-1, s, d)
+        if self.fork_arc is None:
+            if abs(err) < math.radians(5.0):
+                self.fork_turn_off = True
+                self.event = 'fork turn: heading %+.0f deg reached, still blocked' % math.degrees(psi)
+                return None
+            if not self._arc_blocked(pose, True, turn):
+                self.fork_arc = (1, s, d)
+            elif self.reversed < p.reverse_max - 0.02 and not self._arc_blocked(pose, False, turn):
+                self.fork_arc = (-1, s, d)
+            else:
+                self.fork_turn_off = True
+                self.event = 'fork turn: both arcs blocked at heading %+.0f deg' % math.degrees(psi)
+                return None
+            if not self.event.startswith('fork turn'):
+                self.event = ('fork turn: towards lane %d on the spot, island front %.2f m ahead, '
+                              'heading %+.0f deg' % (lane_of(tc, p), gap, math.degrees(psi)))
+        sign = self.fork_arc[0]
+        v = p.look_speed if sign > 0 else -p.look_reverse_speed
+        delta = p.max_steer * turn * sign            # back: the other way, same heading change
+        return v, v * math.tan(delta) / p.wheelbase
+
     def reset_recovery(self) -> None:
         self.escape_plan: Optional[Plan] = None
         self.look_after_escape = False  # an escape ended with the direction unknown: the sign look next
         self.handed_until: Optional[float] = None   # s up to which the plan is driven like the escape
+        self.fork_arc: Optional[Tuple[int, float, float]] = None   # (+1 / -1, s, d) of the fork turn arc
+        self.fork_turn_off = False      # the fork turn gave up (reached its heading or both arcs blocked)
+        self.fork_mode = False          # turning towards the sign's lane now
         self.escape_tried: Optional[float] = None
         self.sequence: Optional[Sequence] = None
         self.stuck_since: Optional[float] = None
@@ -1843,6 +1916,10 @@ class StaticAvoid:
                 cmd = self._back_up(t)
                 if cmd is not None:
                     return cmd
+        if esc is None and self.backing_from is None:
+            turn = self._fork_turn(pose)
+            if turn is not None:
+                return turn
         if esc is None and self.prefer_escape:
             self.prefer_escape = False
             if p.escape and self.costmap is not None:
