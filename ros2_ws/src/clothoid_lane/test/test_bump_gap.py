@@ -155,9 +155,75 @@ def test_a_short_camera_loss_keeps_the_normal_lane_command_on_reacquisition(lane
     frame(node)
     assert node.bump_gap.active
     result.found, result.target_x = True, 165.
+    for _ in range(2):
+        clock.t += .03
+        sensors(node, x=.006)
+        frame(node)
+        assert node.bump_gap.active
+    clock.t += .03
+    sensors(node, x=.006)
     frame(node)
     assert not node.bump_gap.active
     assert commands[-1].angular.z < 0
+
+
+def test_long_loss_reacquisition_keeps_target_slew_instead_of_resetting(lane):
+    node, clock, result, commands = lane
+    approach(lane)
+    for i in range(15):
+        clock.t += .03
+        sensors(node, x=i*.006)
+        frame(node)
+    assert node.bump_gap.active
+    result.found, result.target_x = True, 210.
+    for _ in range(2):
+        clock.t += .03
+        sensors(node, x=.09)
+        frame(node)
+        assert node.used_target == (160., 185.)
+    clock.t += .03
+    sensors(node, x=.09)
+    node.on_speed_limit(Float32(data=.2))
+    frame(node)
+    assert not node.bump_gap.active
+    assert node.used_target == pytest.approx((168., 185.))
+    assert commands[-1].linear.x == pytest.approx(.2)
+
+
+def test_flickering_fragments_do_not_replace_the_retained_steering(lane):
+    node, clock, result, commands = lane
+    approach(lane)
+    for found, target, usable in ((True, 230., False), (True, 170., True),
+                                  (False, 160., False), (True, 220., False)):
+        clock.t += .03
+        sensors(node, x=.01)
+        result.found, result.target_x, result.bump_usable = found, target, usable
+        frame(node)
+        assert node.bump_gap.active
+        assert node.used_target == (160., 185.)
+        assert commands[-1].angular.z == pytest.approx(0.)
+
+
+def test_no_gap_reference_does_not_create_a_new_zero_speed_command(lane):
+    node, clock, result, commands = lane
+    sensors(node)
+    node.on_bump_approach(Bool(data=True))
+    result.bump_usable = False
+    result.target_x = 180.
+    frame(node)
+    assert commands[-1].linear.x > 0.
+    assert node.bump_gap.reference is None
+
+
+@pytest.mark.parametrize('yaw', [-2., 2.])
+def test_gap_corrects_heading_instead_of_accumulating_a_turn(lane, yaw):
+    node, clock, result, commands = lane
+    approach(lane)
+    clock.t += .04
+    sensors(node, x=.008, yaw=math.radians(yaw))
+    frame(node)
+    assert math.degrees(node.last_steer) == pytest.approx(-1.5*yaw)
+    assert commands[-1].linear.x == pytest.approx(.2)
 
 
 def test_odometry_reset_discards_the_reference(lane):
