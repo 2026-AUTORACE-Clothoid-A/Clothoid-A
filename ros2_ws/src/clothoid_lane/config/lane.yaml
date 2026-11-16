@@ -19,11 +19,14 @@ lane_main:
     # Only during a fresh bump approach, bridge a near-straight lane occlusion.
     # Either distance or time ends the continuation, even if the car is stuck.
     bump_gap_speed: 0.2
-    bump_gap_max_distance: 0.6  # m of wheel odometry since the last measured lane
+    # Archive bump: 0.50 m long + 0.20 m wheelbase + 0.10 m allowance.
+    # Continue the existing gap only; no new stop state or early sign trigger.
+    bump_gap_max_distance: 0.8  # m of wheel odometry since the last measured lane
     bump_gap_max_duration: 4.0 # s since that lane frame
-    bump_gap_max_steer_deg: 5.0
+    bump_gap_max_steer_deg: 5.0 # straight-boundary eligibility and yaw correction limit
     bump_gap_max_yaw_error_deg: 8.0
-    bump_gap_max_lateral_error: 0.1 # m from the arc of the retained steering command
+    bump_gap_max_lateral_error: 0.1 # m from the last measured straight heading
+    bump_gap_yaw_gain: 1.5
     steering_lock_timeout: 1.5 # seconds since mission heartbeat; prevents a stale lock persisting
     steering_lock_level_deg: 1.2 # cache steering while level, before the camera tilts
     steering_lock_reference_timeout: 1.0

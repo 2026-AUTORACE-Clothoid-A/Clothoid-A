@@ -374,6 +374,15 @@ class LaneMainNode(QuietEventsMixin, Node):
                 speed = min(speed, limit)  # zero is a valid hold; steering remains lane-controlled
         return speed
 
+    def remember_level_steering(self, now, frame_time, steer, target):
+        if (self.imu_stamp is not None and
+                0. <= (now-self.imu_stamp).nanoseconds*1e-9 <= self.get_parameter(
+                    'steering_lock_imu_timeout').value and
+                abs((frame_time-self.imu_stamp).nanoseconds*1e-9) <= self.get_parameter(
+                    'steering_lock_sync_tolerance').value and
+                abs(self.imu_pitch) <= self.get_parameter('steering_lock_level_deg').value):
+            self.level_steer, self.level_steer_stamp, self.level_target = steer, frame_time, target
+
     def _publish_debug_points(self, result, header):
         for pub, points in ((self.left_pub, result.left_points),
                             (self.right_pub, result.right_points)):
@@ -410,11 +419,23 @@ class LaneMainNode(QuietEventsMixin, Node):
         gap_ready = self.bump_gap_ready(now, frame_time)
         if not gap_ready:
             self.bump_gap.clear()
+        was_gap_active = self.bump_gap.active
+        usable = result.found and getattr(result, 'bump_usable', True)
+        gap_steer = None
+        if gap_ready and not locked and (was_gap_active or not usable):
+            params = BumpGapParams(**{name: self.get_parameter('bump_gap_' + name).value
+                                     for name in BumpGapParams.__dataclass_fields__})
+            held = self.bump_gap.steering(now.nanoseconds*1e-9, self.odom_pose, self.imu_yaw,
+                                         self.odom_travel, params)
+            if held is not None and not self.bump_gap.reacquired(
+                    frame_time.nanoseconds*1e-9, (result.target_x, result.target_y), usable,
+                    max(1., self.get_parameter('target_max_step_px').value)):
+                gap_steer = held
         target = None
-        if result.found and not locked:
+        if result.found and not locked and gap_steer is None:
             prev = self.used_target
-            if self.last_found_stamp is None or \
-                    (now - self.last_found_stamp).nanoseconds * 1e-9 > TARGET_RESET_SEC:
+            if not was_gap_active and (self.last_found_stamp is None or
+                    (now - self.last_found_stamp).nanoseconds * 1e-9 > TARGET_RESET_SEC):
                 prev = None
             target = limit_step(prev, (result.target_x, result.target_y),
                                 self.get_parameter('target_max_step_px').value)
@@ -438,6 +459,24 @@ class LaneMainNode(QuietEventsMixin, Node):
 
         if result.zigzag:
             self.last_zigzag_stamp = now
+        if gap_steer is not None:
+            cmd = Twist()
+            cmd.linear.x = min(self.current_speed(), self.get_parameter('bump_gap_speed').value)
+            cmd.angular.z = angular_z(cmd.linear.x, gap_steer, self.get_parameter('wheelbase').value)
+            self.last_cmd, self.last_steer = cmd, gap_steer
+            # Resume pixel slew from the heading actually commanded in the gap,
+            # not from the old camera correction that we deliberately stopped following.
+            if self.used_target is not None:
+                gain = self.get_parameter('steer_gain').value
+                if self.get_parameter('steer_gain_speed_scaling').value:
+                    gain = speed_scaled_gain(gain, self.get_parameter('base_speed').value,
+                                             cmd.linear.x, self.get_parameter('steer_gain_max').value)
+                angle = max(-1.4, min(1.4, -gap_steer*math.pi/(2*gain))) if gain > 0 else 0.
+                dy = self.detector.p.warp_h-self.used_target[1]
+                self.used_target = (self.detector.p.warp_w/2+dy*math.tan(angle), self.used_target[1])
+            self.remember_level_steering(now, frame_time, gap_steer, self.used_target)
+            self.cmd_pub.publish(cmd)
+            return result
         if result.found or locked:
             speed = self.current_speed()
             zigzag_speed = self.get_parameter('zigzag_speed').value
@@ -456,13 +495,7 @@ class LaneMainNode(QuietEventsMixin, Node):
                                     self.detector.p.warp_w, self.detector.p.warp_h,
                                     gain, self.get_parameter('max_steer_rad').value)
                 self.last_steer = steer       # remember the angle actually commanded
-                if (self.imu_stamp is not None and
-                        0. <= (now-self.imu_stamp).nanoseconds * 1e-9 <= self.get_parameter(
-                            'steering_lock_imu_timeout').value and
-                        abs((frame_time-self.imu_stamp).nanoseconds * 1e-9) <= self.get_parameter(
-                            'steering_lock_sync_tolerance').value and
-                        abs(self.imu_pitch) <= self.get_parameter('steering_lock_level_deg').value):
-                    self.level_steer, self.level_steer_stamp, self.level_target = steer, frame_time, target
+                self.remember_level_steering(now, frame_time, steer, target)
 
             cmd = Twist()
             # Cap translation after computing steering. Do not double steering gain merely
@@ -475,11 +508,14 @@ class LaneMainNode(QuietEventsMixin, Node):
             self.last_cmd = cmd
             if result.found:
                 self.last_found_stamp = now
-            if (gap_ready and result.found and not locked and
+            slope = getattr(result, 'boundary_slope', None)
+            straight_angle = math.atan(slope) if slope is not None else steer
+            if (gap_ready and usable and not locked and abs(straight_angle) <= math.radians(
+                    self.get_parameter('bump_gap_max_steer_deg').value) and
                     abs(self.imu_pitch) <= self.get_parameter('steering_lock_level_deg').value and
                     abs((frame_time-self.imu_stamp).nanoseconds*1e-9) <= self.get_parameter(
                         'steering_lock_sync_tolerance').value):
-                self.bump_gap.remember(now.nanoseconds*1e-9, steer, self.odom_pose,
+                self.bump_gap.remember(now.nanoseconds*1e-9, self.odom_pose,
                                        self.imu_yaw, self.odom_travel)
             else:
                 self.bump_gap.clear()
@@ -493,19 +529,6 @@ class LaneMainNode(QuietEventsMixin, Node):
                 candidate.twist = cmd
                 self.cone_candidate_pub.publish(candidate)
             return result
-
-        if gap_ready:
-            params = BumpGapParams(**{name: self.get_parameter('bump_gap_' + name).value
-                                     for name in BumpGapParams.__dataclass_fields__})
-            steer = self.bump_gap.steering(now.nanoseconds*1e-9, self.odom_pose, self.imu_yaw,
-                                          self.odom_travel, self.get_parameter('wheelbase').value, params)
-            if steer is not None:
-                cmd = Twist()
-                cmd.linear.x = min(self.current_speed(), params.speed)
-                cmd.angular.z = angular_z(cmd.linear.x, steer, self.get_parameter('wheelbase').value)
-                self.last_cmd, self.last_steer = cmd, steer
-                self.cmd_pub.publish(cmd)
-                return result
 
         hold = self.get_parameter('lost_hold_sec').value
         if hold > 0.0 and self.last_cmd is not None and self.last_found_stamp is not None:
