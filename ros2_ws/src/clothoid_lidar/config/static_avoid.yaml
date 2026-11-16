@@ -19,7 +19,7 @@ static_avoid:
     debug: true                  # /avoid/path, /avoid/cues
     # debug_heavy: false           # + /avoid/candidates, /avoid/costmap: slow on the Jetson, rviz only   (launch argument; a value here would override it)
     # recovery_reverse: true       # every path blocked for 1.5 s: back up 0.2 m along the way the car came (launch argument reverse)   (launch argument; a value here would override it)
-    load_log_period: 5.0         # s, a log line with each callback's run time; 0 = off
+    load_log_period: 0.0         # s, a log line with each callback's run time; 0 = off (load is measured with tools/carmon, 2026-11-16)
 
     lane_width: 0.50             # line centre to centre on our track; rules 0.55, check at the venue
     # trigger

@@ -68,7 +68,7 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         self.declare_parameter('lidar_y', 0.0)
         self.declare_parameter('debug', True)              # /avoid/path, /avoid/cues
         self.declare_parameter('debug_heavy', False)       # + /avoid/candidates, /avoid/costmap (rviz only)
-        self.declare_parameter('load_log_period', 5.0)     # s, callback time log; 0 = off
+        self.declare_parameter('load_log_period', 0.0)     # s, callback time log; 0 = off
         # camera cues
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('image_10hz_topic', '/camera/color/image_10hz')
@@ -312,7 +312,8 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         line = find_entry_line(bgr, self.cam, self.white)
         crossing = self.entry.update(t_img, self.tracker.distance_at(t_img), line)
         if crossing is not None:
-            self.get_logger().info(f'white line: crossed at odometer {crossing.odometer:.2f} m')
+            # the start-line check below logs every crossing with its verdict (one line per line)
+            self.get_logger().debug(f'white line: crossed at odometer {crossing.odometer:.2f} m')
         if self.course is not None:
             self.course.frozen = self.avoid.state == ACTIVE      # no heading snaps while avoiding
             for odo, deg in self.course.snaps[self.snaps_logged:]:
