@@ -147,7 +147,8 @@ def generate_launch_description():
                 {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_finish')),
         # mission also runs the light / pedestrian line stop (FinishCore, camera only while armed)
         include('clothoid_mission', 'mission.launch.py',
-                {'debug': debug, 'camera': LaunchConfiguration('camera')}, enabled('use_mission')),
+                {'debug': debug, 'camera': LaunchConfiguration('camera'),
+                 'parking_enabled': LaunchConfiguration('use_parking')}, enabled('use_mission')),
         # YOLO boxes, mission state, stop line / stop point in RViz (rviz/stop.rviz), stop_viz:=true
         include('clothoid_debug', 'stop_viz.launch.py', condition=enabled('stop_viz')),
 

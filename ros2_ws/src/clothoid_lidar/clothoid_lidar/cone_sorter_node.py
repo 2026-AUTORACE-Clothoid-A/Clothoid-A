@@ -67,7 +67,7 @@ class ConeSorterNode(QuietEventsMixin, Node):
         for name, _ in _FIELDS:
             self.declare_parameter(name, getattr(defaults, name))
 
-        self.mission = ConeMission(ConeSorter(self._build(lambda n: self.get_parameter(n).value)))
+        self.mission = ConeMission(ConeSorter(self._build(lambda n: self.get_parameter(n).value)), hold_exit=True)
 
         self.left_pub = self.create_publisher(
             Path, self.get_parameter('left_boundary_topic').value, 1)
@@ -82,6 +82,8 @@ class ConeSorterNode(QuietEventsMixin, Node):
         self.create_subscription(
             Bool, self.get_parameter('avoid_active_topic').value, self.on_avoid_active, 1)
 
+        self.exit_pub = self.create_publisher(Bool, '/cone/exiting', 1)
+        self.create_subscription(Bool, '/cone/exit_complete', self.on_exit_complete, 1)
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info('cone_sorter started')
 
@@ -97,6 +99,12 @@ class ConeSorterNode(QuietEventsMixin, Node):
         except Exception as exc:
             return SetParametersResult(successful=False, reason=str(exc))
         return SetParametersResult(successful=True)
+
+    def on_exit_complete(self, msg: Bool):
+        if msg.data and self.mission.finish_exit():
+            self.get_logger().info('cone course END: lane handover confirmed')
+            self.exit_pub.publish(Bool(data=False))
+            self.active_pub.publish(Bool(data=False))
 
     def on_avoid_active(self, msg: Bool):
         self.avoid_active, self.avoid_seen = msg.data, self.get_clock().now()
@@ -114,16 +122,21 @@ class ConeSorterNode(QuietEventsMixin, Node):
     def on_obstacles(self, msg: PoseArray):
         cones = np.array([[p.position.x, p.position.y] for p in msg.poses]).reshape(-1, 2)
         was_running = self.mission.running
+        was_exiting = self.mission.exiting
         held = not was_running and self.avoid_holds()
         if held != self.held:
             self.held = held
             self.get_logger().info('cone course start held: static obstacle mission running or just ended'
                                    if held else 'cone course start allowed')
-        result = self.mission.update(cones, may_start=not held)
+        result = self.mission.update(cones, self.get_clock().now().nanoseconds * 1e-9,
+                                     may_start=not held)
         if self.mission.running != was_running:
             self.get_logger().info(
                 'cone course START' if self.mission.running else 'cone course END')
 
+        if self.mission.exiting and not was_exiting:
+            self.get_logger().info('cone course EXIT: retaining observed path until lane ready')
+        self.exit_pub.publish(Bool(data=self.mission.exiting))
         if result is not None:
             header = msg.header
             if len(result.left):

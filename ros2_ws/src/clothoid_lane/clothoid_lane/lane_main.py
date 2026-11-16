@@ -13,7 +13,7 @@ import math
 
 import cv2
 import rclpy
-from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist
+from geometry_msgs.msg import Point32, PointStamped, PolygonStamped, Twist, TwistStamped
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
@@ -26,6 +26,8 @@ from clothoid_common.qos import IMAGE_QOS
 from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
 from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
+from clothoid_lane.parking_landmark_publisher import LandmarkPublisher
+from clothoid_lane.cone_handover import ConeHandover
 from clothoid_lane.bump_gap import BumpGap, BumpGapParams
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
                                     limit_step, speed_scaled_gain, steer_angle)
@@ -106,7 +108,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
         self.declare_parameter('bump_approach_topic', '/bump/approaching')
-        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('odom_topic', '/odom_25hz')
         for name, value in BumpGapParams().__dict__.items():
             self.declare_parameter('bump_gap_' + name, value)
         # the target point used for steering moves at most this many warped px per frame (0 = off).
@@ -114,6 +116,9 @@ class LaneMainNode(QuietEventsMixin, Node):
         # that flipped the steering by up to +-28 deg moved it 29 px (median). 8 px removed 23 of 30
         # jumps over 8 deg and changed the corner steering by 0.4 deg (p95) when replayed.
         self.declare_parameter('target_max_step_px', 8.0)
+        # Low-speed handover until the detected lane and control target agree.
+        self.declare_parameter('cone_active_topic', '/cone/mission_active')
+        self.declare_parameter('cone_exit_speed', 0.3)
 
         # lane following side / width. Widths are real distances, line centre to centre in metres;
         # the warped image has warp_px_per_m pixels per metre across, set with the warp of each car
@@ -121,7 +126,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
         self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('steering_lock_timeout', 1.5)  # mission refreshes every 1 s
-        self.declare_parameter('imu_topic', '/imu')
+        self.declare_parameter('imu_topic', '/imu_25hz')
         self.declare_parameter('steering_lock_level_deg', 1.2)
         self.declare_parameter('steering_lock_reference_timeout', 1.0)
         self.declare_parameter('steering_lock_imu_timeout', 0.25)
@@ -144,6 +149,9 @@ class LaneMainNode(QuietEventsMixin, Node):
 
         self.speed_limit = None
         self.speed_limit_stamp = None
+        self.parking_approach_limit = self.parking_approach_stamp = None
+        self.cone_handover = ConeHandover()
+        self.cone_connecting = False
         self.steering_locked = False
         self.steering_lock_stamp = None
         self.imu_pitch = self.imu_stamp = None
@@ -159,6 +167,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.last_found_stamp = None
         self.used_target = None       # target point the last command steered to (after limit_step)
         self.last_zigzag_stamp = None
+        self.parking_landmark = LandmarkPublisher(self)
         self.image_observers = []  # optional in-process consumers of the same decoded frame
 
         self.cmd_pub = self.create_publisher(Twist, self.get_parameter('cmd_topic').value, 1)
@@ -176,6 +185,7 @@ class LaneMainNode(QuietEventsMixin, Node):
             Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
         self.create_subscription(
             Float32, self.get_parameter('speed_limit_topic').value, self.on_speed_limit, 1)
+        self.create_subscription(Float32, '/parking/approach_speed_limit', self.on_parking_approach, 1)
         self.create_subscription(
             Bool, self.get_parameter('steering_lock_topic').value, self.on_steering_lock, 1)
         self.create_subscription(
@@ -185,6 +195,15 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.create_subscription(
             Bool, self.get_parameter('bump_approach_topic').value, self.on_bump_approach, 1)
 
+        self.create_subscription(
+            Bool, self.get_parameter('cone_active_topic').value, self.on_cone_active, 1)
+        self.cone_ready_pub = self.create_publisher(Bool, '/lane/cone_exit_ready', 1)
+        # A stamped, newly detected command: locks / lost-line holds must never
+        # masquerade as a current lane during the cone-to-lane connection.
+        self.cone_candidate_pub = self.create_publisher(TwistStamped, '/lane/cone_exit_candidate', 1)
+        self.create_subscription(Bool, '/cone/exiting',
+                                 lambda msg: self.cone_handover.request_exit(msg.data), 1)
+        self.create_subscription(Bool, '/cone/connecting', self.on_cone_connecting, 1)
         self.add_on_set_parameters_callback(self.on_parameters)
         self.get_logger().info(f'lane_main started, lane width {self.lane_width:.0f} px')
 
@@ -205,6 +224,10 @@ class LaneMainNode(QuietEventsMixin, Node):
         def value(name):
             return proposed.get(name, self.get_parameter(name).value)
 
+        for name in ('cone_exit_speed',):
+            v = value(name)
+            if not math.isfinite(v) or v < 0:
+                return SetParametersResult(successful=False, reason=f'{name} must be finite and >= 0')
         width = WIDTH_PARAMS & proposed.keys()
         gap_names = ('bump_gap_' + name for name in BumpGapParams.__dataclass_fields__)
         if any(not math.isfinite(value(name)) or value(name) < 0 for name in gap_names):
@@ -222,6 +245,22 @@ class LaneMainNode(QuietEventsMixin, Node):
         return SetParametersResult(successful=True)
 
     # --- flags from other nodes -------------------------------------------------
+    def on_cone_active(self, msg: Bool):
+        if not msg.data:
+            self.cone_connecting = False
+        self.cone_handover.on_cone(msg.data, self.get_clock().now().nanoseconds * 1e-9)
+
+    def on_cone_connecting(self, msg: Bool):
+        # Reacquire once at rear-axle arrival, not on every connecting heartbeat.
+        # Keep normal lane selection, target slew and school-zone state intact.
+        active = bool(msg.data) and self.cone_handover.cone_active
+        if active and not self.cone_connecting and isinstance(self.detector, LaneTracker):
+            self.detector.reset_tracks()
+            self.cone_handover._clear_evidence()
+            self.cone_ready_pub.publish(Bool(data=False))
+            self.get_logger().info('cone connection: reset lane boundary tracks once')
+        self.cone_connecting = active
+
     def on_direction(self, msg: Int32):
         # 2025: ignored once the parking mission started
         if not self.parking_started:
@@ -243,6 +282,11 @@ class LaneMainNode(QuietEventsMixin, Node):
         else:
             self.speed_limit = msg.data
             self.speed_limit_stamp = self.get_clock().now()
+
+    def on_parking_approach(self, msg: Float32):
+        # Separate from /speed_limit: releases must not overwrite another mission.
+        self.parking_approach_limit = msg.data if math.isfinite(msg.data) and msg.data >= 0 else None
+        self.parking_approach_stamp = self.get_clock().now()
 
     def on_steering_lock(self, msg: Bool):
         now = self.get_clock().now()
@@ -323,6 +367,11 @@ class LaneMainNode(QuietEventsMixin, Node):
             age = (self.get_clock().now() - self.speed_limit_stamp).nanoseconds * 1e-9
             if age <= self.get_parameter('speed_limit_timeout').value:
                 speed = min(speed, self.speed_limit)
+        limit = getattr(self, 'parking_approach_limit', None)
+        if limit is not None:
+            age = (self.get_clock().now()-self.parking_approach_stamp).nanoseconds*1e-9
+            if 0 <= age <= self.get_parameter('speed_limit_timeout').value:
+                speed = min(speed, limit)  # zero is a valid hold; steering remains lane-controlled
         return speed
 
     def _publish_debug_points(self, result, header):
@@ -346,7 +395,10 @@ class LaneMainNode(QuietEventsMixin, Node):
 
         for observer in self.image_observers:
             observer(bgr)
-        self.process_bgr(bgr, msg.header)
+        result = self.process_bgr(bgr, msg.header)
+        # Publish lane control first; optional parking analysis reuses this frame/result afterwards.
+        if hasattr(self, 'parking_landmark'):
+            self.parking_landmark.process(bgr, msg.header, result, self.detector.p)
 
     def process_bgr(self, bgr, header):
         debug = self.get_parameter('debug').value
@@ -367,6 +419,14 @@ class LaneMainNode(QuietEventsMixin, Node):
             target = limit_step(prev, (result.target_x, result.target_y),
                                 self.get_parameter('target_max_step_px').value)
             self.used_target = target
+
+        # Reuse the normal filter's pixel step and target freshness interval.
+        # A locked/held command is not evidence of a newly observed lane.
+        self.cone_handover.observe(
+            now.nanoseconds * 1e-9, result.found,
+            (result.target_x, result.target_y), target,
+            self.get_parameter('target_max_step_px').value, TARGET_RESET_SEC)
+        self.cone_ready_pub.publish(Bool(data=self.cone_handover.ready))
 
         if debug and result.debug_image is not None:
             if target is not None:     # yellow ring: the point steered to (green dot: detected)
@@ -405,6 +465,11 @@ class LaneMainNode(QuietEventsMixin, Node):
                     self.level_steer, self.level_steer_stamp, self.level_target = steer, frame_time, target
 
             cmd = Twist()
+            # Cap translation after computing steering. Do not double steering gain merely
+            # because recovery is slower; other existing speed limits still apply.
+            speed = self.cone_handover.speed(
+                now.nanoseconds * 1e-9, speed, self.get_parameter('cone_exit_speed').value,
+                TARGET_RESET_SEC)
             cmd.linear.x = speed
             cmd.angular.z = angular_z(speed, steer, self.get_parameter('wheelbase').value)
             self.last_cmd = cmd
@@ -419,7 +484,15 @@ class LaneMainNode(QuietEventsMixin, Node):
             else:
                 self.bump_gap.clear()
             self.cmd_pub.publish(cmd)
-            return
+            if (self.cone_handover.cone_active and self.cone_handover.exit_requested
+                    and result.found and not locked and target is not None
+                    and 0. <= (now-frame_time).nanoseconds*1e-9 <= TARGET_RESET_SEC):
+                candidate = TwistStamped()
+                candidate.header.stamp = frame_time.to_msg()
+                candidate.header.frame_id = 'base_link'
+                candidate.twist = cmd
+                self.cone_candidate_pub.publish(candidate)
+            return result
 
         if gap_ready:
             params = BumpGapParams(**{name: self.get_parameter('bump_gap_' + name).value
@@ -432,7 +505,7 @@ class LaneMainNode(QuietEventsMixin, Node):
                 cmd.angular.z = angular_z(cmd.linear.x, steer, self.get_parameter('wheelbase').value)
                 self.last_cmd, self.last_steer = cmd, steer
                 self.cmd_pub.publish(cmd)
-                return
+                return result
 
         hold = self.get_parameter('lost_hold_sec').value
         if hold > 0.0 and self.last_cmd is not None and self.last_found_stamp is not None:
@@ -441,6 +514,7 @@ class LaneMainNode(QuietEventsMixin, Node):
                 cmd.linear.x = min(self.last_cmd.linear.x, self.current_speed())
                 cmd.angular.z = self.last_cmd.angular.z
                 self.cmd_pub.publish(cmd)
+        return result
 
 
 def main(args=None):

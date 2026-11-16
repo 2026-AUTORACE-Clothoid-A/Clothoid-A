@@ -9,18 +9,22 @@ mission:
     odom_topic: /odom_25hz
     input_timeout: 0.5          # detections / stop line / imu older than this count as "not seen"
     refresh_sec: 1.0            # direction / parking / steering_lock flag re-sent this often
-    # abs(light box centre x - camera principal x) / box height. Start-straight
-    # adjacent light: 5.3; own signal approach: 2.9. Initial threshold, validate on
-    # the track. Applies to every light colour; 0.0 disables that group's filter.
+    # Per-class proximity gates run before object tracking and frame confirmation.
+    # Values need field calibration for the actual camera and sign dimensions.
     light_max_offset_height_ratio: 3.5
-    # Smaller sign faces need a wider ratio than lights. Recorded bump/pedestrian:
-    # <= 3.9; adjacent parking sign at the start: 9.1~12.5, own parking sign: ~4.3.
-    sign_max_offset_height_ratio: 7.0  # pedestrian, slow, bump, parking; initial track setting
-    # Fork signs can enter at the image edge from an outer lane (recorded up to 9.4; 1114: ~9 from
-    # lane 3 while swerving). Seen only around the static obstacle section and not acted on at once
-    # (each new sighting overwrites the direction before the fork), so wider: 13.0 (was 10.0).
-    fork_max_offset_height_ratio: 13.0  # sign_left / sign_right
-    # Confirm on distinct YOLO frames; timer ticks never count as new evidence.
+    sign_max_offset_height_ratio: 5.0
+    fork_max_offset_height_ratio: 13.0
+    # The valid roadside bump warning is far off centre in this camera.
+    bump_max_offset_height_ratio: 0.0 # <=0 disables only the bump lateral gate
+    bump_min_area: 0.0
+    bump_min_height: 24.0      # prepare before the bump's start stop line
+    slow_min_area: 0.0
+    slow_min_height: 28.0      # prepare before the slow zone's start stop line
+    parking_min_area: 0.0
+    parking_min_height: 28.0   # prepare before entry/bay handover; retain source quality checks
+    pedestrian_min_area: 0.0
+    pedestrian_min_height: 28.0 # 2500 px^2 plus lateral gate rejected the valid warning in the bag
+    # Confirm on distinct source images; colours share a traffic-light identity.
     detection_confirm_hits: 3
     # Fork signs (sign_left / sign_right) confirm on 2 frames within fork_confirm_age: small (~20 px)
     # and seen between the static obstacles (1114: never confirmed with 3, the car took the default road).
@@ -44,6 +48,16 @@ mission:
     sign_min_height: 14
     light_min_height: 8
     detection_edge_margin: 2
+    # Candidate-only parking/pedestrian tracks; scene evidence still gates action.
+    scene_sign_candidates: true
+    track_retention_sec: 2.0    # selected red light is retained through occlusion until release
+    track_max_objects: 32      # bounded history and association work
+    track_match_gate: 1.0      # centre displacement in object-size units
+    track_scale_ratio: 3.0     # symmetric size-change association limit
+    require_scene_confirmation: true  # local entry/bay evidence still required after the cone gate
+    parking_enabled: true      # full.launch overrides with use_parking; no idle P processing when off
+    parking_scene_rate_hz: 6.0 # decode/warp cap while only preparing parking; stops use camera rate
+    parking_entry_max_travel: 3.0 # entry evidence expires after this measured travel past the line
     # Stop-line corridor and physical thickness, in metres on the ground.
     line_band: 0.22
     line_min_run: 0.7
@@ -51,6 +65,12 @@ mission:
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
     line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
+    front_axle_x: 0.10          # mission entry only: base_link -> front wheels
+    entry_reaction_sec: 0.10    # timer/actuation lead; 0738/0816 bags reach 0.2 in 0.20-0.24 s
+    entry_deceleration: 2.5     # m/s^2; 0.8 -> 0.2 starts about 0.24 m before entry, including 4 cm margin
+    entry_confirm_frames: 2    # distinct, odometry-consistent images of the mission START line
+    entry_min_span: 0.26       # metres across the road; partial boundary while leaving a corner
+    entry_rate_hz: 10.0        # shared image/mask, entry fit at most once per 100 ms time slot
     slow_speed: 0.2             # rules: 0.2 m/s or less
     slow_hold_sec: 4.0          # general slow sign hold timer
     # speed bump (IMU Pitch + YOLO fusion)
@@ -59,15 +79,12 @@ mission:
     bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
-    bump_min_area: 0.0          # px^2, minimum bbox area to trigger bump logic
-    bump_min_height: 28.0       # px, minimum bbox height to trigger bump logic
-    # sign bbox size filters (prevent distant premature triggers)
-    slow_min_area: 2500.0       # px^2, minimum bbox area to trigger slow down
-    slow_min_height: 40.0       # px, minimum bbox height to trigger slow down
-    parking_min_area: 0.0       # px^2, minimum bbox area to latch parking flag
-    parking_min_height: 28.0    # px, minimum bbox height to latch parking flag
-    pedestrian_min_area: 0.0    # px^2, minimum bbox area to arm pedestrian stop
-    pedestrian_min_height: 28.0 # px, minimum bbox height to arm pedestrian stop
+    # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.
+    require_cone_for_parking: true
+    block_bump_after_cone: true
+    avoid_release_hold: 2.0     # s: ignore cone_active during avoidance and this long after
+    cone_confirm_sec: 1.5
+    slow_arms_bump: false      # round slow warning uses slow_hold_sec, independent of bump traversal
     # missions
     pedestrian_wait_sec: 3.5    # rules: 3 s or more, restart within 15 s
     stop_on_yellow: true        # rules say nothing about yellow
@@ -75,16 +92,15 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
-    # false (2026-11-10): the confirmed YOLO sign_parking raises /parking_flag at once. true needs
-    # /stopline_near from the stopline node, which full.launch does not start (use_stopline:=false)
-    parking_at_stopline: false
-    # cone gate: allow parking and block speed bump only after /cone/mission_active has been true
-    require_cone_for_parking: true
-    block_bump_after_cone: true
-    avoid_release_hold: 2.0     # s: cone_active does not count while /avoid/active and this long after
-    cone_confirm_sec: 1.5       # consecutive seconds of cone_active before latching cone_entered
+    # Only used when require_scene_confirmation is explicitly disabled (legacy mode).
+    parking_at_stopline: true
+    # Legacy parameter names: these refer to mission START lines, not crosswalk stop lines.
+    # Signs prepare the entry observer; braking begins before front-wheel entry.
+    slow_at_stopline: true
+    bump_at_stopline: true
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
-    # (line_stop.py): front 0.161 + stop_gap 0.03 as finish (the bumper ends about on the line)
+    # (line_stop.py), independently of mission entry. Keep FinishCore's original stop settings.
+    # Mission entry starts approach slowing with its own braking lead; the final stop stays separate.
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true
     approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
     image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame

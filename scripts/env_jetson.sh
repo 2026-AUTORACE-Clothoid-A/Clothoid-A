@@ -39,7 +39,9 @@ if [ -d /usr/local/cuda-12.6 ]; then
 fi
 if [ -d /usr/local/TensorRT-10.3.0.26 ]; then
     export TENSORRT_INSTALL=/usr/local/TensorRT-10.3.0.26
-    export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$TENSORRT_INSTALL/lib
+    # Engine plans require this SDK build; the system copy can report the same 10.3.0
+    # version but be a different build (.30 instead of .26), so search the SDK first.
+    export LD_LIBRARY_PATH="$TENSORRT_INSTALL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export PATH=/usr/src/tensorrt/bin:$PATH
 fi
 

@@ -3,8 +3,10 @@
 Inputs each tick: YOLO detections, "stop line ahead", "parking finished", IMU pitch.
 Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking_flag`, `steering_lock`.
 
-  * slow sign        -> speed limit for `slow_hold_sec` after the last sighting
-  * bump sign + IMU  -> armed slow speed, dynamic exit on leveling, steering lock on climb
+  * slow sign        -> optionally brake before the mission start line, then hold after entry;
+                        without `slow_at_stopline`, hold after the last sign sighting
+  * bump sign + IMU  -> optionally brake before the mission start line before approaching slowly;
+                        IMU contact also starts slowing, leveling ends it, and climb locks steering
   * pedestrian sign  -> arm; stop at the stop line, wait `pedestrian_wait_sec`, then go
   * traffic light    -> arm on red (and yellow if `stop_on_yellow`); stop at the stop line,
                         go when green is seen
@@ -13,11 +15,11 @@ Outputs: `stop` (state node holds the car), `speed_limit`, `direction`, `parking
     steering) and the car is held when it reports `arrived` (STOP).
     `use_stop_line` false: stop the moment the 2025 stripe flag (/stopline_detected) is true; that
     flag is commented out in clothoid_lane since 2026-11-09, so false means no stop at all.
-  * left / right sign (fork) -> direction value for lane_main
-  * parking sign     -> arm; parking flag (latched) at the next single stop line right in front
-                        (`parking_line`: /stopline_near, not the stripe detector, which needs a
-                        crosswalk; the lidar search starts there, about 2 m before the bay;
-                        `parking_at_stopline` false: at the sign)
+  * left / right sign -> preferred boundary; lane_main still follows the measured road
+  * parking sign     -> prepare passive scene sensing; entry plus bay confirmation transfers control
+  * require_scene_confirmation false allows parking's legacy sign/stop-line trigger for comparisons
+Cone course entry gates parking preparation and blocks later bump triggers;
+parking still needs its local entry and bay observations.
 Driving nodes keep working underneath: `stop` only means "publish zero on the state input".
 """
 import math
@@ -125,12 +127,14 @@ class MissionParams:
     # slow sign & bump speed
     slow_speed: float = 0.2            # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0         # general slow sign hold timer
+    slow_at_stopline: bool = False     # legacy key: slow before the separate mission entry line
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
     bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
     bump_level_duration_sec: float = 0.3  # sec, continuous leveling to confirm exit
     bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
+    bump_at_stopline: bool = False      # legacy key: slow before the separate mission entry line
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
@@ -143,7 +147,10 @@ class MissionParams:
     fork_right_direction: int = 1
     # parking: the sign is seen from afar, the stop line before the bays is where the search starts
     parking_at_stopline: bool = True
-    # cone gate: allow parking and block speed bump only after entering the cone course
+    require_scene_confirmation: bool = True
+    parking_enabled: bool = True
+    slow_arms_bump: bool = False
+    # Main route policy: latch cone entry before accepting parking signs.
     require_cone_for_parking: bool = True
     block_bump_after_cone: bool = True
     cone_confirm_sec: float = 1.5      # consecutive seconds of cone_active before latching cone_entered
@@ -163,7 +170,12 @@ class Inputs:
     parking_done: bool = False
     imu_pitch: Optional[float] = None             # vehicle pitch in degrees
     cone_active: bool = False                     # /cone/mission_active from cone_sorter
+    parking_scene: bool = False    # fresh, repeated lidar bay observations
+    parking_observing: bool = False # bounded approach observation, not permission to turn
+    parking_skipped: bool = False   # observation failed; never means parking_done
     avoid_active: bool = False                    # /avoid/active from static_avoid (fresh)
+    entry_slow: bool = False       # braking point before the separate mission boundary
+    entry_reached: bool = False    # front wheels reached that boundary (not a stop request)
 
 
 @dataclass
@@ -174,7 +186,10 @@ class Outputs:
     direction: Optional[int] = None    # None until a fork sign was seen
     parking_flag: bool = False
     stop_arm: bool = False             # run the line stop (FinishCore)
+    stop_require_crosswalk: bool = True
     steering_lock: bool = False        # lock steering during bump traversal
+    parking_prepare: bool = False     # observe the parking scene, keep lane control
+    entry_arm: bool = False           # observe the mission boundary, independently of the stop line
 
 
 class MissionLogic:
@@ -182,11 +197,14 @@ class MissionLogic:
         self.p = params
         self.state = DRIVE
         self.slow_until = -1.0
+        self.slow_armed_at: Optional[float] = None
         self.direction: Optional[int] = None
         self.parking_flag = False
         self.parking_armed = False
+        self.parking_seen_at = None
         self.cone_entered = False
         self.cone_active_since: Optional[float] = None
+        self.parking_skip_until = -math.inf
         self.avoid_until = -1.0                     # cone_active ignored until then
         self.pedestrian_armed_at: Optional[float] = None
         self.light_armed_at: Optional[float] = None
@@ -196,10 +214,14 @@ class MissionLogic:
         # Bump internal state
         self.bump_state = BUMP_IDLE
         self.bump_armed_at = -1.0
+        self.bump_line_armed_at: Optional[float] = None
         self.bump_level_started_at: Optional[float] = None
         self.bump_cooldown_until = -1.0
         self.bump_entry_sign = 0.
         self.bump_opposite_seen = False
+
+    def _line_arrived(self, inputs: Inputs) -> bool:
+        return inputs.line_phase == 'arrived' if self.p.use_stop_line else inputs.stopline
 
     def step(self, inputs: Inputs) -> Outputs:
         now, seen, p = inputs.now, inputs.seen, self.p
@@ -209,20 +231,37 @@ class MissionLogic:
         if inputs.cone_active and now >= self.avoid_until:
             if self.cone_active_since is None:
                 self.cone_active_since = now
-            if now - self.cone_active_since >= p.cone_confirm_sec:
+            if now-self.cone_active_since >= p.cone_confirm_sec:
                 self.cone_entered = True
         else:
             self.cone_active_since = None
 
-        if 'sign_slow' in seen:
+        if p.slow_at_stopline:
+            if 'sign_slow' in seen and now >= self.slow_until:
+                self.slow_armed_at = now
+            if self.slow_armed_at is not None:
+                if inputs.entry_reached:
+                    self.slow_until = now + p.slow_hold_sec
+                    self.slow_armed_at = None
+                elif not inputs.entry_slow and now - self.slow_armed_at > p.arm_timeout_sec:
+                    self.slow_armed_at = None
+        elif 'sign_slow' in seen:
             self.slow_until = now + p.slow_hold_sec
-        if 'sign_left' in seen:
-            self.direction = p.fork_left_direction
-        elif 'sign_right' in seen:
-            self.direction = p.fork_right_direction
-        if 'sign_parking' in seen and (self.cone_entered or not p.require_cone_for_parking):
-            self.parking_armed = True
-        if self.parking_armed and (inputs.parking_line or not p.parking_at_stopline):
+        self._update_fork(inputs)
+        if inputs.parking_skipped and not self.parking_flag:
+            self.parking_seen_at = None
+            self.parking_skip_until = now+p.cooldown_sec
+        if ('sign_parking' in seen and p.parking_enabled and now >= self.parking_skip_until
+                and (self.cone_entered or not p.require_cone_for_parking)):
+            self.parking_seen_at = now
+        self.parking_armed = (p.parking_enabled and self.parking_seen_at is not None and
+                              (now - self.parking_seen_at <= p.arm_timeout_sec or
+                               (self.parking_armed and inputs.parking_observing)) and
+                              not self.parking_flag and not inputs.parking_done)
+        parking_line_hit = inputs.parking_line or (p.use_stop_line and self._line_arrived(inputs))
+        parking_entry = (inputs.parking_line and inputs.parking_scene if p.require_scene_confirmation
+                         else parking_line_hit or not p.parking_at_stopline)
+        if self.parking_armed and parking_entry and self.state == DRIVE:
             self.parking_flag = True
 
         self._update_stop(inputs)
@@ -232,8 +271,15 @@ class MissionLogic:
         bump_active = self.bump_state in (BUMP_APPROACHING, BUMP_ON)
         if now < self.slow_until or bump_active:
             limits.append(p.slow_speed)
+        if self.slow_armed_at is not None and inputs.entry_slow:
+            limits.append(p.slow_speed)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
-        if arm:
+        parking_line_arm = p.use_stop_line and self.state == DRIVE and (
+            not p.require_scene_confirmation and self.parking_armed and not self.parking_flag
+            and p.parking_at_stopline)
+        # Keep entry slowing separate from the final crosswalk stop. Its shorter
+        # braking lead avoids crawling from a distant mission-start observation.
+        if arm and (not p.require_scene_confirmation or inputs.entry_slow or inputs.line_phase == 'commit'):
             limits.append(inputs.line_speed if inputs.line_speed is not None else p.approach_speed)
         return Outputs(
             state=self.state,
@@ -241,24 +287,55 @@ class MissionLogic:
             speed_limit=min(limits) if limits else None,
             direction=self.direction,
             parking_flag=self.parking_flag,
-            stop_arm=arm,
+            stop_arm=arm or parking_line_arm,
+            stop_require_crosswalk=arm,
+            entry_arm=p.use_stop_line and self.state == DRIVE and (
+                arm or self.slow_armed_at is not None or self.bump_line_armed_at is not None),
+            parking_prepare=self.parking_armed and not self.parking_flag,
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
                            math.isfinite(inputs.imu_pitch)))
 
+    def _update_fork(self, inputs: Inputs) -> None:
+        seen, p = inputs.seen, self.p
+        if 'sign_left' in seen and 'sign_right' not in seen:
+            self.direction = p.fork_left_direction
+        elif 'sign_right' in seen and 'sign_left' not in seen:
+            self.direction = p.fork_right_direction
+
     def _update_bump(self, inputs: Inputs) -> None:
         now, seen, pitch, p = inputs.now, inputs.seen, inputs.imu_pitch, self.p
         bump_blocked = self.cone_entered and p.block_bump_after_cone
+        bump_seen = 'sign_bump' in seen or (p.slow_arms_bump and 'sign_slow' in seen)
+
+        # Select the configured trigger even on the first tick after cooldown.
+        if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
+            self.bump_state = BUMP_IDLE
 
         # 1. YOLO trigger
         if bump_blocked:
+            self.bump_line_armed_at = None
             if self.bump_state == BUMP_APPROACHING:
                 self.bump_state = BUMP_IDLE
-        elif 'sign_bump' in seen:
-            if self.bump_state == BUMP_COOLDOWN and now >= self.bump_cooldown_until:
-                self.bump_state = BUMP_IDLE
-
+        elif p.bump_at_stopline and self.bump_state == BUMP_IDLE:
+            if bump_seen:
+                self.bump_line_armed_at = now
+            if self.bump_line_armed_at is not None:
+                if pitch is not None and abs(pitch) >= p.bump_pitch_thresh:
+                    self.bump_line_armed_at = None
+                    self.bump_state = BUMP_ON
+                    self.bump_level_started_at = None
+                    self.bump_entry_sign = math.copysign(1., pitch)
+                    self.bump_opposite_seen = False
+                elif inputs.entry_slow or inputs.entry_reached:
+                    self.bump_line_armed_at = None
+                    self.bump_state = BUMP_APPROACHING
+                    self.bump_level_started_at = None
+                    self.bump_armed_at = now
+                elif now - self.bump_line_armed_at > p.bump_arm_timeout_sec:
+                    self.bump_line_armed_at = None
+        elif bump_seen:
             if self.bump_state == BUMP_IDLE:
                 self.bump_state = BUMP_APPROACHING
                 self.bump_level_started_at = None
@@ -267,11 +344,7 @@ class MissionLogic:
                 self.bump_armed_at = now
 
         # 2. State transitions using IMU pitch and timers
-        if self.bump_state == BUMP_COOLDOWN:
-            if now >= self.bump_cooldown_until:
-                self.bump_state = BUMP_IDLE
-
-        elif self.bump_state == BUMP_APPROACHING:
+        if self.bump_state == BUMP_APPROACHING:
             # Expire if bump not hit within timeout
             if now - self.bump_armed_at > p.bump_arm_timeout_sec:
                 self.bump_state = BUMP_IDLE
@@ -357,7 +430,8 @@ def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
                  fork_max_offset_height_ratio: float = 10.0,
                  min_sizes: Optional[Dict[str, Tuple[float, float]]] = None,
                  bump_min_area: float = 0.0,
-                 bump_min_height: float = 0.0) -> Set[str]:
+                 bump_min_height: float = 0.0,
+                 bump_max_offset_height_ratio: Optional[float] = None) -> Set[str]:
     """Classes used by the mission, excluding boxes far to the side or smaller than thresholds.
 
     abs(box centre x - camera principal x) / box height is a distance-normalised
@@ -367,6 +441,8 @@ def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
     the fork sign reached 9.4 while approaching from the outer lane.
     A configured limit <= 0 disables that group's filter for recorded comparisons.
     min_sizes maps class_name -> (min_area, min_height).
+    bump_max_offset_height_ratio overrides only the bump sign's lateral limit:
+    None inherits the shared sign limit; <= 0 disables it for roadside bump signs.
     """
     filters = dict(min_sizes or {})
     if bump_min_area > 0 or bump_min_height > 0:
@@ -393,7 +469,9 @@ def classes_seen(detections: Iterable, camera_center_x: float = 319.9,
                 continue
 
         # 2. Horizontal offset ratio filtering (exclude adjacent track signs)
-        if name.startswith('traffic_light_'):
+        if name == 'sign_bump' and bump_max_offset_height_ratio is not None:
+            limit = bump_max_offset_height_ratio
+        elif name.startswith('traffic_light_'):
             limit = light_max_offset_height_ratio
         elif name in ('sign_left', 'sign_right'):
             limit = fork_max_offset_height_ratio

@@ -13,6 +13,36 @@ parking:
     laser_x: 0.103             # laser_link ahead of base_link (URDF)
     lazy_sensors: true         # imu/odom/scan only from /parking_flag until DONE (false: always)
     arm_wait_sec: 1.0          # after the flag, wait this long for all three before refusing
+    # Preparation subscribes only scan and never commands the vehicle.
+    probe.rate_hz: 5.0
+    probe.confirm_scans: 3
+    probe.max_gap: 0.75
+    probe.tolerance: 0.08
+
+    # Experimental registered six-bay search. False selects the legacy lidar gap finder.
+    layout.enabled: true
+    layout.control_enabled: true   # user-enabled registered target control (lane-side middle bay)
+    layout.target_bay: 2           # designated lane-side middle bay
+    layout.observation_stop_margin: 0.08 # stop before turn if goal remains unobserved
+    layout.scan_hz: 5.0
+    layout.columns: 3
+    layout.rows: 2
+    layout.bay_width: 0.50
+    layout.bay_depth: 0.60
+    layout.line_width: 0.02
+    layout.position_tolerance: 0.07 # registration consistency only; not collision padding
+    layout.confirm_frames: 3
+    layout.confirm_scans: 3
+    layout.evidence_age: 1.5
+
+    # Lane speed cap only after repeated visual registration + lidar support.
+    approach.enabled: true
+    approach.speed: 0.20
+    approach.deceleration: 0.5
+    approach.reaction_sec: 0.25
+    approach.stop_margin: 0.08
+    approach.hold_sec: 3.0
+    approach.timeout_sec: 15.0
 
     plan.side: -1.0            # bays on the right
     # limo2, fitted to 5 parking bags against the lidar (2026-11-09): rear slides at full lock.

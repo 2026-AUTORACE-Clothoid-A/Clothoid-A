@@ -35,7 +35,7 @@ class FinishNode(QuietEventsMixin, Node):
         super().__init__('finish')
         for name, default in (('image_topic', '/camera/color/image_raw'),
                               ('camera_info_topic', '/camera/color/camera_info'),
-                              ('imu_topic', '/imu'), ('odom_topic', '/odom'),
+                              ('imu_topic', '/imu_25hz'), ('odom_topic', '/odom_25hz'),
                               ('start_topic', '/parking_done'), ('arm_topic', '/parking_flag'),
                               ('cmd_topic', '/cmd_vel_finish'),
                               ('done_topic', '/finish_done'), ('state_topic', '/finish/state'),

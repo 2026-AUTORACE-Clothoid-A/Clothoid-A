@@ -25,7 +25,7 @@ cone_sorter:
     max_dist_between_cones: 0.4
     max_trace_length: 20
     threshold_directional_angle_deg: 45.0
-    first_step_angle_deg: 90.0   # the corridor can be at an angle to the car at the first cone
+    first_step_angle_deg: 90.0   # match main's cone classification and tracing
     angle_from_left_first_cone: 45.0
     dist_from_left_first_cone: 0.7
     dist_from_right_first_cone: 0.7
@@ -51,15 +51,33 @@ cone_sorter:
 
 cone_follower:
   ros__parameters:
-    speed: 0.4               # simulator course: 0.3~0.4 pass, 0.5 and 0.2 or less hit a cone
-    reverse_speed: -0.2
+    # Local memory pose: integrate rear-axle wheel speed with the IMU gyro.
+    # The steering-feedback-derived /odom pose under-reports full-lock rotation.
+    # Driver-averaged 25 Hz rates; timestamps remain sensor timestamps.
+    odom_topic: /odom_25hz
+    imu_topic: /imu_25hz
+    pose_topic: /cone/odom   # diagnostic local base_link pose; no global TF is replaced
+    speed: 0.25               # normal course speed; main pursuit law retained
+    reverse_speed: -0.2       # normal course: main's one-boundary reverse behaviour
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
     wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
     rear_axle_x: 0.1         # rear axle behind base_link (base_link is midway between the axles)
-    lfd: 0.4                 # simulator course: 0.3 hits a cone, see the sweep in the commit message
+    lfd: 0.4                  # normal course: main's arc-length lookahead
     centerline_ds: 0.05
     lsq_window_size: 9
     boundary_timeout: 0.25   # 2025 used 0.1 = one scan period of the 10 Hz Tmini Plus
+    # Exit retains the previous controller's independent rear-axle circle and speed.
+    exit_speed: 0.25
+    exit_lfd: 0.35
+    exit_clearance: 0.2      # minimum path distance to current detected obstacle centres
+    # After rear-axle arrival, connect to fresh detected lane commands under cone
+    # priority. Limits apply equally to straight, left and right exits; no exit
+    # waypoint / timed turn. Completion requires measured speed + IMU turn agreement.
+    exit_connect_speed: 0.2
+    exit_connect_steer_rate_deg_s: 20.0
+    exit_connect_confirm_sec: 0.3
+    exit_connect_max_distance: 1.0 # abort bound, never an arrival / release condition
+    exit_connect_max_duration: 6.0 # abort bound, never an arrival / release condition
 
 # Second extractor instance for the static obstacle mission: LIMO-sized objects, no cones
 # (from namgyu/static-obstacle-avoidance). Retune min_width / min_points with a real LIMO scan.

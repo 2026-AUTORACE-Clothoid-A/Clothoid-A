@@ -49,3 +49,25 @@ def test_standalone_lane_keeps_one_conversion_and_its_header(monkeypatch):
     receiver = SimpleNamespace(image_observers=[], process_bgr=lambda bgr,h: calls.append((bgr,h)))
     lane_main.LaneMainNode.on_image(receiver, msg)
     assert len(calls) == 1 and calls[0][0] is frame and calls[0][1] is msg.header
+
+
+def test_parking_observer_runs_after_lane_command_and_reuses_result(monkeypatch):
+    frame = np.zeros((4, 5, 3), np.uint8)
+    result, warp = object(), object()
+    order = []
+    monkeypatch.setattr(lane_main, 'image_to_bgr', lambda msg: frame)
+
+    def control(bgr, header):
+        order.append('lane_command')
+        return result
+
+    def observe(bgr, header, received_result, received_warp):
+        assert order == ['lane_command']
+        assert bgr is frame and received_result is result and received_warp is warp
+        order.append('parking')
+
+    receiver = SimpleNamespace(image_observers=[], process_bgr=control,
+                               parking_landmark=SimpleNamespace(process=observe),
+                               detector=SimpleNamespace(p=warp))
+    lane_main.LaneMainNode.on_image(receiver, SimpleNamespace(header=object()))
+    assert order == ['lane_command', 'parking']

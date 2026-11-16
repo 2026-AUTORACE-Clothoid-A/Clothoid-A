@@ -48,6 +48,8 @@ class DecisionViz(QuietEventsMixin, Node):
                             ('warp_y_l', d.y_l)):
             self.declare_parameter(name, value)
         self.declare_parameter('use_odom_pose', False)
+        self.declare_parameter('imu_topic', '/imu_25hz')
+        self.declare_parameter('odom_topic', '/odom_25hz')
         self.declare_parameter('camera_height', 0.187)   # lens above the floor, measured on limo1
         # horizon of the warp trapezoid is at row 178, cy 217, fy 489 -> atan(39 / 489)
         self.declare_parameter('camera_pitch', 0.080)
@@ -95,8 +97,8 @@ class DecisionViz(QuietEventsMixin, Node):
         self.create_subscription(PolygonStamped, '/lane/right_warp', self.on_right, 5)
         self.create_subscription(PointStamped, '/lane/target_warp', self.on_target, 5)
         self.create_subscription(PointStamped, '/cone/target', self.on_cone_target, 5)
-        self.create_subscription(Imu, '/imu', self.on_imu, 50)
-        self.create_subscription(Odometry, '/odom', self.on_odom, 20)
+        self.create_subscription(Imu, get('imu_topic'), self.on_imu, 50)
+        self.create_subscription(Odometry, get('odom_topic'), self.on_odom, 20)
         self.create_subscription(Bool, '/stopline_detected', self.on_stopline, 5)
         self.create_subscription(Bool, '/cone/mission_active', self.on_cone, 5)
         self.create_subscription(Float32, '/speed_limit', self.on_limit, 5)

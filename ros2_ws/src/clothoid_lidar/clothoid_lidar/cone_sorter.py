@@ -174,11 +174,13 @@ class ConeMission:
     back to IDLE when the continue zone empties. may_start False holds the start (static_avoid
     running: LIMOs side by side look like a cone course, 1114_0028 aborted the avoidance)."""
 
-    def __init__(self, sorter: ConeSorter):
+    def __init__(self, sorter: ConeSorter, hold_exit: bool = False):
         self.sorter = sorter
+        self.hold_exit = hold_exit
         self.running = False
+        self.exiting = False
 
-    def update(self, cones: np.ndarray, may_start: bool = True) -> Optional[SortResult]:
+    def update(self, cones: np.ndarray, stamp=None, may_start: bool = True) -> Optional[SortResult]:
         """Returns the sorted boundaries while the course is running, else None."""
         cones = np.asarray(cones, float).reshape(-1, 2)
         if not self.running:
@@ -188,6 +190,16 @@ class ConeMission:
                 self.running = True
             return None
         if not self.sorter.continue_zone_ok(cones):
+            if self.hold_exit:
+                self.exiting = True
+                return None
             self.running = False
             return None
+        self.exiting = False
         return self.sorter.sort(cones)
+
+    def finish_exit(self):
+        if not self.exiting:
+            return False
+        self.running = self.exiting = False
+        return True

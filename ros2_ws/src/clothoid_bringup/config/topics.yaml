@@ -10,12 +10,12 @@
     # consumers that do not need 30 Hz; such a node declares image_10hz_topic and subscribes to it
     image_10hz_topic: /camera/color/image_10hz
     scan_topic: /scan
-    odom_topic: /odom
-    imu_topic: /imu
+    odom_topic: /odom_25hz
+    imu_topic: /imu_25hz
     # limo_base also publishes 25 Hz copies (every 4th /imu, every 2nd /odom; rates averaged, states
     # of the last: slow_topic.hpp). Python nodes need no more: each message costs the rclpy executor
-    # more than the node's own work. A node moves by setting its imu_topic / odom_topic to these in
-    # its own yaml (lane_main, parking; docs/requests/imu_odom_25hz.md)
+    # more than the node's own work. Runtime consumers use these copies by default; original
+    # /imu and /odom remain published for recording and explicit replay overrides.
     imu_slow_topic: /imu_25hz
     odom_slow_topic: /odom_25hz
 

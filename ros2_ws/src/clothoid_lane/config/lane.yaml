@@ -31,6 +31,8 @@ lane_main:
     steering_lock_sync_tolerance: 0.04 # camera/IMU sensor-stamp difference when caching level steering
     # the steered-to target moves at most this many warped px per frame (0 = off); see lane_main.py
     target_max_step_px: 8.0
+    # Cone exit: cap speed until consecutive detections and the control target agree.
+    cone_exit_speed: 0.3
     # multiplies the 2025 steering law. The turn rate for a steering angle grows with the speed, so keep
     # speed x steer_gain about the same: 0.8 m/s x 0.33 = 0.26 drove best (2026-11-08 02:27 / 02:55:
     # 0-4 jumps over 8 deg per minute, straight steering sd 1.5-2.2 deg); 0.8 x 0.55 weaved (23:53, 71
@@ -47,7 +49,7 @@ lane_main:
     # 3x in the bags. On two-lane parts the left boundary is the dashed divider.
     initial_side: 0            # 0 left lane, 1 right lane, 2 both
     # lane width, line centre to centre in metres: 0.5 m on our track (measured 2026-11-07). The rule
-    # book says 550 mm, so check it at the venue and change only this value. In the warped image it
+    # v3 book specifies 500 mm. In the warped image it
     # is lane_width_m x warp_px_per_m (per car, camera_*.yaml): 0.5 m = 170 px.
     lane_width_m: 0.5
     parking_lane_width_m: 0.68   # was 231 px (2025's 140 px scaled with the lane width), retune
