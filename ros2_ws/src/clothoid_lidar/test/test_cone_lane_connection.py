@@ -64,7 +64,7 @@ def test_map_translation_and_rotation_do_not_change_the_connection(yaw, origin):
 @pytest.mark.parametrize('spacing,width', [(.18, .5), (.3, .7), (.42, .9)])
 @pytest.mark.parametrize('direction', [-1, 1])
 def test_varied_cone_curves_and_spacings_share_the_same_exit_rule(radius, spacing, width, direction):
-    p = FollowerParams(lfd=.35, corner_endpoint_enabled=True)
+    p = FollowerParams(lfd=.35)
     theta = np.linspace(0., .9 / radius, max(4, round(.9 / spacing)))
     middle = np.column_stack((radius*np.sin(theta), direction*radius*(1.-np.cos(theta))))
     normals = np.column_stack((-direction*np.sin(theta), np.cos(theta)))

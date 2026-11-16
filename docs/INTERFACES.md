@@ -70,6 +70,39 @@ Steering: compute a steering angle δ (rad, positive = left) and send
 measured scale (inner wheel angle / 1.06, cut at 28°, value 0.46; official 2.47 turned half as much, see `FIELD_TEST.md` 4). With `linear.x = 0` the steering centres. Real wheel
 angles still need measuring, see Open points.
 
+## Cone main / safe-exit integration
+
+On `namgyu/cone-main-safe-exit`, normal cone classification, tracing, centre-line generation,
+arc-length lookahead and pursuit use main `bce61a0`. The configured normal speed/lookahead
+are 0.4 m/s and 0.4 m. Main's stale-boundary and one-boundary reverse behaviour is retained.
+The removed experimental corner, retained-corridor and path-relaxation algorithms do not run.
+
+Losing the continue zone enters EXIT while retaining `/cone/mission_active` and cone MUX
+priority. Main's observed paths are passively saved with the local IMU/wheel-speed pose.
+EXIT alone uses `cone_exit_pursuit`, with independent `exit_speed: 0.25` and `exit_lfd: 0.35`;
+normal speed/lookahead changes cannot alter these exit settings. Its rear-axle circle pursuit,
+observed-endpoint arrival, fresh-obstacle clearance and low-speed lane connection remain the
+parking-robustness implementation. Only fresh lane evidence and matching measured speed/turn
+response authorize `/cone/exit_complete`. Missing exit evidence holds a zero cone command.
+The existing lane recovery cap and gradual speed recovery remain unchanged.
+
+`/cone/exiting` requests lane readiness, `/lane/cone_exit_candidate` carries a newly detected,
+stamped `TwistStamped` in `base_link`, `/cone/connecting` resets lane boundary associations once,
+and `/lane/cone_exit_ready` supplies stable-target evidence. Completion releases the cone
+mission through its existing acknowledgement; no timer alone authorizes handover.
+All stopline-develop mission changes through `c1d8e09` are retained. Its known approach issue
+(intermittent false green can clear the light arm and its entry speed limit) is not fixed here.
+
+Verification used frozen main command fixtures and callback-only replays of limo2
+`1116_0738_full` and `1116_0816_full`: all 330 and 32 commands before their first EXIT
+respectively matched main exactly. The follower and trace source files also match main byte
+for byte. 737 package tests passed across lidar, lane, parking, mission, finish and bringup;
+the cone viewer replay smoke test and lidar package build passed.
+Recorded trajectories and lane candidates belong to the older controller. These replays
+remain in handover wait on some intervals and do not establish completion timing or successful
+physical clearance for the new controller. Closed-loop connection tests cover feedback and
+handover invariants; the combined controller still needs an on-car run.
+
 ## Open points
 - **Base driver:** bringup runs our copy of `limo_base` (`ros2_ws/src/limo_base`, changes in its `README.md`), which replaces the one in `~/wego_ws` once this workspace is sourced. It adds Ackermann `/odom`, a stop on silence and a NaN guard. The steering scale and limit are the official values (2.47, 28°), as launch arguments `steering_scale` and `max_inner_angle`.
   - **Steering scale to measure by driving:** at the official limit (body value 0.197) the inner wheel looked like about 15° on limo2 by eye with the car lifted. On 2026-11-03 the minimum turning circle measured with the RC transmitter, at the rear axle centre, was 82.5-83 cm in diameter (radius about 0.41 m), close to the official 0.46 m. The lane centre needs about 0.875 m (R600/R650 in the rules are the inner and outer lines, with centres about 0.7 m apart in the drawing), so there is plenty of margin. The RC bypasses `/cmd_vel` and `limo_base`, so this is the body's capability; the official values stay until a circle driven through `/cmd_vel` is measured. WeGo's unused `limo_ackerman_base` uses δ / 1.215, a candidate to try (tried once with the wheels in the air: straight distance within 2% of the body's wheel count, requests cut at 0.33).

@@ -212,11 +212,9 @@ class Viewer(QMainWindow):
         recorded='기록 명령 없음';ri=bisect.bisect_right(self.recorded_times,t)-1
         if ri>=0 and t-self.recorded_times[ri]<=.3:
             _,v,w=self.data['recorded'][ri];recorded=f'기록 /cmd_vel  v {v:+.2f} m/s · ω {w:+.2f} rad/s'
-        methods={'retained_boundary':'저장 경계 + 현재 경계', 'retained_path':'이동량 보정 저장 경로', 'width_offset':'평균 통로 폭으로 보완',
-                 'boundary_recovery':'경계 복구 후진', 'recovery_blocked':'후진 공간 미확인', 'recovery_limit':'후진 이동거리 상한',
-                 'no_boundary_path':'사용 가능한 경계 경로 없음', 'no_cones':'콘 검출 없음',
-                 'stale_pose':'차량 자세 갱신 끊김', 'stale_obstacles':'장애물 관측 갱신 끊김'}
-        methods.update(exit_path='콘 출구 저장 경로',exit_wait='차선 준비까지 정지')
+        methods={'observed':'main 중심 경로·호장 목표점', 'main_reverse':'main 한쪽 경계 후진',
+                 'exit_path':'콘 출구 저장 경로·후축 원 목표점', 'exit_wait':'탈출 관측 대기 정지',
+                 'lane_connection':'저속 차선 연결', 'lane_connection_wait':'차선 연결 입력·피드백 대기'}
         method=methods[c.source] if c is not None and c.source in methods else ('안쪽 콘–바깥 경계 중간점' if f['fan'] else '기존 중심 경로' if c is not None and not c.reverse else '전진 경로 없음')
         self.metrics.setText(f"재계산 방식  {method}   |   {recorded}   |   이 스캔 명령 {len(f['callback_results'])}회")
         ci=bisect.bisect_left(self.camera_times,t)

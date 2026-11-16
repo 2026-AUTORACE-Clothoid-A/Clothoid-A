@@ -12,7 +12,8 @@ def entry():
 def test_runtime_angles_and_exit_box_are_restored():
     config = yaml.safe_load((Path(__file__).parents[1]/'config/lidar.yaml').read_text())
     p = config['cone_sorter']['ros__parameters']
-    assert p['angle_from_left_first_cone'] == p['first_step_angle_deg'] == 45.
+    assert p['angle_from_left_first_cone'] == 45.
+    assert p['first_step_angle_deg'] == 90.  # main's normal tracer configuration
     assert p['ing_x_min'] == 0. and p['ing_x_max'] == 1.
     m = ConeMission(ConeSorter(SorterParams(**{k:v for k,v in p.items() if k in SorterParams.__dataclass_fields__})))
     m.update(entry(), 0.)

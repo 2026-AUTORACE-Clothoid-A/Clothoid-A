@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def analyse(path, progress=lambda value: None):
     # A reload always follows source edits, even when the viewer is already open.
-    from clothoid_lidar import cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_corridor, cone_exit, cone_recovery, cone_path_relaxation, cone_odometry, cone_lane_connection
-    for module in (cone_trace, cone_corner, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_sorter, cone_follower, obstacle_extractor, cone_odometry, cone_lane_connection):
+    from clothoid_lidar import cone_trace, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_exit_pursuit, cone_odometry, cone_lane_connection
+    for module in (cone_trace, cone_exit, cone_exit_pursuit, cone_sorter, cone_follower, obstacle_extractor, cone_odometry, cone_lane_connection):
         importlib.reload(module)
     config_path = ROOT/'ros2_ws/src/clothoid_lidar/config/lidar.yaml'
     config = yaml.safe_load(config_path.read_text())
@@ -32,6 +32,14 @@ def analyse(path, progress=lambda value: None):
     odometry = cone_odometry.ConeOdometry(fp.rear_axle_x, fp.boundary_timeout)
     pose_generation = odometry.generation
     follower_config = config['cone_follower']['ros__parameters']
+    xp = cone_exit_pursuit.ExitPursuitParams(speed=follower_config['exit_speed'],
+        lfd=follower_config['exit_lfd'], wheelbase=fp.wheelbase, rear_axle_x=fp.rear_axle_x,
+        centerline_ds=fp.centerline_ds, boundary_timeout=fp.boundary_timeout)
+
+    def result_value(*args, source='observed', **kwargs):
+        result = cone_follower.FollowResult(*args, **kwargs)
+        result.source = source  # display metadata, never an input to main's controller
+        return result
     connection = cone_lane_connection.LaneConnection(cone_lane_connection.ConnectionParams(**{
         k: follower_config['exit_connect_' + k]
         for k in cone_lane_connection.ConnectionParams.__dataclass_fields__}))
@@ -46,7 +54,7 @@ def analyse(path, progress=lambda value: None):
             if minimum is not None:start_stamps.append(minimum)
             topics = {i: (n, t) for i, n, t in db.execute('select id,name,type from topics')}
             wanted = {i: (n, t) for i, (n, t) in topics.items()
-                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', odom_topic, imu_topic, '/lane/cone_exit_ready', '/lane/cone_exit_candidate')
+                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', odom_topic, imu_topic, '/lane/cone_exit_ready', '/lane/cone_exit_candidate', '/avoid/active')
                       or (t in ('sensor_msgs/msg/CompressedImage', 'sensor_msgs/msg/Image')
                           and 'debug' not in n and 'depth' not in n and 'warp' not in n)}
             camera = sorted([(i, n, t) for i, (n, t) in wanted.items() if 'Image' in t],
@@ -75,6 +83,7 @@ def analyse(path, progress=lambda value: None):
     left = right = np.zeros((0, 2)); lt = rt = None; active = False
     pose = None; pose_time = None
     lane_ready = False; lane_ready_time = None
+    avoid_active = False; avoid_seen = avoid_last = None
     lane_candidate = None; lane_candidate_stamp = lane_candidate_time = None
     exit_reference_end = None
     previous_scan = start_scan = None
@@ -101,6 +110,9 @@ def analyse(path, progress=lambda value: None):
             recorded.append((t, msg.linear.x, msg.angular.z)); continue
         if name == '/cone/mission_active':
             flags.append((t, bool(msg.data))); continue
+        if name == '/avoid/active':
+            avoid_active, avoid_seen = bool(msg.data), t
+            continue
         if name == '/lane/cone_exit_ready':
             lane_ready, lane_ready_time = bool(msg.data), t
             continue
@@ -123,14 +135,14 @@ def analyse(path, progress=lambda value: None):
                     gyro = msg.angular_velocity.z if msg.angular_velocity_covariance[0] >= 0 else math.nan
                     odometry.imu(sensor_time, gyro)
             if pose_generation != odometry.generation:
-                follower.reset();exit_memory.clear();exit_reference_end = None
+                exit_memory.clear();exit_reference_end = None
                 connection.clear()
                 pose_generation = odometry.generation
                 events.append((t, 'IMU/속도 수신 중단: 저장 경로 초기화'))
             pose = odometry.pose(t)
             pose_time = odometry.stamp if pose is not None else None
             if pose is not None:
-                follower.corridor.update_pose(pose);exit_memory.update_pose(pose)
+                exit_memory.update_pose(pose)
             continue
         if ty != 'sensor_msgs/msg/LaserScan':
             continue
@@ -144,7 +156,15 @@ def analyse(path, progress=lambda value: None):
         valid = np.isfinite(ranges) & (ranges >= msg.range_min) & (ranges <= min(msg.range_max, 3.))
         scan = obstacle_extractor.transform_points(np.column_stack((ranges[valid]*np.cos(angles[valid]), ranges[valid]*np.sin(angles[valid]))), *transform)
         was_exiting = mission.exiting
-        result = mission.update(points, t)
+        held = False
+        if not mission.running:
+            gate = config['cone_sorter']['ros__parameters']
+            if avoid_active and avoid_seen is not None and t-avoid_seen <= gate.get('avoid_active_timeout', .5):
+                avoid_last = t
+                held = True
+            elif avoid_last is not None:
+                held = t-avoid_last < gate.get('avoid_release_hold', 2.)
+        result = mission.update(points, t, may_start=not held)
         if mission.exiting and not was_exiting:
             connection.clear()
             lane_ready = False; lane_ready_time = None
@@ -155,72 +175,62 @@ def analyse(path, progress=lambda value: None):
         command = None; callback_results = []
         def control():
             nonlocal exit_reference_end
-            lf, rf = cone_recovery.current_boundaries(lt, rt,
-                lt is not None and t-lt <= fp.boundary_timeout, rt is not None and t-rt <= fp.boundary_timeout)
-            confirmed = cone_recovery.recovery_confirmed(lt, rt, previous_scan, lf, rf)
-            started = start_scan is not None and previous_scan is not None and previous_scan > start_scan
-            current_pose = pose if pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout else None
-            value = follower.decide(left, right, lf, rf, current_pose, points,
-                                    config['cone_follower']['ros__parameters'].get('exit_clearance', .2),
-                                    allow_reverse=confirmed and started)
-            if value is not None and value.reverse:
-                remaining = fp.lfd-(follower.corridor.travelled-follower.reverse_start_travel)
-                if not cone_recovery.reverse_sweep_clear(msg.ranges,msg.angle_min,msg.angle_increment,
-                        msg.range_min,msg.range_max,transform,value.steering,fp.wheelbase,fp.rear_axle_x,remaining):
-                    value = cone_follower.FollowResult(0.,0.,source='recovery_blocked')
-            elif value is not None and value.source == 'no_boundary_path' and not confirmed and lt != rt:
+            if lt is None or rt is None:
                 return None
+            lf, rf = t-lt <= fp.boundary_timeout, t-rt <= fp.boundary_timeout
+            current_pose = pose if pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout else None
+            value = follower.decide(left, right, lf, rf)
             if value is not None:
-                if (value.source == 'observed' and not value.reverse and len(value.center)
-                        and current_pose is not None):
-                    if exit_memory.remember(value.center, current_pose, fp.lfd, fp.centerline_ds):
+                value.source = 'observed' if not value.reverse else 'main_reverse'
+                if not value.reverse and len(value.center) and current_pose is not None:
+                    if exit_memory.remember(value.center, current_pose, xp.lfd, xp.centerline_ds):
                         exit_reference_end = cone_exit.transform(value.center[-1:], current_pose)[0]
                 command_rows.append((t, value.speed, value.steering))
                 callback_results.append(value)
             return value
         if result is not None:
+            # Match main's two boundary callbacks, including a still-fresh older side.
             if len(result.left):
                 left, lt = result.left, t
+                if active:command = control()
             if len(result.right):
                 right, rt = result.right, t
-            # Evaluate one completed scan, not an artificial intermediate
-            # combination of its new left wall and the previous right wall.
-            if active:command = control()
+                if active:command = control()
         if active and mission.exiting:
-            fresh_pose = pose is not None and pose_time is not None and 0 <= t-pose_time <= fp.boundary_timeout
+            fresh_pose = pose is not None and pose_time is not None and 0 <= t-pose_time <= xp.boundary_timeout
             current_pose = pose if fresh_pose else None
-            arrived = current_pose is not None and exit_memory.handover_ready(current_pose, fp.rear_axle_x)
+            arrived = current_pose is not None and exit_memory.handover_ready(current_pose, xp.rear_axle_x)
             if connection.active or arrived:
                 candidate_fresh = (lane_candidate is not None
-                    and 0 <= t-lane_candidate_time <= fp.boundary_timeout
-                    and 0 <= t-lane_candidate_stamp <= fp.boundary_timeout)
-                command = cone_follower.FollowResult(0.,0.,source='lane_connection_wait')
+                    and 0 <= t-lane_candidate_time <= xp.boundary_timeout
+                    and 0 <= t-lane_candidate_stamp <= xp.boundary_timeout)
+                command = result_value(0.,0.,source='lane_connection_wait')
                 if current_pose is not None and candidate_fresh:
                     if not connection.active:
                         last = command_rows[-1] if command_rows else (t,0.,0.)
-                        connection.start(t,current_pose,last[2] if last[1]>0. else 0.,fp.wheelbase)
-                    ready = lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= fp.boundary_timeout
+                        connection.start(t,current_pose,last[2] if last[1]>0. else 0.,xp.wheelbase)
+                    ready = lane_ready and lane_ready_time is not None and 0 <= t-lane_ready_time <= xp.boundary_timeout
                     velocity, angle, done = connection.step(t,current_pose,lane_candidate.linear.x,
-                        lane_candidate.angular.z,fp.wheelbase,fp.speed,odometry.speed,
-                        odometry.gyro-odometry.bias,ready,fp.boundary_timeout)
-                    measured = math.atan(fp.wheelbase*(odometry.gyro-odometry.bias)/odometry.speed) if odometry.speed>.03 else 0.
-                    arcs = [cone_lane_connection.forward_arc(a,fp.wheelbase,fp.rear_axle_x,fp.lfd,fp.centerline_ds)
+                        lane_candidate.angular.z,xp.wheelbase,xp.speed,odometry.speed,
+                        odometry.gyro-odometry.bias,ready,xp.boundary_timeout)
+                    measured = math.atan(xp.wheelbase*(odometry.gyro-odometry.bias)/odometry.speed) if odometry.speed>.03 else 0.
+                    arcs = [cone_lane_connection.forward_arc(a,xp.wheelbase,xp.rear_axle_x,xp.lfd,xp.centerline_ds)
                             for a in (angle,measured)]
                     clear = all(cone_exit.clearance(arc,points)>=follower_config.get('exit_clearance',.2) for arc in arcs)
                     if velocity>0. and clear:
-                        command = cone_follower.FollowResult(velocity,angle,center=arcs[0],source='lane_connection')
+                        command = result_value(velocity,angle,center=arcs[0],source='lane_connection')
                         if done:mission.finish_exit()
                     else:connection.pause(t)
                 elif connection.active:connection.pause(t)
                 command_rows.append((t,command.speed,command.steering));callback_results.append(command)
             else:
-                center = exit_memory.remaining(pose, fp.rear_axle_x) if fresh_pose else np.zeros((0, 2))
-                target = cone_follower.look_ahead_point(center, fp)
+                center = exit_memory.remaining(pose, xp.rear_axle_x) if fresh_pose else np.zeros((0, 2))
+                target = cone_exit_pursuit.look_ahead_point(center, xp)
                 usable = (target is not None and target[0] > 0.
                           and cone_exit.clearance(center, points) >= config['cone_follower']['ros__parameters'].get('exit_clearance', .2))
-                command = (cone_follower.FollowResult(fp.speed, cone_follower.steering_from_target(target, fp),
+                command = (result_value(xp.speed, cone_exit_pursuit.steering_from_target(target, xp),
                            center=center, target=target, source='exit_path') if usable else
-                           cone_follower.FollowResult(0., 0., center=center, source='exit_wait'))
+                           result_value(0., 0., center=center, source='exit_wait'))
                 command_rows.append((t, command.speed, command.steering));callback_results.append(command)
         observed_end = (cone_exit.transform(exit_reference_end[None, :], pose, True)[0]
                         if mission.exiting and exit_reference_end is not None and pose is not None else None)
@@ -229,7 +239,6 @@ def analyse(path, progress=lambda value: None):
                            and 0 <= t-pose_time <= fp.boundary_timeout else None)
         command = callback_results[-1] if callback_results else None
         if active != mission.running:
-            follower.reset()
             connection.clear()
             exit_memory.clear();exit_reference_end = None
             if mission.running:start_scan = t
@@ -237,8 +246,7 @@ def analyse(path, progress=lambda value: None):
         active = mission.running
         if not active:
             left = right = np.zeros((0, 2)); lt = rt = None
-        lf, rf = cone_recovery.current_boundaries(lt,rt,
-            lt is not None and t-lt <= fp.boundary_timeout,rt is not None and t-rt <= fp.boundary_timeout)
+        lf, rf = lt is not None and t-lt <= fp.boundary_timeout, rt is not None and t-rt <= fp.boundary_timeout
         state = '콘 비활성' if not active else ('경계 수신 대기' if lt is None or rt is None else ('후진 명령' if command and command.reverse else
                 ('보완 경로 주행' if command and command.speed > 0 and command.source != 'observed' else
                  ('경계 손실' if not lf or not rf else ('전진 경로' if command is not None else '명령 없음')))))
@@ -252,9 +260,6 @@ def analyse(path, progress=lambda value: None):
             events.append((t, state))
         last_event = state
         fan = False
-        if command is not None and not command.reverse:
-            minimum_radius = fp.wheelbase/np.tan(np.deg2rad(28.))+.175/2
-            fan = cone_corner.endpoint_centerline(left, right, fp.centerline_ds, minimum_radius) is not None
         frames.append(dict(t=t, scan=scan, obstacles=points, active=active, state=state,
             left=left.copy() if lf else np.zeros((0,2)), right=right.copy() if rf else np.zeros((0,2)),
             stale_left=left.copy() if not lf else np.zeros((0,2)), stale_right=right.copy() if not rf else np.zeros((0,2)),
@@ -265,7 +270,7 @@ def analyse(path, progress=lambda value: None):
     if not frames:
         raise ValueError('라이다 스캔이 없습니다.')
     digest = hashlib.sha256()
-    for module in (cone_trace, cone_corner, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_corridor, cone_recovery, cone_path_relaxation, cone_odometry, cone_lane_connection):
+    for module in (cone_trace, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_exit_pursuit, cone_odometry, cone_lane_connection):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
     digest.update(config_path.read_bytes())

@@ -1,7 +1,6 @@
 """Centre line and pure pursuit for the rubber cone course (2025 `rubber_cone_node.cpp`).
 
-ROS-free. An optional observed-endpoint midpoint path handles asymmetric corners.
-Otherwise the 2025 pipeline uses Delaunay triangulation of both boundaries -> midpoints of
+ROS-free. Pipeline unchanged from 2025: Delaunay triangulation of both boundaries -> midpoints of
 edges that join a left and a right cone -> MST longest path to order them -> local cubic least
 squares smoothing -> cubic spline resampling -> pure pursuit on the look-ahead point.
 Steering is returned in rad, positive = left (the node converts it to a Twist).
@@ -14,9 +13,6 @@ from scipy.interpolate import CubicSpline
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import dijkstra, minimum_spanning_tree
 from scipy.spatial import Delaunay
-from clothoid_lidar.cone_path_relaxation import PathRelaxation
-from clothoid_lidar.cone_corner import endpoint_centerline
-from clothoid_lidar.cone_corridor import CorridorMemory, usable_path, width_samples
 
 try:
     from scipy.spatial import QhullError
@@ -27,7 +23,7 @@ except ImportError:  # scipy < 1.8 (older JetPack / apt images)
 @dataclass
 class FollowerParams:
     speed: float = 0.3            # m/s (2025 launch value, node default was 0.4)
-    reverse_speed: float = -0.2   # m/s, boundary recovery only; 0 disables recovery
+    reverse_speed: float = -0.2   # m/s, used when only one boundary is visible
     # deg, steering while backing off when only one boundary is visible (2025 `max_steer_deg`, 21).
     # Forward pure pursuit is not cut by this; the LIMO hardware limit is 28 deg inner wheel.
     reverse_steer_deg: float = 21.0
@@ -35,21 +31,14 @@ class FollowerParams:
     # base_link sits midway between the axles (URDF wheels at x = +-wheelbase/2).
     wheelbase: float = 0.2        # m, front to rear axle (steering gain of pure pursuit)
     rear_axle_x: float = 0.1      # m, rear axle behind base_link (origin of the look-ahead angle)
-    lfd: float = 0.3              # m, look-ahead circle radius from the rear axle
-    steering_gain: float = 1.0    # forward curvature multiplier; target/lfd stay unchanged
+    lfd: float = 0.3              # m, look-ahead distance
     centerline_ds: float = 0.05   # m, resampling step
     lsq_window_size: int = 9      # odd, >= 5
     # s, boundaries older than this are ignored. 2025 used 0.1, but the Tmini Plus scans at 10 Hz
     # and left/right arrive one after the other, so 0.1 would call the other side stale.
     boundary_timeout: float = 0.25
-    corner_endpoint_enabled: bool = True
-    path_relaxation_enabled: bool = False
 
     def __post_init__(self):
-        if not np.isfinite(self.lfd) or self.lfd <= 0.0:
-            raise ValueError('lfd must be finite and positive')
-        if not np.isfinite(self.steering_gain) or self.steering_gain <= 0.0:
-            raise ValueError('steering_gain must be finite and positive')
         self.lsq_window_size = max(5, self.lsq_window_size)
         if self.lsq_window_size % 2 == 0:
             self.lsq_window_size += 1
@@ -62,7 +51,6 @@ class FollowResult:
     reverse: bool = False
     center: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)), repr=False)
     target: Optional[np.ndarray] = field(default=None, repr=False)   # look-ahead point, base_link
-    source: str = 'observed'
 
 
 def _arc_length(points: np.ndarray) -> np.ndarray:
@@ -148,13 +136,6 @@ def build_center_line(left: np.ndarray, right: np.ndarray, params: FollowerParam
     if len(left) == 0 and len(right) == 0:
         return np.zeros((0, 2))
 
-    if params.corner_endpoint_enabled:
-        # LIMO driver limits the INNER wheel to 28 degrees, with 175 mm track.
-        min_radius = params.wheelbase / np.tan(np.deg2rad(28.)) + .175/2
-        corner = endpoint_centerline(left, right, params.centerline_ds, min_radius)
-        if corner is not None:
-            return corner
-
     points = np.vstack((left, right))
     label = np.r_[np.zeros(len(left), int), np.ones(len(right), int)]
 
@@ -187,165 +168,49 @@ def _pairwise_center(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     return left if len(left) else right
 
 
-def retained_center_line(left, right, params):
-    # A stored wall behind the car must not be joined diagonally to a newly
-    # observed straight wall ahead. Require overlap or an observed corner arc.
-    if width_samples(left, right):
-        return build_center_line(left, right, params)
-    radius = params.wheelbase/np.tan(np.deg2rad(28.))+.175/2
-    corner = endpoint_centerline(left, right, params.centerline_ds, radius)
-    return corner if corner is not None else np.zeros((0, 2))
-
-
 def look_ahead_point(center: np.ndarray, params: FollowerParams) -> Optional[np.ndarray]:
-    """First forward outward crossing of the rear-axle lookahead circle.
-
-    Start at the closest projection onto the ordered path and interpolate the
-    crossing inside a segment. A short remaining path uses its endpoint. If the
-    path lies outside the circle, retain its nearest forward point instead of
-    treating the missing intersection as missing boundary geometry.
-    """
-    points = np.asarray(center, dtype=float)
-    if (points.ndim != 2 or points.shape[1] != 2 or len(points) < 2
-            or not np.isfinite(points).all() or not np.isfinite(params.rear_axle_x)):
+    """The centre line point `lfd` along from the closest one, or its end if the line is shorter."""
+    n = len(center)
+    if n == 0:
         return None
-    # Duplicate vertices are not a path segment (two isolated cone seeds can
-    # produce a single midpoint, which must still use the existing recovery).
-    points = points[np.r_[True, np.sum(np.diff(points, axis=0)**2, axis=1) > 1e-12]]
-    if len(points) < 2:
-        return None
-    rear = np.array([-params.rear_axle_x, 0.])
-    steps = np.diff(points, axis=0)
-    lengths_squared = np.sum(steps*steps, axis=1)
-    fractions = np.clip(np.sum((rear-points[:-1])*steps, axis=1)/lengths_squared, 0., 1.)
-    projections = points[:-1]+fractions[:, None]*steps
-    closest = int(np.argmin(np.sum((projections-rear)**2, axis=1)))
-    remaining = np.vstack((projections[closest], points[closest+1:]))
-    if np.sum(np.diff(remaining, axis=0)**2) <= 1e-12:
-        return None  # the ordered path has already ended
+    closest = int(np.argmin(np.sum(center ** 2, axis=1)))
 
-    radius_squared = params.lfd**2
-    for start, end in zip(remaining, remaining[1:]):
-        step, local = end-start, start-rear
-        length_squared = float(step@step)
-        if length_squared <= 1e-12:
-            continue
-        projection = -float(local@step)/length_squared
-        perpendicular_squared = max(0., float(local@local)-projection**2*length_squared)
-        gap = radius_squared-perpendicular_squared
-        if gap < -1e-12:
-            continue
-        # The positive root is the outward crossing, following path order.
-        fraction = projection+np.sqrt(max(0., gap)/length_squared)
-        if -1e-9 <= fraction <= 1.+1e-9:
-            target = start+np.clip(fraction, 0., 1.)*step
-            if target[0] > 0.:
-                return target
-
-    distances_squared = np.sum((remaining-rear)**2, axis=1)
-    if np.all(distances_squared <= radius_squared+1e-12):
-        return remaining[-1].copy() if remaining[-1, 0] > 0. else None
-    forward = np.flatnonzero(remaining[:, 0] > 0.)
-    if not len(forward):
-        return None
-    return remaining[forward[np.argmin(distances_squared[forward])]].copy()
+    acc = 0.0
+    for i in range(closest + 1, n):
+        acc += float(np.linalg.norm(center[i] - center[i - 1]))
+        if acc >= params.lfd:
+            return center[i]
+    return center[-1] if n > closest + 1 else None
 
 
 def compute_steering(center: np.ndarray, params: FollowerParams) -> float:
-    """Pure pursuit using the target's actual distance from the rear axle.
-
-    The circle normally sets the target distance to lfd. Short-path and
-    outside-circle fallbacks still use their actual rear-axle distance.
-    tan(delta) = wheelbase * gain * 2*y/(x*x+y*y), in rear-axle coordinates.
-    """
-    return steering_from_target(look_ahead_point(center, params), params)
-
-
-def steering_from_target(target: Optional[np.ndarray], params: FollowerParams) -> float:
-    """Use the already selected pursuit target for the command and its visualisation."""
+    """Pure pursuit steering (rad, + left) towards the look-ahead point of the centre line."""
+    target = look_ahead_point(center, params)
     if target is None:
         return 0.0
-    x, y = float(target[0]) + params.rear_axle_x, float(target[1])
-    distance_squared = x*x + y*y
-    if not np.isfinite(distance_squared) or distance_squared <= 1e-12:
-        return 0.0
-    return float(np.arctan2(2.0 * params.wheelbase * params.steering_gain * y, distance_squared))
+    theta = np.arctan2(target[1], target[0] + params.rear_axle_x)
+    return float(np.arctan2(2.0 * params.wheelbase * np.sin(theta), params.lfd))
 
 
 class ConeFollower:
     def __init__(self, params: FollowerParams):
         self.p = params
-        self.corridor = CorridorMemory()
-        self.path_relaxation = PathRelaxation()
-        self.last_forward_steering = None
-        self.reverse_start_travel = None
-
-    def reset(self):
-        self.corridor.clear()
-        self.path_relaxation.clear()
-        self.last_forward_steering = None
-        self.reverse_start_travel = None
-
-    def _forward(self, center, target, source='observed'):
-        self.last_forward_steering = steering_from_target(target, self.p)
-        self.reverse_start_travel = None
-        return FollowResult(self.p.speed, self.last_forward_steering, center=center,
-                            target=target, source=source)
-
-    def _recover(self, left, right, pose, obstacles, allow_reverse):
-        p = self.p
-        if obstacles is None:
-            return FollowResult(0., 0., source='stale_obstacles')
-        if not len(obstacles):
-            return FollowResult(0., 0., source='no_cones')
-        if pose is None:
-            return FollowResult(0., 0., source='stale_pose')
-        if not allow_reverse or p.reverse_speed >= 0.:
-            return FollowResult(0., 0., source='no_boundary_path')
-        self.corridor.update_pose(pose)
-        if self.reverse_start_travel is None:
-            self.reverse_start_travel = self.corridor.travelled
-        if self.corridor.travelled-self.reverse_start_travel >= p.lfd:
-            return FollowResult(0., 0., source='recovery_limit')
-        lock = np.deg2rad(p.reverse_steer_deg)
-        steering = self.last_forward_steering
-        if steering is None:
-            steering = lock if len(left) and not len(right) else -lock if len(right) and not len(left) else 0.
-        # Same steering and negative velocity retrace the most recent turn.
-        return FollowResult(p.reverse_speed, float(np.clip(steering, -lock, lock)),
-                            reverse=True, source='boundary_recovery')
 
     def decide(self, left: np.ndarray, right: np.ndarray,
-               left_fresh: bool, right_fresh: bool, pose=None, obstacles=None,
-               min_clearance: float = .2, allow_reverse: bool = False) -> Optional[FollowResult]:
+               left_fresh: bool, right_fresh: bool) -> Optional[FollowResult]:
         """None means "publish nothing" (no fresh boundary, or no centre line)."""
         p = self.p
-        visible_left = left if left_fresh else np.zeros((0, 2))
-        visible_right = right if right_fresh else np.zeros((0, 2))
-        center = np.zeros((0, 2))
-        if left_fresh and right_fresh and len(left) and len(right):
-            center = build_center_line(left, right, p)
-            if p.path_relaxation_enabled:
-                center = self.path_relaxation.refine(center, left, right, obstacles, pose, p.centerline_ds)
-            else:
-                self.path_relaxation.clear()
-            target = look_ahead_point(center, p)
-            if target is not None and np.isfinite(target).all() and target[0] > 0.:
-                if usable_path(center, obstacles, min_clearance, target):
-                    self.corridor.observe(left, right, center, pose, p.lfd)
-                return self._forward(center, target)
-        self.path_relaxation.clear()
-        # An empty/one-point centre is not a steerable path, even if both
-        # boundary messages are fresh. Try retained/width paths before recovery.
-        if pose is not None:
-            for center, source in self.corridor.candidates(
-                    visible_left, visible_right, pose, p.centerline_ds,
-                    lambda a, b: retained_center_line(a, b, p)):
-                if len(center) < 2:
-                    continue
-                closest = int(np.argmin(np.linalg.norm(center, axis=1)))
-                center = center[closest:]
-                target = look_ahead_point(center, p)
-                if usable_path(center, obstacles, min_clearance, target):
-                    return self._forward(center, target, source)
-        return self._recover(visible_left, visible_right, pose, obstacles, allow_reverse)
+        reverse_steer = np.deg2rad(p.reverse_steer_deg)
+        if not left_fresh and not right_fresh:
+            return None
+        # one boundary only: back off with full lock away from the visible side (2025)
+        if not left_fresh:
+            return FollowResult(p.reverse_speed, -reverse_steer, reverse=True)
+        if not right_fresh:
+            return FollowResult(p.reverse_speed, +reverse_steer, reverse=True)
+
+        center = build_center_line(left, right, p)
+        if len(center) == 0:
+            return None
+        return FollowResult(p.speed, compute_steering(center, p), center=center,
+                            target=look_ahead_point(center, p))

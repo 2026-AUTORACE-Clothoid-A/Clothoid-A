@@ -53,7 +53,6 @@ def rig(monkeypatch):
 def seed_path(node):
     path = np.array([[0., 0.], [.5, 0.], [1., 0.]])
     assert node.exit_memory.remember(path, node.pose, .35, .05)
-    node.follower.corridor.observe(path+[0., .4], path-[0., .4], path, node.pose, .35)
     return node.exit_memory.world.copy()
 
 
@@ -66,7 +65,6 @@ def test_callbacks_ignore_feedback_pose_and_use_gyro_with_rear_axle_geometry(rig
     expected = (radius*math.sin(angle)+.1*(math.cos(angle)-1),
                 radius*(1-math.cos(angle))+.1*math.sin(angle), angle)
     np.testing.assert_allclose(node.pose, expected, atol=1e-10)
-    np.testing.assert_allclose(node.follower.corridor.last_pose, node.pose)
     diagnostic = node.pose_pub.publish.call_args.args[0]
     assert diagnostic.header.frame_id == 'cone_odom'
     assert diagnostic.child_frame_id == 'base_link'
@@ -82,10 +80,10 @@ def test_all_retained_geometry_and_control_use_same_local_pose(rig):
         feed(i*.01)
     np.testing.assert_array_equal(node.exit_memory.world, saved)
     np.testing.assert_allclose(node.exit_memory.last_pose, node.pose[:2])
-    np.testing.assert_allclose(node.follower.corridor.last_pose, node.pose)
     node.follower.decide = Mock(return_value=FollowResult(0., 0.))
+    node.left_time = node.right_time = node.get_clock().now()
     node.control()
-    assert node.follower.decide.call_args.args[4] == node.pose
+    assert len(node.follower.decide.call_args.args) == 4  # main pursuit does not use exit pose
 
 
 def test_missing_imu_cannot_complete_exit_even_when_lane_is_ready(rig):
@@ -101,14 +99,13 @@ def test_missing_imu_cannot_complete_exit_even_when_lane_is_ready(rig):
 
 
 @pytest.mark.parametrize('missing', ['gyro', 'speed'])
-def test_sensor_gap_clears_both_memories_before_using_new_frame(rig, missing):
+def test_sensor_gap_clears_exit_memory_before_using_new_frame(rig, missing):
     node, _, feed = rig
     feed(0.)
     seed_path(node)
     for i in range(1, 40):
         feed(i*.01, **{missing: None})
     assert node.exit_memory.world is None
-    assert node.follower.corridor.path is None
     assert node.pose is None
     feed(.4, speed=0., gyro=0.)
     np.testing.assert_allclose(node.pose, (0., 0., 0.))
@@ -131,5 +128,5 @@ def test_rear_offset_change_invalidates_geometry_saved_in_old_frame(rig):
     result = node.set_parameters([Parameter('rear_axle_x', value=.12)])[0]
     assert result.successful
     assert node.pose is None
-    assert node.exit_memory.world is None and node.follower.corridor.path is None
+    assert node.exit_memory.world is None
     assert node.odometry.rear_offset == .12

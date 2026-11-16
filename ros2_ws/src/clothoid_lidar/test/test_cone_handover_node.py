@@ -48,7 +48,7 @@ def tick(node, seconds):
 def test_front_arrival_keeps_following_and_rear_arrival_starts_connection(node):
     node.exit_control()  # front at .8, rear at .6, saved endpoint at .8
     node.exit_done_pub.publish.assert_not_called()
-    assert node.cmd_pub.publish.call_args.args[0].linear.x==node.follower.p.speed
+    assert node.cmd_pub.publish.call_args.args[0].linear.x==node.exit_params.speed
     node.pose=(.89,0.,0.)
     node.exit_control()
     node.exit_done_pub.publish.assert_not_called()

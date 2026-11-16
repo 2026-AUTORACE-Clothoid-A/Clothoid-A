@@ -1,5 +1,11 @@
 전용 콘 시각화 창 (Qt, Docker)
 
+cone-main-safe-exit 브랜치에서는 콘 내부 분류·주행을 main 방식으로 재계산합니다.
+내부 주행은 speed 0.4 / 호장 lookahead 0.4, 탈출은 exit_speed 0.25 / 후축 원 반경 0.35로
+분리됩니다. 코너 보완·경계 기억·경로 완화 실험은 내부 주행에 적용하지 않습니다.
+정지선/신호등 코드는 stopline-develop을 유지하며, 초록 오검출로 접근 제한이 풀리는
+기존 문제는 이번 콘 통합에서 수정하지 않았습니다.
+
 호스트 저장소에서 실행
   python3 tools/cone_viewer/launch.py
   python3 tools/cone_viewer/launch.py bag/cone_latest4_review/bag_1114_050802

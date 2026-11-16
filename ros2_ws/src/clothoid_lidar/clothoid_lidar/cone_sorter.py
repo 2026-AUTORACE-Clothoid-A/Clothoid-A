@@ -10,7 +10,6 @@ All points are in base_link (x forward, y left).
 """
 from dataclasses import dataclass, field
 from typing import List, Optional
-import time
 
 import numpy as np
 
@@ -59,9 +58,9 @@ class SorterParams:
     w_residual_dist_cost: float = 200.0
     w_num_cones_cost: float = 5000.0
     w_initial_dir_cost: float = 1000.0
+    w_change_dir_cost: float = 2000.0
     w_wrong_dir_cost: float = 1000.0
     max_search_nodes: int = 3000          # bounds the time of one search, not in 2025
-    boundary_timeout: float = 0.25       # discard association after a scan gap, seconds
 
 
 @dataclass
@@ -142,41 +141,10 @@ class ConeSorter:
             chain.append(best)
         return chain
 
-    def _tracked_seed(self, cones, previous, opposite):
-        """Associate only current observations, within half a boundary cone gap.
-
-        No old point is published or extrapolated. Ambiguous opposite-side matches
-        are discarded; entry gates remain the fallback for reacquisition.
-        """
-        if not len(cones) or not len(previous):
-            return None
-        distance = np.linalg.norm(cones[:, None]-previous[None, :], axis=2).min(axis=1)
-        valid = distance < self.p.max_dist_between_cones/2
-        if len(opposite):
-            other = np.linalg.norm(cones[:, None]-opposite[None, :], axis=2).min(axis=1)
-            valid &= distance < other
-        candidates = np.flatnonzero(valid)
-        if not len(candidates):
-            return None
-        return int(candidates[np.argmin(np.linalg.norm(cones[candidates], axis=1))])
-
-    def sort(self, cones: np.ndarray, previous: Optional[SortResult] = None) -> SortResult:
+    def sort(self, cones: np.ndarray) -> SortResult:
         cones = np.asarray(cones, float).reshape(-1, 2)
         first_left = self.select_first_cone(cones, LEFT)
         first_right = self.select_first_cone(cones, RIGHT)
-        if previous is not None:
-            tracked_left = self._tracked_seed(cones, previous.left, previous.right)
-            tracked_right = self._tracked_seed(cones, previous.right, previous.left)
-            if tracked_left is not None:
-                first_left = tracked_left
-            if tracked_right is not None:
-                first_right = tracked_right
-            # A strict reacquisition must not steal the other tracked boundary.
-            if first_left is not None and first_left == first_right:
-                if tracked_left is not None:
-                    first_right = None
-                else:
-                    first_left = None
         if first_left is None and first_right is None:
             return SortResult()
 
@@ -203,54 +171,35 @@ class ConeSorter:
 
 class ConeMission:
     """IDLE -> RUNNING when the start zone is full and both first cones exist;
-    With hold_exit, sparse cones enter EXIT until the lane handover is acknowledged.
-    may_start False holds the start while static_avoid runs: LIMOs side by side
-    can otherwise look like a cone course.
-    """
+    back to IDLE when the continue zone empties. may_start False holds the start (static_avoid
+    running: LIMOs side by side look like a cone course, 1114_0028 aborted the avoidance)."""
 
     def __init__(self, sorter: ConeSorter, hold_exit: bool = False):
         self.sorter = sorter
         self.hold_exit = hold_exit
-        self.exiting = False
         self.running = False
-        self.previous = None
-        self.last_stamp = None
-        self.previous_stamp = None
+        self.exiting = False
 
-    def update(self, cones: np.ndarray, stamp: Optional[float] = None,
-               may_start: bool = True) -> Optional[SortResult]:
+    def update(self, cones: np.ndarray, stamp=None, may_start: bool = True) -> Optional[SortResult]:
         """Returns the sorted boundaries while the course is running, else None."""
         cones = np.asarray(cones, float).reshape(-1, 2)
-        stamp = time.monotonic() if stamp is None else stamp
-        if self.last_stamp is not None and not 0 <= stamp-self.last_stamp <= self.sorter.p.boundary_timeout:
-            self.previous = None
-        self.last_stamp = stamp
-        if self.previous_stamp is not None and not 0 <= stamp-self.previous_stamp <= self.sorter.p.boundary_timeout:
-            self.previous = None
         if not self.running:
             if (may_start and self.sorter.start_zone_ok(cones)
                     and self.sorter.select_first_cone(cones, LEFT) is not None
                     and self.sorter.select_first_cone(cones, RIGHT) is not None):
                 self.running = True
-                self.previous = self.sorter.sort(cones)
-                self.previous_stamp = stamp
             return None
         if not self.sorter.continue_zone_ok(cones):
             if self.hold_exit:
                 self.exiting = True
                 return None
             self.running = False
-            self.previous = None
             return None
         self.exiting = False
-        result = self.sorter.sort(cones, self.previous)
-        self.previous = result
-        self.previous_stamp = stamp
-        return result
+        return self.sorter.sort(cones)
 
     def finish_exit(self):
         if not self.exiting:
             return False
         self.running = self.exiting = False
-        self.previous = None
         return True

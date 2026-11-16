@@ -167,12 +167,13 @@ def test_left_curve_steers_left_and_right_curve_steers_right():
 
 
 def test_pure_pursuit_uses_rear_axle_offset_and_wheelbase_separately():
-    # On y=.5*x, solve the rear-axle circle intersection analytically.
+    # straight diagonal line; the look-ahead (0.3 m of path) lands on (0.3, 0.15)
     center = np.array([[0.1 * i, 0.05 * i] for i in range(8)])
+    target = np.array([0.3, 0.15])
 
-    def expected(rear_axle_x, wheelbase):
-        x = (-rear_axle_x+np.sqrt(1.25*.3**2-.25*rear_axle_x**2))/1.25
-        return np.arctan2(wheelbase*x, .3**2)
+    def expected(rear_axle_x, wheelbase, lfd=0.3):
+        theta = np.arctan2(target[1], target[0] + rear_axle_x)
+        return np.arctan2(2.0 * wheelbase * np.sin(theta), lfd)
 
     base = FollowerParams(rear_axle_x=0.1, wheelbase=0.2)
     assert compute_steering(center, base) == pytest.approx(expected(0.1, 0.2))
@@ -193,21 +194,19 @@ def test_decide_drives_when_both_boundaries_are_fresh():
     assert len(result.center) > 0
 
 
-def test_decide_reverses_only_after_explicit_boundary_recovery_confirmation():
+def test_decide_reverses_with_full_lock_when_one_boundary_is_missing():
     left, right = gate([0.3, 0.65, 1.0])
     follower = ConeFollower(FollowerParams(reverse_speed=-0.2, reverse_steer_deg=21.0))
-    only_right = follower.decide(left, right, False, True, (0.,0.,0.), right, allow_reverse=True)
-    follower.reset()
-    only_left = follower.decide(left, right, True, False, (0.,0.,0.), left, allow_reverse=True)
+    only_right = follower.decide(left, right, False, True)
+    only_left = follower.decide(left, right, True, False)
     assert only_right.reverse and only_right.speed == -0.2
     assert only_right.steering == pytest.approx(-np.deg2rad(21.0))
     assert only_left.steering == pytest.approx(np.deg2rad(21.0))
 
 
-def test_decide_stops_when_all_boundaries_are_stale_and_no_recovery_is_confirmed():
+def test_decide_publishes_nothing_when_all_boundaries_are_stale():
     left, right = gate([0.3, 0.65, 1.0])
-    result = ConeFollower(FollowerParams()).decide(left, right, False, False)
-    assert result.speed == 0. and not result.reverse
+    assert ConeFollower(FollowerParams()).decide(left, right, False, False) is None
 
 
 def test_collinear_cones_do_not_crash():
@@ -234,7 +233,7 @@ def test_first_step_limit_is_separate_from_the_segment_limit():
 def test_look_ahead_point_matches_the_steering_target():
     params = FollowerParams(lfd=0.3)
     center = np.column_stack((np.arange(0.0, 1.0, 0.05), np.zeros(20)))
-    assert look_ahead_point(center, params)[0] == pytest.approx(0.2)
+    assert look_ahead_point(center, params)[0] == pytest.approx(0.3)
     assert look_ahead_point(np.zeros((0, 2)), params) is None
 
 
