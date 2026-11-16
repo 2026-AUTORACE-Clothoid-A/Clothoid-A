@@ -66,6 +66,7 @@ class Line:
     bottom_x: float = 0.0
     # every sliding window tried, (x_lo, y_top, x_hi, y_bottom, had pixels), for the debug image
     windows: list = field(default_factory=list, repr=False)
+    wide_windows: int = 0
 
     def straighten(self) -> None:
         """Replace the fit by a straight line (the centre line of a zigzag)."""
@@ -147,6 +148,7 @@ class LaneTracker:
         win_h = h // p.nwindows
         x, dx = float(seed), 0.0
         points, windows = [], []
+        wide_windows = 0
         for k in range(p.nwindows):
             y1, y0 = h - k * win_h, h - (k + 1) * win_h
             lo, hi = int(round(x - p.margin)), int(round(x + p.margin))
@@ -155,6 +157,7 @@ class LaneTracker:
             ys, xs = np.nonzero(mask[y0:y1, max(lo, 0):min(hi, w)])
             windows.append((lo, y0, hi, y1, len(xs) > p.min_pixels))
             if len(xs) > p.min_pixels:
+                wide_windows += len(xs) > self.t.white_max_width * (y1-y0)
                 new_x = float(xs.mean()) + max(lo, 0)
                 if points:
                     dx = new_x - points[-1][0]
@@ -170,6 +173,7 @@ class LaneTracker:
         degree = 2 if len(pts) >= 6 else 1
         coeff = np.polyfit(pts[:, 1], pts[:, 0], degree)
         line = Line(pts, coeff, color, zigzag=self._is_zigzag(pts, coeff), windows=windows)
+        line.wide_windows = wide_windows
         line.bottom_x = line.x_at(h - 1)
         return line
 
@@ -369,6 +373,19 @@ class LaneTracker:
                     break
         found = target is not None
         tx, ty = target if found else (w / 2.0, h / 2.0)
+        refs = ([left, right] if reference == 'both' else [left] if reference == 'left' else
+                [right] if reference == 'right' else [])
+        win_h = h // p.nwindows
+        # A few disconnected windows may still produce found=True and an extrapolated
+        # target. Wide yellow tiles can also produce a complete false boundary.
+        # Only the existing bump-gap path uses this quality flag.
+        bump_usable = bool(refs) and all(
+            len(line.points) >= 8 and
+            np.min(np.abs(line.points[:, 1]-self.t.look_row)) <= win_h and
+            (line.color != YELLOW or line.wide_windows < 2)
+            for line in refs)
+        boundary_slope = (float(np.mean([line.slope_at(float(self.t.look_row)) for line in refs]))
+                          if refs else None)
 
         canvas = None
         if debug:
@@ -379,7 +396,8 @@ class LaneTracker:
 
         return LaneResult(found=found, target_x=float(tx), target_y=float(ty), debug_image=canvas,
                           left_points=as_points(left), right_points=as_points(right),
-                          zigzag=zigzag_zone, reference=reference)
+                          zigzag=zigzag_zone, reference=reference, bump_usable=bump_usable,
+                          boundary_slope=boundary_slope)
 
     # --- debug image ------------------------------------------------------------
     LEFT_COLOUR, RIGHT_COLOUR = (255, 80, 0), (0, 0, 255)       # BGR: blue, red
