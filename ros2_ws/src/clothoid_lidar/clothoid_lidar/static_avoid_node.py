@@ -312,7 +312,8 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         line = find_entry_line(bgr, self.cam, self.white)
         crossing = self.entry.update(t_img, self.tracker.distance_at(t_img), line)
         if crossing is not None:
-            self.get_logger().info(f'white line: crossed at odometer {crossing.odometer:.2f} m')
+            # the start-line check below logs every crossing with its verdict (one line per line)
+            self.get_logger().debug(f'white line: crossed at odometer {crossing.odometer:.2f} m')
         if self.course is not None:
             self.course.frozen = self.avoid.state == ACTIVE      # no heading snaps while avoiding
             for odo, deg in self.course.snaps[self.snaps_logged:]:
