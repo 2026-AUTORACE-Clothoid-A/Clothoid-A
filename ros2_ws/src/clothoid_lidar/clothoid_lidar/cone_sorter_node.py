@@ -6,6 +6,10 @@ In:  obstacles (PoseArray, base_link), /avoid/active (Bool, static_avoid): no co
      avoid_release_hold s after it ends (an end among the LIMOs started it at once, 11-09 bags). A
      running course goes on; without the topic (no static_avoid, or older than avoid_active_timeout)
      it starts as before.
+     /parking_flag (Bool, mission): no course START while it is true (fresher than
+     parking_hold_timeout). The bays' cones passed the start test in every finished run on 2026-11-16;
+     parking / finish (mux 110) only masked the cone command (90). With single_course, no START
+     either after a course ended by the lane handover.
 Out: left / right boundary (nav_msgs/Path) while the course runs, and a Bool "course active".
 """
 import numpy as np
@@ -62,6 +66,9 @@ class ConeSorterNode(QuietEventsMixin, Node):
         self.declare_parameter('avoid_active_topic', '/avoid/active')
         self.declare_parameter('avoid_active_timeout', 0.5)   # s, an older /avoid/active is ignored
         self.declare_parameter('avoid_release_hold', 2.0)     # s after static_avoid ends
+        self.declare_parameter('parking_topic', '/parking_flag')
+        self.declare_parameter('parking_hold_timeout', 2.0)   # s; mission re-sends the flag every 1 s
+        self.declare_parameter('single_course', True)         # no START after a handover END
 
         defaults = SorterParams()
         for name, _ in _FIELDS:
@@ -78,9 +85,14 @@ class ConeSorterNode(QuietEventsMixin, Node):
         self.create_subscription(
             PoseArray, self.get_parameter('obstacles_topic').value, self.on_obstacles, 1)
         self.avoid_active, self.avoid_seen, self.avoid_last = False, None, None
-        self.held = False
+        self.held = None
+        self.parking, self.parking_seen = False, None
+        self.completed = False
+        self.exit_logged = False
         self.create_subscription(
             Bool, self.get_parameter('avoid_active_topic').value, self.on_avoid_active, 1)
+        self.create_subscription(
+            Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
 
         self.exit_pub = self.create_publisher(Bool, '/cone/exiting', 1)
         self.create_subscription(Bool, '/cone/exit_complete', self.on_exit_complete, 1)
@@ -103,8 +115,27 @@ class ConeSorterNode(QuietEventsMixin, Node):
     def on_exit_complete(self, msg: Bool):
         if msg.data and self.mission.finish_exit():
             self.get_logger().info('cone course END: lane handover confirmed')
+            self.completed = True
             self.exit_pub.publish(Bool(data=False))
             self.active_pub.publish(Bool(data=False))
+
+    def on_parking(self, msg: Bool):
+        self.parking, self.parking_seen = msg.data, self.get_clock().now()
+
+    def parking_holds(self) -> bool:
+        return self.parking and self.parking_seen is not None and (
+            self.get_clock().now() - self.parking_seen).nanoseconds * 1e-9 \
+            <= self.get_parameter('parking_hold_timeout').value
+
+    def hold_reason(self):
+        """Why a new course may not start now (None: it may)."""
+        if self.avoid_holds():
+            return 'static obstacle mission running or just ended'
+        if self.parking_holds():
+            return 'parking'
+        if self.completed and self.get_parameter('single_course').value:
+            return 'course already done'
+        return None
 
     def on_avoid_active(self, msg: Bool):
         self.avoid_active, self.avoid_seen = msg.data, self.get_clock().now()
@@ -123,19 +154,24 @@ class ConeSorterNode(QuietEventsMixin, Node):
         cones = np.array([[p.position.x, p.position.y] for p in msg.poses]).reshape(-1, 2)
         was_running = self.mission.running
         was_exiting = self.mission.exiting
-        held = not was_running and self.avoid_holds()
-        if held != self.held:
+        held = None if was_running else self.hold_reason()
+        if held != self.held and not was_running:
+            if held is not None or self.held is not None:
+                self.get_logger().info(f'cone course start held: {held}' if held else
+                                       'cone course start allowed')
             self.held = held
-            self.get_logger().info('cone course start held: static obstacle mission running or just ended'
-                                   if held else 'cone course start allowed')
         result = self.mission.update(cones, self.get_clock().now().nanoseconds * 1e-9,
-                                     may_start=not held)
+                                     may_start=held is None)
         if self.mission.running != was_running:
             self.get_logger().info(
                 'cone course START' if self.mission.running else 'cone course END')
+            self.exit_logged = False
 
-        if self.mission.exiting and not was_exiting:
+        # ConeMission.update can flip exiting back while cones come and go at the course end: log
+        # the first exit of a course only
+        if self.mission.exiting and not was_exiting and not self.exit_logged:
             self.get_logger().info('cone course EXIT: retaining observed path until lane ready')
+            self.exit_logged = True
         self.exit_pub.publish(Bool(data=self.mission.exiting))
         if result is not None:
             header = msg.header

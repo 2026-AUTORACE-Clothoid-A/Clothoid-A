@@ -138,3 +138,13 @@ def test_any_x_still_needs_the_same_row_and_size():
     assert not step(gate, 0.0, [box('sign_left', (100, 230, 120, 251), .9)])
     assert not step(gate, 0.1, [box('sign_left', (500, 330, 520, 351), .9)])   # 100 px lower
     assert not step(gate, 0.2, [box('sign_left', (500, 200, 560, 290), .9)])   # 4x taller
+
+
+def test_sign_log_key_drops_the_numbers_and_slows_far_sign_repeats():
+    from clothoid_mission.mission_node import sign_log_key
+    assert sign_log_key('IGNORED: invalid width or h 10 < 14') == sign_log_key('IGNORED: invalid width or h 9 < 14')
+    assert sign_log_key('IGNORED: conf 0.58 < 0.60') == ('conf', 1.)
+    assert sign_log_key('IGNORED: size') == ('size', 5.)
+    assert sign_log_key('IGNORED: offset') == ('offset', 5.)
+    assert sign_log_key('ARMED') == ('ARMED', 1.)
+    assert sign_log_key('IGNORED: association/overlap')[0] == 'association/overlap'

@@ -227,6 +227,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.send(0.0, 0.0)
+        if rclpy.ok():           # after Ctrl+C the context is gone and publish raises RCLError
+            node.send(0.0, 0.0)
         node.destroy_node()
         rclpy.try_shutdown()
