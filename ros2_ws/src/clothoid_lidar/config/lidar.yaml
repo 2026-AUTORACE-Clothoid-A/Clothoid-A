@@ -57,7 +57,7 @@ cone_follower:
     odom_topic: /odom_25hz
     imu_topic: /imu_25hz
     pose_topic: /cone/odom   # diagnostic local base_link pose; no global TF is replaced
-    speed: 0.4                # normal course: unchanged main value and pursuit law
+    speed: 0.25               # normal course speed; main pursuit law retained
     reverse_speed: -0.2       # normal course: main's one-boundary reverse behaviour
     reverse_steer_deg: 21.0  # steering while backing off with one boundary only (2025 max_steer_deg)
     wheelbase: 0.2           # LIMO URDF / driver; 2025's single vehicle_length (0.25) is gone
