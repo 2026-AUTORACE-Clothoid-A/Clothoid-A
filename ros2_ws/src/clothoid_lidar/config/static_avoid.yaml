@@ -111,10 +111,8 @@ static_avoid:
     look_speed: 0.15             # while the look steers (sign out of view); in view the plan drives
     look_gain: 1.5
     # turn on the spot when the forward turn would not fit before look_end: forward / back at full
-    # lock, each arc checked first; at most 2 cycles and 0.4 m back
+    # lock, each arc checked first; no cycle limit, the backing counts in reverse_max (10 m per mission)
     look_reverse: true
     look_turn_radius: 0.50       # car 7 turns at 0.455 / 0.48 m (full lock, ODOM_STEERING_TEST.md)
     look_step: 0.15
     look_reverse_speed: 0.10
-    look_cycles_max: 2
-    look_reverse_max: 0.40

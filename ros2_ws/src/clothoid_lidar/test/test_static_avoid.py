@@ -224,13 +224,18 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         car = rect(bx, by, th, 0.32, 0.22)
         out['min_gap'] = min(out['min_gap'], min_gap(car, limos) if limos else np.inf)
         out['max_abs_y'] = max(out['max_abs_y'], float(np.abs(car[:, 1]).max()))
-        if ISLAND[0] <= bx <= ISLAND[1] and np.abs(car[:, 1]).min() < w / 2 - 0.02:
-            # the painted island narrows to a point over its first 0.25 m: the car over that tip only
-            # is counted apart (allowed when the A / B lane cannot be reached earlier)
-            tip = min((bx - ISLAND[0]) / 0.25, 1.0) * (w / 2 - 0.02)
-            if np.abs(car[:, 1]).min() < tip or bx > ISLAND[0] + 0.25:
+        if ISLAND[0] - 0.2 <= bx <= ISLAND[1] + 0.2:
+            # the painted island (lane wide less 2 cm a side) narrows to a point over its first and
+            # last 0.25 m: the car's outline over that front tip only is counted apart (allowed when
+            # the A / B lane cannot be reached earlier). Per outline point, not by the car centre: a
+            # car crossing at an angle had its rear corner, still before the island, counted on it
+            edge = np.vstack([car[k] + (car[(k + 1) % 4] - car[k]) * u[:, None]
+                              for k in range(4) for u in [np.linspace(0.0, 1.0, 9)]])
+            tip = np.clip(np.minimum(edge[:, 0] - ISLAND[0], ISLAND[1] - edge[:, 0]) / 0.25, 0.0, 1.0)
+            inside = np.abs(edge[:, 1]) < tip * (w / 2 - 0.02)
+            if (inside & (edge[:, 0] >= ISLAND[0] + 0.25)).any():
                 out['island_ok'] = False
-            else:
+            elif inside.any():
                 out['island_tip'] = True
     out.update(look_cycles=avoid.look_cycle, look_backed=avoid.look_backed)
     out.update(final_y=by, final_lane=lane_of(by, p), x=bx, released=released, t=t,
@@ -351,6 +356,39 @@ def test_costmap_forgets_a_moved_obstacle():
     for _ in range(12):
         cm.update(far, origin)
     assert not cm.occupied_in(0.95, 1.05, -0.05, 0.05)
+
+
+def test_escape_path_hands_over_to_a_free_plan_into_the_sign_lane():
+    # 1116_2039: an escape path driven on into lane 3 beside the island; the plan crossed to lane 1
+    a = StaticAvoid(AvoidParams())
+    a.activate((0.0, 0.0, 0.0))
+    a.island, a.island_source = (4.35, 6.10), 'entry line'
+    blob = np.array([[3.0, 0.5 + dy] for dy in np.linspace(-0.1, 0.1, 6)])     # lane 1 LIMO at 3.0
+    for _ in range(5):
+        a.costmap.update(blob, np.array([2.5, 0.0]), None, None)
+    esc = np.column_stack((np.linspace(2.5, 4.6, 43), np.linspace(-0.2, -0.5, 43)))
+    to = {1: np.column_stack((np.linspace(2.6, 5.0, 49), np.interp(np.linspace(2.6, 5.0, 49), [2.6, 4.0], [-0.2, 0.5]))),
+          3: np.column_stack((np.linspace(2.6, 5.0, 49), np.full(49, -0.5)))}
+    pose = (2.6, -0.2, 0.0)
+
+    def escape_on(direction, plan_lane, feasible=True):
+        a.direction = direction
+        a.escape_plan = Plan(path=esc, end_offset=-0.5, cost=0.0, obstacle_cost=0.0)
+        a.plan = Plan(path=to[plan_lane], end_offset=0.0, cost=0.0, obstacle_cost=0.0,
+                      feasible=feasible)
+        return a._escape_free(pose) is not None
+
+    assert escape_on(0, 1, feasible=False)                 # no plan: the escape goes on
+    assert escape_on(0, 3)                                 # the plan goes to the wrong lane
+    assert not escape_on(0, 1)                             # free into the sign's lane: hand over
+    assert a.event == 'stuck: escape path ended, the plan is free again into lane 1'
+    assert not a.escape_dropped and not a.look_after_escape
+    assert not escape_on(None, 3)                          # direction unknown: any free plan ...
+    assert a.look_after_escape                             # ... and the sign look next
+    a.plan = None
+    a.escape_plan = Plan(path=esc, end_offset=-0.5, cost=0.0, obstacle_cost=0.0)
+    assert a._escape_free((3.3, -0.3, 0.0)) is None         # nothing left ahead
+    assert a.event == 'stuck: escape path ended, every obstacle passed'
 
 
 def test_planner_prefers_target_lane_and_keeps_off_the_line():

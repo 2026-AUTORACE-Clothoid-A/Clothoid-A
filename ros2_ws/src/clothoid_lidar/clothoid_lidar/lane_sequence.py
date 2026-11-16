@@ -70,17 +70,32 @@ class Sequence:
     lanes: List[int] = field(default_factory=list)
 
 
+def positions(p) -> dict:
+    """Lateral places the sequence may hold: the lane centres 1 / 2 / 3, and with p.seq_mid also 4 / 5
+    between lane 2 and lane 1 / 3 (p.seq_mid_at lane widths off lane 2's centre): passing a row
+    of obstacles in lanes 1 and 2 there instead of at lane 3's centre or squeezed at lane 2's edge
+    (2026-11-17, the 1116_2039 layout)."""
+    w = p.lane_width
+    out = {1: w, 2: 0.0, 3: -w}
+    if getattr(p, 'seq_mid', False):
+        out.update({4: p.seq_mid_at * w, 5: -p.seq_mid_at * w})
+    return out
+
+
 def plan_sequence(s0: float, d0: float, psi: float, target: Optional[int], deadline: float,
                   late_deadline: float, horizon_end: float, p,
                   blocked: Callable[[np.ndarray, np.ndarray, np.ndarray, bool], np.ndarray],
                   closeness: Callable[[np.ndarray, np.ndarray, np.ndarray], np.ndarray],
-                  keep: Optional[Sequence] = None) -> Optional[Sequence]:
+                  keep: Optional[Sequence] = None,
+                  finish: Optional[float] = None) -> Optional[Sequence]:
     """Cheapest lane sequence from the car (s0, d0, heading psi) into lane `target` (1 / 3; None = any
     lane) by `deadline`, else by `late_deadline` (late=True). blocked(s, d, heading, late) -> bool per
     sample; closeness(s, d, heading) -> cost per sample (0 .. 100). keep: the last chosen sequence,
-    preferred while it is still free (no switching back and forth)."""
-    w = p.lane_width
-    centre = {1: w, 2: 0.0, 3: -w}
+    preferred while it is still free (no switching back and forth). finish: a change into the
+    target lane may end as late as this (None: the deadline): it may enter over the island's pointed
+    tip and settle beside the island, blocked() keeping it off the island body (2026-11-17: cones
+    0.72 m before the tip in lanes 1 and 2, the 3 -> 1 change was dropped for ending late)."""
+    centre = positions(p)
     step = p.seq_step
     n = int(math.ceil((horizon_end - s0) / step)) + 1
     grid = s0 + step * np.arange(n)
@@ -143,9 +158,10 @@ def plan_sequence(s0: float, d0: float, psi: float, target: Optional[int], deadl
         prev = {}
         heap = []
         end_i = int(math.ceil((end - s0) / step))
+        fin_i = max(end_i, int(math.ceil((finish - s0) / step))) if finish is not None else end_i
         last_i = n - 1
         for lane, (k, s, d, h) in first.items():
-            if k >= n or (lane == target and k > end_i) or not free(s, d, h, late):
+            if k >= n or (lane == target and k > fin_i) or not free(s, d, h, late):
                 continue
             cost = (p.w_change * (abs(centre[lane] - d0) > 0.10) + p.w_lateral * abs(centre[lane] - d0)
                     + p.w_obstacle * near(s, d, h) * k * step)
@@ -183,7 +199,7 @@ def plan_sequence(s0: float, d0: float, psi: float, target: Optional[int], deadl
                     continue
                 k, u, off, head = change[(lane, b)]
                 j = i + k
-                if j > last_i or (b == target and j > end_i):     # into the target lane too late
+                if j > last_i or (b == target and j > fin_i):     # into the target lane too late
                     continue
                 s = grid[i] + u
                 d = centre[lane] + off
