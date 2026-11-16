@@ -57,6 +57,8 @@ class LaneResult:
     reference: str = ''
     # Broad yellow paint inside the driving corridor cannot certify a clean bump approach.
     broad_yellow: bool = False
+    # Boundary direction in the BEV, independent of the target's lateral offset.
+    heading_slope: Optional[float] = None
 
 
 def make_warp_matrix(params: LaneParams) -> np.ndarray:

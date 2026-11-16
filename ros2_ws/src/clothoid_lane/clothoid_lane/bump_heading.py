@@ -37,6 +37,8 @@ class BumpHeading:
         self.preparing = False
         self.reference = None
         self.active = self.failed = False
+        self.contact_seen = False
+        self.failure_reason = None
         self.started = self.start_travel = None
         self.recovery_target = self.recovery_stamp = None
         self.recovery_hits = 0
@@ -44,10 +46,10 @@ class BumpHeading:
     def clear(self):
         self.__init__()
 
-    def invalidate(self):
+    def invalidate(self, reason='invalid_sensor'):
         self.history.clear()
         if self.active:
-            self.failed = True
+            self._fail(reason)
         else:
             self.reference = None
 
@@ -99,8 +101,13 @@ class BumpHeading:
                 self.reference = None
             return False, None
 
-        # Reacquire from clean, distinct, consecutive camera frames after mission exit.
-        if not self.preparing and not locked and fresh and clean:
+        self.contact_seen = self.contact_seen or locked
+
+        # Before IMU contact, a transient failure must not latch a false bump stop
+        # forever just because its roadside sign is still visible. Require the same
+        # clean-frame recovery; tiles, missing input or an actual crossing still block it.
+        recoverable = not self.preparing or (self.failed and not self.contact_seen)
+        if recoverable and not locked and not hazard and fresh and clean:
             if frame_stamp != self.recovery_stamp:
                 if (self.recovery_stamp is None or not 0 < frame_stamp-self.recovery_stamp <= .15
                         or math.dist(target, self.recovery_target) > params.target_tolerance_px):
@@ -108,28 +115,39 @@ class BumpHeading:
                 self.recovery_target, self.recovery_stamp = target, frame_stamp
                 self.recovery_hits += 1
             if self.recovery_hits >= params.recovery_frames:
+                preparing = self.preparing
                 self.clear()
+                self.preparing = preparing
                 return False, None
         else:
             self.recovery_hits = 0
             self.recovery_stamp = self.recovery_target = None
 
         ref = self.reference
-        if not fresh or ref is None:
-            self.failed = True
-        elif not (0 <= now-self.started < params.max_duration
-                  and 0 <= travel-self.start_travel < params.max_distance):
-            self.failed = True
+        if not fresh:
+            self._fail('stale_input_or_heartbeat')
+        elif ref is None:
+            self._fail('missing_clean_reference')
+        elif not 0 <= now-self.started < params.max_duration:
+            self._fail('duration_limit')
+        elif not 0 <= travel-self.start_travel < params.max_distance:
+            self._fail('distance_limit')
         else:
             error = math.remainder(yaw-ref.yaw, 2*math.pi)
             lateral = -math.sin(ref.pose[2])*(pose[0]-ref.pose[0]) + math.cos(
                 ref.pose[2])*(pose[1]-ref.pose[1])
-            if (abs(error) > math.radians(params.max_yaw_error_deg)
-                    or abs(lateral) > params.max_lateral_error):
-                self.failed = True
+            if abs(error) > math.radians(params.max_yaw_error_deg):
+                self._fail('yaw_limit')
+            elif abs(lateral) > params.max_lateral_error:
+                self._fail('lateral_limit')
             if not self.failed:
                 return True, self._steer(yaw, params)
         return True, None
+
+    def _fail(self, reason):
+        if not self.failed:
+            self.failure_reason = reason
+        self.failed = True
 
     def _steer(self, yaw, params):
         error = math.remainder(yaw-self.reference.yaw, 2*math.pi)

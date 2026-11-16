@@ -25,7 +25,7 @@ lane_main:
     bump_gap_max_yaw_error_deg: 8.0
     bump_gap_max_lateral_error: 0.1 # m from the arc of the retained steering command
     # /bump/preparing freezes a clean, level straight-lane yaw BEFORE the tiles.
-    # Broad yellow / a displaced raw target / tilt starts yaw feedback even if found=True.
+    # Broad yellow / a lost lane / mission IMU contact starts yaw feedback even if found=True.
     # The 0.5 m bump + 0.2 m wheelbase + camera look-ahead need more than the old 0.6 m gap.
     bump_heading_enabled: true
     bump_heading_reference_age: 1.0

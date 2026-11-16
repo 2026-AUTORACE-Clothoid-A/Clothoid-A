@@ -348,7 +348,7 @@ class LaneMainNode(QuietEventsMixin, Node):
             step = math.hypot(p.x-self.odom_pose[0], p.y-self.odom_pose[1])
             if not 0 < dt <= .25 or step > 2.*dt:
                 self.bump_gap.clear()
-                self.bump_heading.invalidate()
+                self.bump_heading.invalidate('odometry_discontinuity')
             else:
                 self.odom_travel += step
         self.odom_pose, self.odom_stamp = pose, stamp
@@ -386,23 +386,38 @@ class LaneMainNode(QuietEventsMixin, Node):
         clean = (result.found and all(math.isfinite(v) for v in target) and
                  not getattr(result, 'broad_yellow', False) and level)
         raw_steer = steer_angle(*target, self.detector.p.warp_w, self.detector.p.warp_h)
+        slope = getattr(result, 'heading_slope', None)
+        # A straight lane with a small lateral offset needs steering correction;
+        # that correction is not evidence that the road itself is turning.
+        lane_angle = math.atan(slope) if slope is not None else raw_steer
         sample = HeadingReference(frame_time.nanoseconds*1e-9, self.imu_yaw,
                                   self.odom_pose, self.odom_travel, target)
         self.bump_heading.observe(sample, p.enabled and synchronized and clean and not self.steering_locked and
-                                  abs(raw_steer) <= math.radians(p.max_steer_deg), p)
+                                  abs(lane_angle) <= math.radians(p.max_steer_deg), p)
         ref = self.bump_heading.reference
-        hazard = (not clean or (ref is not None and
-                  math.dist(target, ref.target) > p.target_tolerance_px))
+        # Normal recentering, a sub-contact pitch change and one unsynchronised
+        # sample must not start blind driving. IMU contact comes from mission's
+        # 2-degree crossing decision; visual takeover needs tiles or a lost lane.
+        hazard = not result.found or getattr(result, 'broad_yellow', False)
         if self.bump_heading.preparing:
             fresh = fresh and self.bump_prepare_stamp is not None and 0 <= (
                 now-self.bump_prepare_stamp).nanoseconds*1e-9 <= self.get_parameter(
                     'steering_lock_timeout').value
         was_active = self.bump_heading.active
+        was_failed = self.bump_heading.failed
         owns, steer = self.bump_heading.update(
             now.nanoseconds*1e-9, self.odom_travel, self.imu_yaw, self.odom_pose,
             frame_stamp=frame_time.nanoseconds*1e-9,
             fresh=fresh, hazard=hazard or self.current_steering_lock(now), clean=clean and synchronized,
             target=target, locked=self.current_steering_lock(now), params=p)
+        if self.bump_heading.failed and not was_failed:
+            self.get_logger().warn('bump heading stopped: ' + self.bump_heading.failure_reason)
+        elif self.bump_heading.active and not was_active:
+            reason = ('imu_contact' if self.current_steering_lock(now) else
+                      'yellow_tiles' if getattr(result, 'broad_yellow', False) else 'lane_lost')
+            self.get_logger().info('bump heading hold: ' + reason)
+        elif was_active and not self.bump_heading.active:
+            self.get_logger().info('bump heading: clean lane reacquired')
         if owns:
             self.bump_gap.clear()
             if not was_active and ref is not None:

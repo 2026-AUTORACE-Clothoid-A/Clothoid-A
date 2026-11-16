@@ -377,6 +377,10 @@ class LaneTracker:
                     break
         found = target is not None
         tx, ty = target if found else (w / 2.0, h / 2.0)
+        references = ([left, right] if reference == 'both' else
+                      [left] if reference == 'left' else [right] if reference == 'right' else [])
+        heading_slope = (float(np.mean([line.slope_at(float(self.t.look_row))
+                                       for line in references])) if references else None)
 
         canvas = None
         if debug:
@@ -387,7 +391,8 @@ class LaneTracker:
 
         return LaneResult(found=found, target_x=float(tx), target_y=float(ty), debug_image=canvas,
                           left_points=as_points(left), right_points=as_points(right),
-                          zigzag=zigzag_zone, reference=reference, broad_yellow=broad_yellow)
+                          zigzag=zigzag_zone, reference=reference, broad_yellow=broad_yellow,
+                          heading_slope=heading_slope)
 
     # --- debug image ------------------------------------------------------------
     LEFT_COLOUR, RIGHT_COLOUR = (255, 80, 0), (0, 0, 255)       # BGR: blue, red

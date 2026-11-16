@@ -32,10 +32,10 @@ def lane(request):
     rclpy.shutdown()
 
 
-def camera(node, pattern=False):
+def camera(node, pattern=False, offset=0):
     bev = np.full((240, 320, 3), 45, np.uint8)
     for x in (75, 245):
-        cv2.line(bev, (x, 0), (x, 239), (0, 200, 255), 7)
+        cv2.line(bev, (x+offset, 0), (x+offset, 239), (0, 200, 255), 7)
     if pattern:
         # 20 mm high / 500 mm long archive shape, flattened here to isolate colour
         # confusion. This is NOT a dynamics or suspension simulation.
@@ -46,7 +46,7 @@ def camera(node, pattern=False):
     return cv2.warpPerspective(bev, np.linalg.inv(node.detector._matrix), (640, 480))
 
 
-def frame(lane, *, pattern=False, pitch=0., yaw=0., fresh=True, x=0.):
+def frame(lane, *, pattern=False, pitch=0., yaw=0., fresh=True, x=0., offset=0):
     node, clock, _ = lane
     clock.t += 1/30
     stamp = node.get_clock().now().to_msg()
@@ -69,7 +69,7 @@ def frame(lane, *, pattern=False, pitch=0., yaw=0., fresh=True, x=0.):
         odom.pose.pose.position.x = x
         node.on_odom(odom)
     node.on_speed_limit(Float32(data=.2))
-    return node.process_bgr(camera(node, pattern), Header(stamp=stamp))
+    return node.process_bgr(camera(node, pattern, offset), Header(stamp=stamp))
 
 
 def prepare(lane, yaw=0.):
@@ -174,6 +174,61 @@ def test_odometry_reset_stops_frozen_heading(lane):
     for _ in range(2):
         frame(lane, pattern=True, x=10.)
     assert node.bump_heading.failed and commands[-1].linear.x == 0.
+
+
+def test_offset_straight_lane_is_still_a_clean_direction_reference(lane):
+    node, _, _ = lane
+    for _ in range(5):
+        result = frame(lane, offset=14)
+    node.on_bump_prepare(Bool(data=True))
+    assert result.found and abs(result.heading_slope) < .02
+    assert node.bump_heading.reference is not None
+    # Recentring on a straight road moves the target; this is not a bump tile.
+    for offset in (10, 6, 0, -4):
+        frame(lane, offset=offset)
+        assert not node.bump_heading.active
+
+
+def test_sub_contact_pitch_does_not_start_a_blind_hold(lane):
+    node, _, commands = lane
+    prepare(lane)
+    for _ in range(3):
+        frame(lane, pitch=1.3)
+        assert not node.bump_heading.active
+        assert commands[-1].linear.x == pytest.approx(.2)
+
+
+def test_precontact_failure_recovers_clean_lane_while_sign_remains_visible(lane):
+    node, _, commands = lane
+    for _ in range(5):
+        frame(lane, pattern=True)
+    node.on_bump_prepare(Bool(data=True))
+    frame(lane, pattern=True)
+    assert node.bump_heading.failure_reason == 'missing_clean_reference'
+    for _ in range(2):
+        frame(lane)
+        assert node.bump_heading.failed and commands[-1].linear.x == 0.
+    frame(lane)
+    assert not node.bump_heading.active and node.bump_heading.preparing
+    assert commands[-1].linear.x == pytest.approx(.2)
+
+
+def test_contact_failure_cannot_resume_until_mission_exit(lane):
+    node, clock, commands = lane
+    prepare(lane)
+    node.on_steering_lock(Bool(data=True))
+    frame(lane, pattern=True, pitch=-2.2)
+    clock.t += .3
+    frame(lane, fresh=False)
+    assert node.bump_heading.failed and node.bump_heading.contact_seen
+    node.on_steering_lock(Bool(data=False))
+    for _ in range(4):
+        frame(lane)
+    assert node.bump_heading.failed and commands[-1].linear.x == 0.
+    node.on_bump_prepare(Bool(data=False))
+    for _ in range(3):
+        frame(lane)
+    assert not node.bump_heading.active
 
 
 def test_500mm_20mm_gentle_profile_with_25hz_imu_and_odometry(lane):
