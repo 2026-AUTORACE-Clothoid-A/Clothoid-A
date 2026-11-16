@@ -331,14 +331,6 @@ class LaneTracker:
         h, w = p.warp_h, p.warp_w
         self._attempts = []
         yellow, white = self._masks(bgr)
-        # Tape is about 7 px wide at 340 px/m; bump tiles are much wider. This flag
-        # gates the bump reference/control only; ordinary lane selection is unchanged.
-        half_corridor = int(.45 * lane_width)
-        corridor = yellow[:, max(0, w//2-half_corridor):min(w, w//2+half_corridor)]
-        kernel = np.ones((6, max(15, round(.18 * lane_width))), np.uint8)
-        broad_yellow = bool(corridor.size and cv2.erode(corridor.astype(np.uint8), kernel,
-                                                      borderType=cv2.BORDER_CONSTANT,
-                                                      borderValue=0).any())
         seeds = [s.bottom_x for s in self._sides.values() if s.bottom_x is not None]
         yellow_lines = self._lines(yellow, YELLOW, seeds)
         comps = self._dividers(white, yellow_lines, float(lane_width))
@@ -377,10 +369,6 @@ class LaneTracker:
                     break
         found = target is not None
         tx, ty = target if found else (w / 2.0, h / 2.0)
-        references = ([left, right] if reference == 'both' else
-                      [left] if reference == 'left' else [right] if reference == 'right' else [])
-        heading_slope = (float(np.mean([line.slope_at(float(self.t.look_row))
-                                       for line in references])) if references else None)
 
         canvas = None
         if debug:
@@ -391,8 +379,7 @@ class LaneTracker:
 
         return LaneResult(found=found, target_x=float(tx), target_y=float(ty), debug_image=canvas,
                           left_points=as_points(left), right_points=as_points(right),
-                          zigzag=zigzag_zone, reference=reference, broad_yellow=broad_yellow,
-                          heading_slope=heading_slope)
+                          zigzag=zigzag_zone, reference=reference)
 
     # --- debug image ------------------------------------------------------------
     LEFT_COLOUR, RIGHT_COLOUR = (255, 80, 0), (0, 0, 255)       # BGR: blue, red

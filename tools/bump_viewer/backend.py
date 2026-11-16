@@ -51,7 +51,6 @@ def modules():
     names = (
         'clothoid_common.image_utils', 'clothoid_lane.lane_detector',
         'clothoid_lane.lane_tracker', 'clothoid_lane.steering', 'clothoid_lane.bump_gap',
-        'clothoid_lane.bump_heading',
         'clothoid_mission.scene_evidence', 'clothoid_mission.sign_tracker',
         'clothoid_parking.tracker', 'clothoid_finish.bev', 'clothoid_finish.finish_core',
         'clothoid_mission.line_stop', 'clothoid_mission.mission_logic',
@@ -211,8 +210,7 @@ def analyse(path, camera='limo2', progress=lambda value: None):
                 debug=lambda *a, **k: None, error=lambda *a, **k: None)
         for key, callback in (('limit_pub', lane.on_speed_limit), ('direction_pub', lane.on_direction),
                               ('parking_pub', lane.on_parking), ('steering_lock_pub', lane.on_steering_lock),
-                              ('bump_approach_pub', lane.on_bump_approach),
-                              ('bump_prepare_pub', lane.on_bump_prepare)):
+                              ('bump_approach_pub', lane.on_bump_approach)):
             if key in mp:
                 mp[key].callback = callback
         warnings = []
@@ -351,8 +349,7 @@ def analyse(path, camera='limo2', progress=lambda value: None):
                 recorded_command=recorded_value('/cmd_vel'), recorded_limit=recorded_value('/speed_limit'),
                 detections=dets, detection_age=age, lane_found=bool(found), lane_jpeg=lane_jpeg,
                 command=None if command is None else (command.linear.x, command.angular.z),
-                steering_deg=float(np.degrees(lane.last_steer)),
-                bump_gap=lane.bump_gap.active or lane.bump_heading.active,
+                steering_deg=float(np.degrees(lane.last_steer)), bump_gap=lane.bump_gap.active,
                 raw_pitch=mission.latest_pitch if mission._fresh(mission.latest_pitch_time) else None))
             images += 1
             if images % 10 == 0:

@@ -74,12 +74,9 @@ mission:
     slow_speed: 0.2             # rules: 0.2 m/s or less
     slow_hold_sec: 4.0          # general slow sign hold timer
     # speed bump (IMU Pitch + YOLO fusion)
-    # Archive side profile: length 500 mm, height 20 mm; LIMO wheelbase 200 mm.
-    # atan(20/200)=5.71 deg is an upper bound, NOT the predicted IMU peak.
-    # Start at 2 deg on the gentler ramp; calibrate against the actual mounted IMU.
-    bump_pitch_thresh: 2.0      # deg, absolute pitch; supports either IMU sign convention
-    bump_level_thresh: 0.8      # deg, leveling band after opposite tilt
-    bump_level_duration: 0.4    # sec, continuous level; intermediate flat top cannot end traversal
+    bump_pitch_thresh: 3.5      # deg, absolute pitch; supports either IMU sign convention
+    bump_level_thresh: 1.2      # deg, abs angle to detect vehicle leveled
+    bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
     # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.

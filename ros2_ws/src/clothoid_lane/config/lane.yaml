@@ -24,22 +24,8 @@ lane_main:
     bump_gap_max_steer_deg: 5.0
     bump_gap_max_yaw_error_deg: 8.0
     bump_gap_max_lateral_error: 0.1 # m from the arc of the retained steering command
-    # /bump/preparing freezes a clean, level straight-lane yaw BEFORE the tiles.
-    # Broad yellow / a lost lane / mission IMU contact starts yaw feedback even if found=True.
-    # The 0.5 m bump + 0.2 m wheelbase + camera look-ahead need more than the old 0.6 m gap.
-    bump_heading_enabled: true
-    bump_heading_reference_age: 1.0
-    bump_heading_min_frames: 3
-    bump_heading_max_steer_deg: 5.0
-    bump_heading_max_yaw_error_deg: 8.0
-    bump_heading_max_lateral_error: 0.1
-    bump_heading_max_distance: 1.8 # m since visual/tilt takeover; a bound, not an exit trigger
-    bump_heading_max_duration: 12.0 # s since takeover; never extends on repeated detections
-    bump_heading_yaw_gain: 1.5
-    bump_heading_recovery_frames: 3
-    bump_heading_target_tolerance_px: 8.0
     steering_lock_timeout: 1.5 # seconds since mission heartbeat; prevents a stale lock persisting
-    steering_lock_level_deg: 0.8 # agrees with mission's level band for the 20 mm bump
+    steering_lock_level_deg: 1.2 # cache steering while level, before the camera tilts
     steering_lock_reference_timeout: 1.0
     steering_lock_imu_timeout: 0.25
     steering_lock_sync_tolerance: 0.04 # camera/IMU sensor-stamp difference when caching level steering

@@ -134,29 +134,8 @@ def test_bump_requires_opposite_tilt_before_level_exit(polarity):
     assert logic.step(Inputs(now=1.8, imu_pitch=0.)).steering_lock
     logic.step(Inputs(now=2., imu_pitch=-polarity*3.))
     logic.step(Inputs(now=2.2, imu_pitch=0.))
-    assert logic.step(Inputs(now=2.55, imu_pitch=0.)).steering_lock
-    assert not logic.step(Inputs(now=2.65, imu_pitch=0.)).steering_lock
+    assert not logic.step(Inputs(now=2.55, imu_pitch=0.)).steering_lock
     assert logic.bump_state == BUMP_COOLDOWN
-
-
-@pytest.mark.parametrize('polarity', [-1., 1.])
-def test_gentle_contest_bump_prepares_before_entry_and_needs_opposite_tilt(polarity):
-    logic = MissionLogic(MissionParams(bump_at_stopline=True))
-    out = logic.step(Inputs(now=0., seen={'sign_bump'}, imu_pitch=0.))
-    assert out.bump_prepare and out.entry_arm
-    assert not out.steering_lock and out.speed_limit is None
-    out = logic.step(Inputs(now=.5, entry_slow=True, imu_pitch=0.))
-    assert out.bump_prepare and out.speed_limit == .2
-    out = logic.step(Inputs(now=1., imu_pitch=polarity*2.1))
-    assert out.steering_lock and out.bump_prepare
-    # The middle of a long, low bump may be nearly level while both axles are up.
-    logic.step(Inputs(now=1.5, imu_pitch=.2))
-    assert logic.step(Inputs(now=2.5, imu_pitch=.2)).steering_lock
-    logic.step(Inputs(now=3., imu_pitch=-polarity*.9))
-    logic.step(Inputs(now=3.1, imu_pitch=.7))
-    assert logic.step(Inputs(now=3.4, imu_pitch=.7)).steering_lock
-    out = logic.step(Inputs(now=3.5, imu_pitch=.7))
-    assert not out.bump_prepare and not out.steering_lock
 
 
 def test_visible_sign_refreshes_approach_timeout_and_missing_imu_cannot_clear():

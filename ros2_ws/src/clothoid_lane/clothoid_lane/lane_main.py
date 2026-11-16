@@ -29,7 +29,6 @@ from clothoid_lane.lane_tracker import LaneTracker, TrackerParams
 from clothoid_lane.parking_landmark_publisher import LandmarkPublisher
 from clothoid_lane.cone_handover import ConeHandover
 from clothoid_lane.bump_gap import BumpGap, BumpGapParams
-from clothoid_lane.bump_heading import BumpHeading, BumpHeadingParams, HeadingReference
 from clothoid_lane.steering import (MAX_STEER_RAD, TARGET_RESET_SEC, WHEELBASE, angular_z,
                                     limit_step, speed_scaled_gain, steer_angle)
 
@@ -109,12 +108,9 @@ class LaneMainNode(QuietEventsMixin, Node):
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
         self.declare_parameter('bump_approach_topic', '/bump/approaching')
-        self.declare_parameter('bump_prepare_topic', '/bump/preparing')
         self.declare_parameter('odom_topic', '/odom_25hz')
         for name, value in BumpGapParams().__dict__.items():
             self.declare_parameter('bump_gap_' + name, value)
-        for name, value in BumpHeadingParams().__dict__.items():
-            self.declare_parameter('bump_heading_' + name, value)
         # the target point used for steering moves at most this many warped px per frame (0 = off).
         # 2026-11-08 bag 01:02: normal frames move it 0.3 px (median), corners 7 px (p95); the jumps
         # that flipped the steering by up to +-28 deg moved it 29 px (median). 8 px removed 23 of 30
@@ -131,7 +127,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('steering_lock_timeout', 1.5)  # mission refreshes every 1 s
         self.declare_parameter('imu_topic', '/imu_25hz')
-        self.declare_parameter('steering_lock_level_deg', 0.8)
+        self.declare_parameter('steering_lock_level_deg', 1.2)
         self.declare_parameter('steering_lock_reference_timeout', 1.0)
         self.declare_parameter('steering_lock_imu_timeout', 0.25)
         self.declare_parameter('steering_lock_sync_tolerance', 0.04)
@@ -165,8 +161,6 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.bump_approaching = False
         self.bump_approach_stamp = None
         self.bump_gap = BumpGap()
-        self.bump_heading = BumpHeading()
-        self.bump_prepare_stamp = None
         self.level_steer = self.level_steer_stamp = self.level_target = None
         self.last_steer = 0.0
         self.last_cmd = None
@@ -200,8 +194,6 @@ class LaneMainNode(QuietEventsMixin, Node):
             Odometry, self.get_parameter('odom_topic').value, self.on_odom, qos_profile_sensor_data)
         self.create_subscription(
             Bool, self.get_parameter('bump_approach_topic').value, self.on_bump_approach, 1)
-        self.create_subscription(
-            Bool, self.get_parameter('bump_prepare_topic').value, self.on_bump_prepare, 1)
 
         self.create_subscription(
             Bool, self.get_parameter('cone_active_topic').value, self.on_cone_active, 1)
@@ -240,12 +232,6 @@ class LaneMainNode(QuietEventsMixin, Node):
         gap_names = ('bump_gap_' + name for name in BumpGapParams.__dataclass_fields__)
         if any(not math.isfinite(value(name)) or value(name) < 0 for name in gap_names):
             return SetParametersResult(successful=False, reason='bump gap limits must be finite and >= 0')
-        heading_names = ('bump_heading_' + name for name in BumpHeadingParams.__dataclass_fields__
-                         if name != 'enabled')
-        if any(not math.isfinite(value(name)) or value(name) <= 0 for name in heading_names):
-            return SetParametersResult(successful=False, reason='bump heading limits must be finite and > 0')
-        if any(value('bump_heading_' + name) < 2 for name in ('min_frames', 'recovery_frames')):
-            return SetParametersResult(successful=False, reason='bump heading needs at least two frames')
         if width and any(value(name) <= 0.0 for name in WIDTH_PARAMS):
             return SetParametersResult(successful=False, reason='lane widths must be > 0')
         if DETECTOR_PARAMS & proposed.keys():
@@ -260,8 +246,6 @@ class LaneMainNode(QuietEventsMixin, Node):
 
     # --- flags from other nodes -------------------------------------------------
     def on_cone_active(self, msg: Bool):
-        if msg.data:
-            self.bump_heading.clear()
         if not msg.data:
             self.cone_connecting = False
         self.cone_handover.on_cone(msg.data, self.get_clock().now().nanoseconds * 1e-9)
@@ -285,7 +269,6 @@ class LaneMainNode(QuietEventsMixin, Node):
     def on_parking(self, msg: Bool):
         self.parking_started = msg.data
         self.bump_gap.clear()
-        self.bump_heading.clear()
         if msg.data:
             self.side = SIDE_RIGHT
             self.parking_width = True
@@ -325,7 +308,6 @@ class LaneMainNode(QuietEventsMixin, Node):
         norm = q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w
         if msg.orientation_covariance[0] < 0 or not math.isfinite(norm) or norm < .5:
             self.imu_pitch = self.imu_stamp = None
-            self.bump_heading.invalidate()
             return
         sinp = 2.*(q.w*q.y-q.z*q.x)/norm
         self.imu_pitch = math.degrees(math.asin(max(-1., min(1., sinp))))
@@ -340,7 +322,6 @@ class LaneMainNode(QuietEventsMixin, Node):
         if not all(math.isfinite(v) for v in (p.x, p.y, norm)) or norm < .5:
             self.odom_pose = self.odom_stamp = None
             self.bump_gap.clear()
-            self.bump_heading.invalidate()
             return
         pose = (p.x, p.y, math.atan2(2*(q.w*q.z+q.x*q.y), norm-2*(q.y*q.y+q.z*q.z)))
         if self.odom_pose is not None:
@@ -348,7 +329,6 @@ class LaneMainNode(QuietEventsMixin, Node):
             step = math.hypot(p.x-self.odom_pose[0], p.y-self.odom_pose[1])
             if not 0 < dt <= .25 or step > 2.*dt:
                 self.bump_gap.clear()
-                self.bump_heading.invalidate('odometry_discontinuity')
             else:
                 self.odom_travel += step
         self.odom_pose, self.odom_stamp = pose, stamp
@@ -358,80 +338,6 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.bump_approach_stamp = self.get_clock().now()
         if not msg.data:
             self.bump_gap.clear()
-
-    def bump_heading_params(self):
-        return BumpHeadingParams(**{name: self.get_parameter('bump_heading_' + name).value
-                                    for name in BumpHeadingParams.__dataclass_fields__})
-
-    def on_bump_prepare(self, msg: Bool):
-        now = self.get_clock().now()
-        self.bump_prepare_stamp = now
-        active = bool(msg.data) and not self.parking_started and not self.cone_handover.cone_active
-        if not active and self.bump_heading.preparing and self.bump_heading.active and isinstance(
-                self.detector, LaneTracker):
-            self.detector.reset_tracks()  # discard associations made to bump tiles before recovery
-        self.bump_heading.prepare(active, now.nanoseconds*1e-9, self.bump_heading_params())
-
-    def bump_heading_command(self, result, now, frame_time):
-        """Run before target slew and level-steering caching, including when found=True."""
-        p = self.bump_heading_params()
-        fresh = (self.imu_stamp is not None and self.odom_stamp is not None and
-                 0 <= (now-self.imu_stamp).nanoseconds*1e-9 <= .25 and
-                 0 <= (now-self.odom_stamp).nanoseconds*1e-9 <= .25 and
-                 0 <= (now-frame_time).nanoseconds*1e-9 <= .15)
-        synchronized = fresh and abs((frame_time-self.imu_stamp).nanoseconds*1e-9) <= (
-            self.get_parameter('steering_lock_sync_tolerance').value)
-        level = fresh and abs(self.imu_pitch) <= self.get_parameter('steering_lock_level_deg').value
-        target = (result.target_x, result.target_y)
-        clean = (result.found and all(math.isfinite(v) for v in target) and
-                 not getattr(result, 'broad_yellow', False) and level)
-        raw_steer = steer_angle(*target, self.detector.p.warp_w, self.detector.p.warp_h)
-        slope = getattr(result, 'heading_slope', None)
-        # A straight lane with a small lateral offset needs steering correction;
-        # that correction is not evidence that the road itself is turning.
-        lane_angle = math.atan(slope) if slope is not None else raw_steer
-        sample = HeadingReference(frame_time.nanoseconds*1e-9, self.imu_yaw,
-                                  self.odom_pose, self.odom_travel, target)
-        self.bump_heading.observe(sample, p.enabled and synchronized and clean and not self.steering_locked and
-                                  abs(lane_angle) <= math.radians(p.max_steer_deg), p)
-        ref = self.bump_heading.reference
-        # Normal recentering, a sub-contact pitch change and one unsynchronised
-        # sample must not start blind driving. IMU contact comes from mission's
-        # 2-degree crossing decision; visual takeover needs tiles or a lost lane.
-        hazard = not result.found or getattr(result, 'broad_yellow', False)
-        if self.bump_heading.preparing:
-            fresh = fresh and self.bump_prepare_stamp is not None and 0 <= (
-                now-self.bump_prepare_stamp).nanoseconds*1e-9 <= self.get_parameter(
-                    'steering_lock_timeout').value
-        was_active = self.bump_heading.active
-        was_failed = self.bump_heading.failed
-        owns, steer = self.bump_heading.update(
-            now.nanoseconds*1e-9, self.odom_travel, self.imu_yaw, self.odom_pose,
-            frame_stamp=frame_time.nanoseconds*1e-9,
-            fresh=fresh, hazard=hazard or self.current_steering_lock(now), clean=clean and synchronized,
-            target=target, locked=self.current_steering_lock(now), params=p)
-        if self.bump_heading.failed and not was_failed:
-            self.get_logger().warn('bump heading stopped: ' + self.bump_heading.failure_reason)
-        elif self.bump_heading.active and not was_active:
-            reason = ('imu_contact' if self.current_steering_lock(now) else
-                      'yellow_tiles' if getattr(result, 'broad_yellow', False) else 'lane_lost')
-            self.get_logger().info('bump heading hold: ' + reason)
-        elif was_active and not self.bump_heading.active:
-            self.get_logger().info('bump heading: clean lane reacquired')
-        if owns:
-            self.bump_gap.clear()
-            if not was_active and ref is not None:
-                self.used_target = ref.target
-            cmd = Twist()
-            if steer is not None:
-                cmd.linear.x = min(self.current_speed(), self.get_parameter('bump_gap_speed').value)
-                cmd.angular.z = angular_z(cmd.linear.x, steer, self.get_parameter('wheelbase').value)
-                self.last_steer = steer
-            self.last_cmd = cmd
-            self.cmd_pub.publish(cmd)
-        elif was_active:
-            self.last_found_stamp = now  # resume with the normal target slew from the frozen target
-        return owns
 
     def bump_gap_ready(self, now, frame_time):
         return (self.bump_approaching and not self.parking_started and
@@ -500,14 +406,6 @@ class LaneMainNode(QuietEventsMixin, Node):
 
         now = self.get_clock().now()
         frame_time = self.sensor_time(header, now)
-        if self.bump_heading_command(result, now, frame_time):
-            self.cone_handover.observe(now.nanoseconds*1e-9, False, (result.target_x, result.target_y),
-                                       None, self.get_parameter('target_max_step_px').value,
-                                       TARGET_RESET_SEC)
-            self.cone_ready_pub.publish(Bool(data=False))
-            if debug and result.debug_image is not None:
-                self.debug_pub.publish(bgr_to_image(result.debug_image, header))
-            return result
         locked = self.current_steering_lock(now) and self.last_cmd is not None
         gap_ready = self.bump_gap_ready(now, frame_time)
         if not gap_ready:
