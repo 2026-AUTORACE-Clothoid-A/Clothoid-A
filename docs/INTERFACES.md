@@ -11,10 +11,18 @@ Change it only by agreement; topic names live in `ros2_ws/src/clothoid_bringup/c
 | `/scan` | `sensor_msgs/LaserScan` | YDLidar Tmini Plus, 10 Hz, ±110°, ~410 points per turn, frame `laser_link` |
 | `/odom` | `nav_msgs/Odometry` | from our `limo_base` (needs the LIMO body and motor battery connected). 50 Hz measured in Ackermann mode, frames `odom` → `base_link`. The factory `limo_base` publishes none in that mode |
 | `/imu` | `sensor_msgs/Imu` | from the base driver. 100 Hz measured, frame `imu_link`. Yaw and gyro respond to the chassis being turned by hand; 90° accuracy and sign not confirmed (see `PACKAGES.md`) |
+| `/imu_25hz` | `sensor_msgs/Imu` | runtime consumer default; driver averages angular velocity/acceleration over four source samples and keeps the last orientation and sensor timestamp |
+| `/odom_25hz` | `nav_msgs/Odometry` | runtime consumer default; driver averages twist over two source samples and keeps the last pose and sensor timestamp |
 | `/limo_status` | `limo_msgs/LimoStatus` | from the base driver. 2 Hz measured; `motion_mode`: 0 four-wheel differential, 1 Ackermann, 2 mecanum |
 
 TF: `base_link → laser_link` is (0.103, 0, -0.034) with no rotation (URDF).
 `base_link → camera_link` comes from `clothoid_bringup` (`camera_pitch` argument, measure the real mounting).
+Lane, mission, parking, finish, static avoidance, cone and decision visualization use
+`imu_topic: /imu_25hz` and `odom_topic: /odom_25hz` by default, including standalone nodes.
+Original sensor publication rates remain unchanged. Old bags can explicitly override these
+parameters with `/imu` and `/odom`; the offline cone viewer selects raw sensors only when
+the configured averaged topics are absent. Both sensor versions are recorded by the full-run
+and parking recording scripts. Control timers, timeouts and steering/stop tuning are unchanged.
 
 ## Perception output
 | Topic | Type | Publisher |

@@ -108,7 +108,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         # keep the last command this long after the lane is lost (0 = 2025 behaviour, publish nothing)
         self.declare_parameter('lost_hold_sec', 0.0)
         self.declare_parameter('bump_approach_topic', '/bump/approaching')
-        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('odom_topic', '/odom_25hz')
         for name, value in BumpGapParams().__dict__.items():
             self.declare_parameter('bump_gap_' + name, value)
         # the target point used for steering moves at most this many warped px per frame (0 = off).
@@ -126,7 +126,7 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
         self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('steering_lock_timeout', 1.5)  # mission refreshes every 1 s
-        self.declare_parameter('imu_topic', '/imu')
+        self.declare_parameter('imu_topic', '/imu_25hz')
         self.declare_parameter('steering_lock_level_deg', 1.2)
         self.declare_parameter('steering_lock_reference_timeout', 1.0)
         self.declare_parameter('steering_lock_imu_timeout', 0.25)

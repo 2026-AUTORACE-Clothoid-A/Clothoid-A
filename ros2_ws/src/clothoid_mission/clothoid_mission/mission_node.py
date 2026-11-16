@@ -66,8 +66,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('image_topic', '/camera/color/image_raw')
         self.declare_parameter('compressed', False)
         self.declare_parameter('camera_info_topic', '/camera/color/camera_info')
-        self.declare_parameter('imu_topic', '/imu')
-        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('imu_topic', '/imu_25hz')
+        self.declare_parameter('odom_topic', '/odom_25hz')
         self.declare_parameter('line_debug_topic', '/mission/line_debug_image')
         self.declare_parameter('debug', False)
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=

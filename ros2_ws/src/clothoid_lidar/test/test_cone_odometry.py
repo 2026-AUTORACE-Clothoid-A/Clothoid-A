@@ -34,6 +34,23 @@ def test_straight_motion_and_reverse_use_wheel_speed(speed):
     np.testing.assert_allclose(drive(speed, 0.).pose(2.), (2*speed, 0., 0.), atol=1e-12)
 
 
+@pytest.mark.parametrize('speed,gyro', [(.5, math.pi/4), (.5, -math.pi/4),
+                                      (-.5, math.pi/4), (-.5, -math.pi/4)])
+def test_25hz_sensor_pairs_preserve_axle_geometry_and_keep_exit_pose_fresh(speed, gyro):
+    tracker = ConeOdometry()
+    generation = tracker.generation
+    for i in range(51):
+        t = i*.04
+        tracker.odom(t, speed)
+        tracker.imu(t, gyro)
+        assert tracker.pose(t+.02) is not None
+        assert tracker.generation == generation
+    angle, radius, offset = 2*gyro, speed/gyro, tracker.rear_offset
+    expected = (radius*math.sin(angle)+offset*(math.cos(angle)-1),
+                radius*(1-math.cos(angle))+offset*math.sin(angle), angle)
+    np.testing.assert_allclose(tracker.pose(2.), expected, atol=1e-12)
+
+
 @pytest.mark.parametrize('missing', ['imu', 'odom'])
 def test_one_sensor_cannot_produce_a_pose(missing):
     tracker = ConeOdometry()

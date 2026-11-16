@@ -46,8 +46,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.declare_parameter('mission_active_topic', '/cone/mission_active')
         self.declare_parameter('centerline_topic', '/cone/centerline')
         self.declare_parameter('target_topic', '/cone/target')
-        self.declare_parameter('imu_topic', '/imu')
-        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('imu_topic', '/imu_25hz')
+        self.declare_parameter('odom_topic', '/odom_25hz')
         self.declare_parameter('pose_topic', '/cone/odom')
 
         d = FollowerParams()

@@ -11,7 +11,7 @@ mkdir -p "$(dirname "$PARK_RECORD_OUTPUT")"
 # Keep large RViz grid markers out of the recording; sensor inputs reproduce them.
 exec ros2 bag record -o "$PARK_RECORD_OUTPUT" \
     /cmd_vel /cmd_vel_lane /cmd_vel_teleop /cmd_vel_parking /cmd_vel_finish \
-    /odom /imu /scan /limo_status /tf_static \
+    /odom /imu /odom_25hz /imu_25hz /scan /limo_status /tf_static \
     /camera/color/image_raw/compressed /camera/color/camera_info \
     /detections /yolo/ready /mission/state /cmd_vel_state /speed_limit \
     /parking_sign /parking_prepare /parking_flag /parking_done /parking/state \
