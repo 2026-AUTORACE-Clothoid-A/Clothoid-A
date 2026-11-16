@@ -39,9 +39,17 @@ if [ -d /usr/local/cuda-12.6 ]; then
 fi
 if [ -d /usr/local/TensorRT-10.3.0.26 ]; then
     export TENSORRT_INSTALL=/usr/local/TensorRT-10.3.0.26
-    # Engine plans require this SDK build; the system copy can report the same 10.3.0
-    # version but be a different build (.30 instead of .26), so search the SDK first.
-    export LD_LIBRARY_PATH="$TENSORRT_INSTALL/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    # Search the SDK copy last: the system libnvinfer (/usr/lib/aarch64-linux-gnu, JetPack
+    # 10.3.0.30) is the build the car's best_fp16.engine was made with. SDK first (58feba7)
+    # loaded 10.3.0.26 and yolo died on limo2, 2026-11-17: "expecting library version
+    # 10.3.0.26"; with the system copy first the same engine loads. The system dir is put
+    # ahead explicitly (not left to the ROS setup). A switch to the SDK needs the engine
+    # re-exported with it.
+    case ":$LD_LIBRARY_PATH:" in
+        *:/usr/lib/aarch64-linux-gnu:*) ;;
+        *) export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}/usr/lib/aarch64-linux-gnu" ;;
+    esac
+    export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$TENSORRT_INSTALL/lib"
     export PATH=/usr/src/tensorrt/bin:$PATH
 fi
 
