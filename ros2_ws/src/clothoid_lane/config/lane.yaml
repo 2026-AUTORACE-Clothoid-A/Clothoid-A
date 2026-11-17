@@ -62,16 +62,19 @@ lane_main:
     # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or sliding2025 (2025 port)
     detector: track2026
 
-    # yellow lane line (HSV). Measured on the 11-05 bags: tape H 18~28, S 70~180, V 100~220,
-    # floor S 0~35, V 35~65. The 2025 value S >= 215 matched no tape at all.
-    hsv_lower: [18, 60, 90]
-    hsv_upper: [35, 255, 255]
+    # Yellow lane line: tuned on all seven 11-17 venue bags (limo2, 7424 images).
+    # Reflections desaturate the tape; the higher V floor rejects dim low-S noise.
+    # Fully overexposed tape has no reliable hue and cannot be recovered by HSV alone.
+    hsv_lower: [15, 20, 160]
+    hsv_upper: [40, 255, 255]
     canny_low: 50            # sliding2025 only
     canny_high: 100          # sliding2025 only
 
     # track2026: white lane dividers between the yellow lines (warped image px)
-    white_s_max: 50          # white = S <= 50 and V >= 170
-    white_v_min: 170
+    white_h_min: 0           # inclusive 0..179; full range keeps the previous white mask
+    white_h_max: 179
+    white_s_max: 50          # white = S <= 50 and V >= 190
+    white_v_min: 190         # 11-17: suppress bright grey floor; mission stop-line HSV is separate
     # white_min_length (divider dash >= this many px) depends on the warp: camera_limo1.yaml / camera_limo2.yaml
     white_max_width: 14.0    # divider 8 px; crosswalk bars 25+, diamond 38+
     white_max_angle_deg: 25.0  # from the nearest yellow line; stop lines are ~90

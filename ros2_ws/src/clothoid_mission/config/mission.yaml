@@ -105,5 +105,7 @@ mission:
     approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
     image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame
     compressed: false
+    white_h_min: 0              # inclusive 0..179; full range keeps the previous white mask
+    white_h_max: 179
     white_s_max: 60             # stop line white: S <= 60, V >= 150
     white_v_min: 150

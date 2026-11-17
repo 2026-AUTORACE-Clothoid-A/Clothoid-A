@@ -81,6 +81,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('odom_topic', '/odom_25hz')
         self.declare_parameter('line_debug_topic', '/mission/line_debug_image')
         self.declare_parameter('debug', False)
+        self.declare_parameter('white_h_min', 0)         # inclusive OpenCV hue range
+        self.declare_parameter('white_h_max', 179)
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=
         self.declare_parameter('white_v_min', 150)
         self.declare_parameter('line_require_crosswalk', True)
@@ -285,6 +287,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.bev = None               # built once camera_info gives the intrinsics
         self.core = None
         self.core_phase = Phase.IDLE
+        self.add_on_set_parameters_callback(self.on_hsv_parameters)
         self.line_speed = None        # FinishCore's speed last tick, the /speed_limit while it runs
         self.bridge = CvBridge()
         self.image_sub = None
@@ -416,10 +419,27 @@ class MissionNode(QuietEventsMixin, Node):
             self.sign_time = self.now_sec()
 
     # ---- line stop (FinishCore) ------------------------------------------------------------------
+    def on_hsv_parameters(self, params):
+        """Update the existing colour mask without resetting the mission or its stop target."""
+        from rcl_interfaces.msg import SetParametersResult
+        names = ('white_h_min', 'white_h_max', 'white_s_max', 'white_v_min')
+        proposed = {p.name: p.value for p in params if p.name in names}
+        if not proposed:
+            return SetParametersResult(successful=True)
+        values = {name: proposed.get(name, self.get_parameter(name).value) for name in names}
+        if not 0 <= values['white_h_min'] <= values['white_h_max'] <= 179:
+            return SetParametersResult(successful=False,
+                reason='white hue must satisfy 0 <= white_h_min <= white_h_max <= 179')
+        if self.core is not None:
+            for name, value in values.items():
+                setattr(self.core, name, value)
+        return SetParametersResult(successful=True)
+
     def new_core(self) -> LineStopCore:
         get = lambda n: self.get_parameter(n).value  # noqa: E731
         core = LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'),
-                            get('line_min_run'))
+                            get('line_min_run'), white_h_min=get('white_h_min'),
+                            white_h_max=get('white_h_max'))
         core.min_thickness = get('line_min_thickness')
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')

@@ -42,8 +42,12 @@ def longest_runs(mask: np.ndarray) -> np.ndarray:
 
 class LineStopCore(FinishCore):
     def __init__(self, bev: Bev, p: FinishParams = FinishParams(),
-                 white_s_max: int = 60, white_v_min: int = 150, min_run: float = 0.7):
+                 white_s_max: int = 60, white_v_min: int = 150, min_run: float = 0.7,
+                 *, white_h_min: int = 0, white_h_max: int = 179):
+        if not 0 <= white_h_min <= white_h_max <= 179:
+            raise ValueError('white hue must satisfy 0 <= white_h_min <= white_h_max <= 179')
         super().__init__(bev, p)
+        self.white_h_min, self.white_h_max = white_h_min, white_h_max
         self.white_s_max, self.white_v_min = white_s_max, white_v_min
         self.min_run = min_run
         self.debug = False            # True: keep full-size masks for mission's debug image
@@ -137,7 +141,8 @@ class LineStopCore(FinishCore):
         """FinishCore.image's cross line scan, in white and with an unbroken run; no left line."""
         warped = self.bev.warp_image(bgr)[:, self._c0:self._c1]
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
-        white = (hsv[..., 1] <= self.white_s_max) & (hsv[..., 2] >= self.white_v_min) & self._band
+        white = ((hsv[..., 0] >= self.white_h_min) & (hsv[..., 0] <= self.white_h_max) &
+                 (hsv[..., 1] <= self.white_s_max) & (hsv[..., 2] >= self.white_v_min) & self._band)
         crosswalks = self._crosswalk_spans(white) if self.observe_scene or self.require_crosswalk else ()
         if self.debug:
             full = np.zeros(self.bev.valid.shape, bool)

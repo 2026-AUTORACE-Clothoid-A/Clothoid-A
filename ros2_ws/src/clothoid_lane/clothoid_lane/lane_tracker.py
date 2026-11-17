@@ -55,6 +55,8 @@ class TrackerParams:
     zigzag_min_flips: int = 3         # sign changes of that swing along the line
     zigzag_hold: int = 15             # frames the zone lasts with no boundary in view
     zigzag_width_ratio: float = 1.07  # zone lane width / normal: bags 182/170 px, drawing 570/520 mm
+    white_h_min: int = 0             # inclusive OpenCV hue range; full range preserves S/V-only mask
+    white_h_max: int = 179
 
 
 @dataclass(eq=False)   # compared by identity: the generated __eq__ would compare numpy arrays
@@ -97,8 +99,11 @@ class LaneTracker:
 
     def configure(self, params: LaneParams, tracker: Optional[TrackerParams] = None) -> None:
         matrix = make_warp_matrix(params)   # raises first, so a bad set keeps the old one
+        tuning = tracker or getattr(self, 't', None) or TrackerParams()
+        if not 0 <= tuning.white_h_min <= tuning.white_h_max <= 179:
+            raise ValueError('white hue must satisfy 0 <= white_h_min <= white_h_max <= 179')
         self._matrix, self.p = matrix, params
-        self.t = tracker or getattr(self, 't', None) or TrackerParams()
+        self.t = tuning
         size = (params.warp_w, params.warp_h)
         ones = np.full((params.height, params.width), 255, np.uint8)
         # pixels of the warped image that come from inside the camera image
@@ -121,7 +126,8 @@ class LaneTracker:
                                      (p.warp_w, p.warp_h), flags=cv2.INTER_LINEAR)
         hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         yellow = cv2.inRange(hsv, np.array(p.hsv_lower), np.array(p.hsv_upper)) > 0
-        white = (hsv[..., 1] <= t.white_s_max) & (hsv[..., 2] >= t.white_v_min)
+        white = ((hsv[..., 0] >= t.white_h_min) & (hsv[..., 0] <= t.white_h_max) &
+                 (hsv[..., 1] <= t.white_s_max) & (hsv[..., 2] >= t.white_v_min))
         return yellow & self._valid, white & self._valid & ~yellow
 
     # --- lines ------------------------------------------------------------------

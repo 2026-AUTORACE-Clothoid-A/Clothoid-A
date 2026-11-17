@@ -10,7 +10,7 @@ def text(image, value, position=(8, 20), color=(235, 240, 245)):
     cv2.putText(image, value, position, cv2.FONT_HERSHEY_SIMPLEX, .45, color, 1, cv2.LINE_AA)
 
 
-def panels(data, frame):
+def panels(data, frame, hsv_settings=None, white_source='mission'):
     from clothoid_lane.lane_detector import make_warp_matrix
     from clothoid_lane.lane_main import make_detector
     from clothoid_mission.line_stop import LineStopCore, Phase
@@ -35,14 +35,24 @@ def panels(data, frame):
     warped = cv2.warpPerspective(cv2.GaussianBlur(raw, (5, 5), 0), matrix,
                                 (warp.warp_w, warp.warp_h))
     hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
-    if '_masker' not in data:
-        data['_masker'] = make_detector(data['detector_values'].__getitem__)
+    settings = hsv_settings or data['hsv_applied']
+    preview = settings != data['hsv_applied']
+    values = {**data['detector_values'], **settings['lane']}
+    mask_key = (tuple(values['hsv_lower']), tuple(values['hsv_upper']),
+                values['white_h_min'], values['white_h_max'], values['white_s_max'], values['white_v_min'])
+    if data.get('_masker_hsv') != mask_key:
+        data['_masker'] = make_detector(values.__getitem__)
+        data['_masker_hsv'] = mask_key
     masker = data['_masker']
     if hasattr(masker, '_masks'):
-        yellow, _ = masker._masks(raw)
+        yellow, lane_white = masker._masks(raw)
     else:
         # sliding2025 has no colour-only mask API; this panel shows its configured HSV stage.
-        yellow = cv2.inRange(hsv, np.array(data['yellow_lower']), np.array(data['yellow_upper'])) > 0
+        yellow = cv2.inRange(hsv, np.array(values['hsv_lower']), np.array(values['hsv_upper'])) > 0
+        lane_white = ((hsv[..., 0] >= values['white_h_min']) &
+                      (hsv[..., 0] <= values['white_h_max']) &
+                      (hsv[..., 1] <= values['white_s_max']) &
+                      (hsv[..., 2] >= values['white_v_min']) & ~yellow)
     yellow_view = np.zeros_like(warped)
     yellow_view[yellow] = (30, 220, 250)
 
@@ -61,6 +71,10 @@ def panels(data, frame):
             probe.require_crosswalk = p['line_require_crosswalk']
             data['_probe'] = probe
         probe = data['_probe']
+        probe.white_h_min = settings['mission']['white_h_min']
+        probe.white_h_max = settings['mission']['white_h_max']
+        probe.white_s_max = settings['mission']['white_s_max']
+        probe.white_v_min = settings['mission']['white_v_min']
         # Preview the current classifier even when mission has not armed the line stop.
         probe.phase = Phase.IDLE
         probe.target = None
@@ -82,7 +96,8 @@ def panels(data, frame):
                 text(line_view, f'{distance:.1f}m', (3, max(12, int(np.median(rows)))))
         cross_x = probe.cross_x
         remaining = frame['state'].get('remaining')
-        committed = remaining is not None and frame['state'].get('line_phase') in ('commit', 'arrived')
+        committed = (not preview and remaining is not None and
+                     frame['state'].get('line_phase') in ('commit', 'arrived'))
         if committed:
             cross_x = remaining+data['finish_params'].front+data['finish_params'].stop_gap
         if cross_x is not None:
@@ -92,7 +107,7 @@ def panels(data, frame):
         label = 'stop target' if committed else 'stop candidate'
         text(line_view, label+': --' if cross_x is None else f'{label}: {cross_x:.3f} m', (80, 20))
         entry = frame['state'].get('entry_remaining')
-        if entry is not None and frame['state'].get('entry_active'):
+        if not preview and entry is not None and frame['state'].get('entry_active'):
             entry_x = entry+data['params']['front_axle_x']
             pixels = (np.abs(bev.gx-entry_x) < .004) & bev.valid
             line_view[pixels] = (0, 180, 255)
@@ -101,6 +116,10 @@ def panels(data, frame):
     else:
         text(line_view, 'No CameraInfo: metric stop-line unavailable')
         text(white_view, 'No CameraInfo: production mask unavailable')
+
+    if white_source == 'lane':
+        white_view = np.zeros_like(warped)
+        white_view[lane_white] = (235, 235, 235)
 
     hue = hsv.copy(); hue[..., 1:] = 255
     h = cv2.cvtColor(hue, cv2.COLOR_HSV2BGR)

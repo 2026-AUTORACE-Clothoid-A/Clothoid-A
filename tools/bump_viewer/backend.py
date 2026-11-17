@@ -19,6 +19,8 @@ import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
+HSV_PARAMS = {'lane': ('hsv_lower', 'hsv_upper', 'white_h_min', 'white_h_max', 'white_s_max', 'white_v_min'),
+              'mission': ('white_h_min', 'white_h_max', 'white_s_max', 'white_v_min')}
 for package in ('clothoid_common', 'clothoid_lane', 'clothoid_parking',
                 'clothoid_finish', 'clothoid_mission'):
     sys.path.insert(0, str(ROOT/'ros2_ws/src'/package))
@@ -166,7 +168,7 @@ def detection_rows(node, detections):
     return rows
 
 
-def analyse(path, camera='limo2', progress=lambda value: None):
+def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=None):
     import rclpy
     from rclpy.time import Time
     from rclpy.clock import ClockType
@@ -200,14 +202,42 @@ def analyse(path, camera='limo2', progress=lambda value: None):
         mission = mission_module.MissionNode(); nodes.append(mission)
         lane = lane_module.LaneMainNode(); nodes.append(lane)
         mp, lp = capture_publishers(mission), capture_publishers(lane)
+        hsv_nodes = {'lane': lane, 'mission': mission}
+        def hsv_settings():
+            result = {group: {name: hsv_nodes[group].get_parameter(name).value for name in names}
+                      for group, names in HSV_PARAMS.items()}
+            for name in ('hsv_lower', 'hsv_upper'):
+                result['lane'][name] = list(result['lane'][name])
+            return result
+        hsv_baseline = hsv_settings()
+        # Set only these offline nodes, before the first image/CameraInfo. The mission builds
+        # its stop-line cores from these parameters, and lane rebuilds its detector atomically.
+        from rclpy.parameter import Parameter
+        for group, values in (hsv_overrides or {}).items():
+            if group not in HSV_PARAMS or set(values)-set(HSV_PARAMS[group]):
+                raise ValueError('알 수 없는 HSV 조정 항목입니다.')
+            parameters = [Parameter(name, value=value) for name, value in values.items()]
+            if parameters:
+                accepted = hsv_nodes[group].set_parameters_atomically(parameters)
+                if not accepted.successful:
+                    raise ValueError('HSV 적용 실패: '+accepted.reason)
+        hsv_applied = hsv_settings()
         mission._image_on = lambda on: None
         clock = SimpleNamespace(ns=start)
+        replay_logs = []
+        from .logs import entry, STATE_KEYS
+        def logger(node_name):
+            def emit(level):
+                return lambda message, *args, **kwargs: replay_logs.append(
+                    entry((clock.ns-start)*1e-9, '현재 재계산', node_name, level, str(message)))
+            return SimpleNamespace(**{name: emit(level) for name, level in (
+                ('info', 'INFO'), ('warn', 'WARN'), ('warning', 'WARN'), ('debug', 'DEBUG'),
+                ('error', 'ERROR'), ('fatal', 'FATAL'))})
         virtual = SimpleNamespace(now=lambda: Time(nanoseconds=clock.ns, clock_type=ClockType.ROS_TIME))
         for node in nodes:
             node.get_clock = lambda: virtual
-            node.get_logger = lambda: SimpleNamespace(info=lambda *a, **k: None,
-                warn=lambda *a, **k: None, warning=lambda *a, **k: None,
-                debug=lambda *a, **k: None, error=lambda *a, **k: None)
+            captured_logger = logger(node.get_name())
+            node.get_logger = lambda captured_logger=captured_logger: captured_logger
         for key, callback in (('limit_pub', lane.on_speed_limit), ('direction_pub', lane.on_direction),
                               ('parking_pub', lane.on_parking), ('steering_lock_pub', lane.on_steering_lock),
                               ('bump_approach_pub', lane.on_bump_approach)):
@@ -248,14 +278,21 @@ def analyse(path, camera='limo2', progress=lambda value: None):
             return current_result
         lane.detector.detect = detect
         last_state = None; last_lane = None; last_confirmed = None; last_recorded = None
+        last_replay_state = None
         next_tick = start
         period = round(1e9/mission.get_parameter('rate_hz').value)
         value = lambda n: mission.get_parameter(n).value
         def tick(stamp):
             nonlocal last_state, last_confirmed
+            nonlocal last_replay_state
             clock.ns = stamp
             mission.on_timer()
             state = json.loads(mp['mission_state_pub'].last.data)
+            evidence = {k: state[k] for k in STATE_KEYS if k in state}
+            if evidence != last_replay_state:
+                replay_logs.append(entry((stamp-start)*1e-9, '현재 재계산', 'mission/state',
+                    'STATE', json.dumps(evidence, ensure_ascii=False), json.dumps(state, ensure_ascii=False)))
+                last_replay_state = evidence
             key = (state.get('bump_state'), state.get('line_phase'), state.get('steering_lock'),
                    state.get('entry_phase'))
             if key != last_state:
@@ -357,7 +394,7 @@ def analyse(path, camera='limo2', progress=lambda value: None):
         if not frames:
             raise ValueError('카메라 프레임을 읽지 못했습니다.')
         parameters = {n: mission.get_parameter(n).value for n in (
-            'white_s_max', 'white_v_min', 'line_min_run', 'line_band', 'line_min_thickness',
+            'white_h_min', 'white_h_max', 'white_s_max', 'white_v_min', 'line_min_run', 'line_band', 'line_min_thickness',
             'line_max_thickness', 'line_require_crosswalk', 'input_timeout', 'bump_pitch_thresh',
             'bump_level_thresh', 'bump_level_duration', 'bump_arm_timeout', 'bump_cooldown',
             'bump_min_area', 'bump_min_height', 'detection_confidence', 'detection_confirm_hits',
@@ -369,15 +406,20 @@ def analyse(path, camera='limo2', progress=lambda value: None):
         for file in configs:
             digest.update(file.read_bytes())
         digest.update(Path(__file__).read_bytes())
+        digest.update(json.dumps(hsv_applied, sort_keys=True).encode())
         result = dict(path=str(Path(path)), frames=frames, events=events, warnings=sorted(set(warnings)),
             params=parameters, warp=lane.detector.p, bev=mission.bev, camera=camera,
             detector_values={n: lane.get_parameter(n).value for n in lane_module.DETECTOR_PARAMS},
             cam=asdict(mission.cam), finish_params=mission.finish_params,
             image_topic=image_topic,
+            hsv_baseline=hsv_baseline, hsv_applied=hsv_applied,
             digest=digest.hexdigest()[:12], duration=(end-start)*1e-9,
             yellow_lower=tuple(lane.detector.p.hsv_lower), yellow_upper=tuple(lane.detector.p.hsv_upper),
             replay='Production MissionNode + LaneMainNode callbacks; 20 Hz mission timer; recorded detections')
         progress(100)
+        from .logs import load
+        result.update(load(files, start, path))
+        result['replay_logs'] = replay_logs
         return result
     finally:
         for node in nodes:

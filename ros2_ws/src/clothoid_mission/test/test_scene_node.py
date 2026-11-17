@@ -12,6 +12,7 @@ from clothoid_finish.finish_core import Phase
 from clothoid_interfaces.msg import Detection, DetectionArray
 from clothoid_mission.mission_node import MissionNode
 from clothoid_mission.mission_logic import STOPPED_LIGHT, DRIVE
+from rclpy.parameter import Parameter
 
 
 @pytest.fixture
@@ -42,6 +43,24 @@ def detections(node, clock, now, name, x=100):
     msg.header.stamp.nanosec = int(round((now - int(now)) * 1e9))
     node.on_detections(msg)
     return msg
+
+
+def test_live_white_hue_updates_existing_core_and_preserves_the_committed_target(node):
+    n, _ = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+        k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    core = n.core
+    core.phase, core.target = Phase.COMMIT, 1.2
+    result = n.set_parameters_atomically([Parameter('white_h_max', value=45)])
+    assert result.successful
+    assert n.core is core and core.white_h_max == 45
+    assert core.phase == Phase.COMMIT and core.target == 1.2
+    assert n.new_core().white_h_max == 45
+    result = n.set_parameters_atomically([Parameter('white_h_min', value=60)])
+    assert not result.successful
+    assert core.white_h_min == n.get_parameter('white_h_min').value == 0
+    assert core.white_h_max == 45
 
 
 def test_selected_red_is_not_released_by_another_green(node):

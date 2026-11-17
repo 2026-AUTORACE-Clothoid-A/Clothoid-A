@@ -22,6 +22,25 @@ HALF_LANE, LINE_W = 0.26, 0.02
 STOP_X = 2.0                       # near edge of the white stop line, world x
 
 
+def test_white_hue_rejects_a_tinted_stop_line_with_the_same_saturation_and_brightness():
+    import cv2
+    cam = CameraModel()
+    bev = Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam)
+    image = render(cam, 1.3, 0., 0., letters=False)
+    paint = np.all(image == WHITE, axis=2)
+    tint = cv2.cvtColor(np.array([[[120, 30, 235]]], np.uint8), cv2.COLOR_HSV2BGR)[0, 0]
+    image[paint] = tint
+    original = LineStopCore(bev)
+    filtered = LineStopCore(bev, white_h_min=0, white_h_max=45)
+    original.image(0., image)
+    filtered.image(0., image)
+    assert original.cross_x is not None
+    assert filtered.cross_x is None
+    image[paint] = WHITE
+    filtered.image(.1, image)
+    assert filtered.cross_x is not None
+
+
 def render(cam, x, y, yaw, crosswalk=True, letters=True, boundary=True, diamond=False):
     h, w = 480, 640
     v, u = np.mgrid[0:h, 0:w].astype(np.float64)
