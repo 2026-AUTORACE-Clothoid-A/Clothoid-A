@@ -10,10 +10,12 @@ def text(image, value, position=(8, 20), color=(235, 240, 245)):
     cv2.putText(image, value, position, cv2.FONT_HERSHEY_SIMPLEX, .45, color, 1, cv2.LINE_AA)
 
 
-def panels(data, frame, hsv_settings=None, white_source='mission'):
+def panels(data, frame, hsv_settings=None, white_source='mission', color_source='lane'):
     from clothoid_lane.lane_detector import make_warp_matrix
     from clothoid_lane.lane_main import make_detector
     from clothoid_mission.line_stop import LineStopCore, Phase
+    from clothoid_common.color import ColorPipeline, color_params
+    import json
 
     raw = read_image(frame['reference'])
     camera = raw.copy()
@@ -34,12 +36,10 @@ def panels(data, frame, hsv_settings=None, white_source='mission'):
 
     warped = cv2.warpPerspective(cv2.GaussianBlur(raw, (5, 5), 0), matrix,
                                 (warp.warp_w, warp.warp_h))
-    hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
     settings = hsv_settings or data['hsv_applied']
     preview = settings != data['hsv_applied']
     values = {**data['detector_values'], **settings['lane']}
-    mask_key = (tuple(values['hsv_lower']), tuple(values['hsv_upper']),
-                values['white_h_min'], values['white_h_max'], values['white_s_max'], values['white_v_min'])
+    mask_key = json.dumps(settings['lane'], sort_keys=True)
     if data.get('_masker_hsv') != mask_key:
         data['_masker'] = make_detector(values.__getitem__)
         data['_masker_hsv'] = mask_key
@@ -48,6 +48,7 @@ def panels(data, frame, hsv_settings=None, white_source='mission'):
         yellow, lane_white = masker._masks(raw)
     else:
         # sliding2025 has no colour-only mask API; this panel shows its configured HSV stage.
+        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
         yellow = cv2.inRange(hsv, np.array(values['hsv_lower']), np.array(values['hsv_upper'])) > 0
         lane_white = ((hsv[..., 0] >= values['white_h_min']) &
                       (hsv[..., 0] <= values['white_h_max']) &
@@ -56,10 +57,37 @@ def panels(data, frame, hsv_settings=None, white_source='mission'):
     yellow_view = np.zeros_like(warped)
     yellow_view[yellow] = (30, 220, 250)
 
+    # Show the selected source's actual preprocessing; pixel probes use clean data, not overlays.
+    pipeline_key = json.dumps(settings[color_source], sort_keys=True)
+    if data.get('_preview_pipeline_key') != pipeline_key:
+        data['_preview_pipeline'] = ColorPipeline(color_params(settings[color_source].__getitem__))
+        data['_preview_pipeline_key'] = pipeline_key
+    pipeline = data['_preview_pipeline']
+    processed = pipeline.preprocess(raw)
+    color_bev = cv2.warpPerspective(cv2.GaussianBlur(processed, (5, 5), 0), matrix,
+                                  (warp.warp_w, warp.warp_h))
+    hsv = cv2.cvtColor(color_bev, cv2.COLOR_BGR2HSV)
+    baseline_key = json.dumps(data['hsv_baseline']['lane'], sort_keys=True)
+    if data.get('_baseline_mask_key') != baseline_key:
+        baseline_values = {**data['detector_values'], **data['hsv_baseline']['lane']}
+        data['_baseline_masker'] = make_detector(baseline_values.__getitem__)
+        data['_baseline_mask_key'] = baseline_key
+    if hasattr(data['_baseline_masker'], '_masks'):
+        by, bw = data['_baseline_masker']._masks(raw)
+    else:
+        baseline = data['hsv_baseline']['lane']
+        by, bw = ColorPipeline().masks(warped, **{k: baseline[k] for k in
+            ('hsv_lower', 'hsv_upper', 'white_h_min', 'white_h_max', 'white_s_max', 'white_v_min')})
+    original_mask = np.zeros_like(warped); original_mask[by] = (30, 220, 250); original_mask[bw] = 235
+    adjusted_mask = yellow_view.copy(); adjusted_mask[lane_white] = 235
+    text(original_mask, 'YAML baseline'); text(adjusted_mask, 'Current preview')
+    comparison = np.hstack((original_mask, adjusted_mask))
+
     lane = (cv2.imdecode(np.frombuffer(frame['lane_jpeg'], np.uint8), cv2.IMREAD_COLOR)
             if frame['lane_jpeg'] else warped.copy())
     white_view = np.zeros_like(warped)
     line_view = warped.copy()
+    mission_pixels = warped
     cross_x = None
     bev = data['bev']
     if bev is not None:
@@ -75,6 +103,12 @@ def panels(data, frame, hsv_settings=None, white_source='mission'):
         probe.white_h_max = settings['mission']['white_h_max']
         probe.white_s_max = settings['mission']['white_s_max']
         probe.white_v_min = settings['mission']['white_v_min']
+        mission_key = json.dumps(settings['mission'], sort_keys=True)
+        if data.get('_probe_color_key') != mission_key:
+            probe.color_pipeline = ColorPipeline(color_params(settings['mission'].__getitem__))
+            data['_probe_color_key'] = mission_key
+        mission_pixels = bev.warp_image(probe.color_pipeline.preprocess(raw))
+        line_view = mission_pixels.copy()
         # Preview the current classifier even when mission has not armed the line stop.
         probe.phase = Phase.IDLE
         probe.target = None
@@ -128,6 +162,11 @@ def panels(data, frame, hsv_settings=None, white_source='mission'):
     for image, name in ((h, 'H 0..179'), (s, 'S 0..255'), (v, 'V 0..255')):
         text(image, name)
     channels = np.hstack((h, s, v))
-    return dict(camera=camera, lane=lane, line=line_view, white=white_view,
+    lane_bev = masker.color_pipeline.warp(raw, matrix, (warp.warp_w, warp.warp_h)) if hasattr(masker, 'color_pipeline') else warped
+    return dict(camera=camera, processed=processed, comparison=comparison, lane=lane, line=line_view, white=white_view,
                 yellow=yellow_view, hsv=channels, camera_hsv=cv2.cvtColor(raw, cv2.COLOR_BGR2HSV),
-                hsv_views=(h, s, v, channels), bev_hsv=hsv, cross_x=cross_x)
+                hsv_views=(h, s, v, channels), bev_hsv=hsv, cross_x=cross_x,
+                raw_pixels=raw, processed_pixels=processed, color_bev_pixels=color_bev,
+                lane_pixels=lane_bev, mission_pixels=mission_pixels,
+                yellow_mask=yellow, lane_white_mask=lane_white,
+                mission_white_mask=probe.white.copy() if bev is not None else None)

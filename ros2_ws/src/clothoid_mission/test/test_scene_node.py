@@ -63,6 +63,22 @@ def test_live_white_hue_updates_existing_core_and_preserves_the_committed_target
     assert core.white_h_max == 45
 
 
+def test_color_switch_preserves_committed_mission_and_updates_new_cores(node):
+    n, _ = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+        k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    core = n.core
+    core.phase, core.target = Phase.COMMIT, 1.2
+    assert n.set_parameters_atomically([Parameter('color_method', value='rgb'),
+        Parameter('gamma_enabled', value=True)]).successful
+    assert n.core is core and core.target == 1.2 and core.phase == Phase.COMMIT
+    assert core.color_pipeline.p.color_method == n.new_core().color_pipeline.p.color_method == 'rgb'
+    pipeline = core.color_pipeline
+    assert not n.set_parameters_atomically([Parameter('gamma', value=-1.)]).successful
+    assert core.color_pipeline is pipeline and n.get_parameter('gamma').value == 1.2
+
+
 def test_selected_red_is_not_released_by_another_green(node):
     n, clock = node
     for now in (1000., 1000.1, 1000.2):

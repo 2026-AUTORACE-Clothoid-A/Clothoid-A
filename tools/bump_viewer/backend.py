@@ -19,11 +19,15 @@ import cv2
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
-HSV_PARAMS = {'lane': ('hsv_lower', 'hsv_upper', 'white_h_min', 'white_h_max', 'white_s_max', 'white_v_min'),
-              'mission': ('white_h_min', 'white_h_max', 'white_s_max', 'white_v_min')}
 for package in ('clothoid_common', 'clothoid_lane', 'clothoid_parking',
                 'clothoid_finish', 'clothoid_mission'):
     sys.path.insert(0, str(ROOT/'ros2_ws/src'/package))
+
+from clothoid_common.color import COLOR_NAMES
+
+# Keep the existing API/result names for saved viewer callers; these now include all color settings.
+HSV_PARAMS = {'lane': ('hsv_lower', 'hsv_upper', 'white_h_min', 'white_h_max', 'white_s_max', 'white_v_min') + COLOR_NAMES,
+              'mission': ('white_h_min', 'white_h_max', 'white_s_max', 'white_v_min') + COLOR_NAMES}
 
 
 class Capture:
@@ -51,7 +55,7 @@ def capture_publishers(node):
 
 def modules():
     names = (
-        'clothoid_common.image_utils', 'clothoid_lane.lane_detector',
+        'clothoid_common.image_utils', 'clothoid_common.color', 'clothoid_lane.lane_detector',
         'clothoid_lane.lane_tracker', 'clothoid_lane.steering', 'clothoid_lane.bump_gap',
         'clothoid_mission.scene_evidence', 'clothoid_mission.sign_tracker',
         'clothoid_parking.tracker', 'clothoid_finish.bev', 'clothoid_finish.finish_core',
@@ -215,12 +219,12 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         from rclpy.parameter import Parameter
         for group, values in (hsv_overrides or {}).items():
             if group not in HSV_PARAMS or set(values)-set(HSV_PARAMS[group]):
-                raise ValueError('알 수 없는 HSV 조정 항목입니다.')
+                raise ValueError('알 수 없는 색상 / 보정 조정 항목입니다.')
             parameters = [Parameter(name, value=value) for name, value in values.items()]
             if parameters:
                 accepted = hsv_nodes[group].set_parameters_atomically(parameters)
                 if not accepted.successful:
-                    raise ValueError('HSV 적용 실패: '+accepted.reason)
+                    raise ValueError('색상 / 보정 적용 실패: '+accepted.reason)
         hsv_applied = hsv_settings()
         mission._image_on = lambda on: None
         clock = SimpleNamespace(ns=start)

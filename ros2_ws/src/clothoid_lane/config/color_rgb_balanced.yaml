@@ -1,0 +1,12 @@
+# Best balanced sparse-ROI score on seven 11-17 bags; some white dashes become yellow.
+# Lane-only opt-in preset. No camera exposure/WB/gain changes; mission settings stay separate.
+lane_main:
+  ros__parameters:
+    color_method: rgb
+    gamma_enabled: true
+    gamma: 1.2
+    clahe_enabled: false
+    rgb_yellow_difference_min: 5
+    rgb_yellow_v_min: 90
+    rgb_white_spread_max: 30
+    rgb_white_v_min: 190

@@ -62,6 +62,24 @@ lane_main:
     # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or sliding2025 (2025 port)
     detector: track2026
 
+    # Current-image color pipeline; gamma/CLAHE run before blur and BEV.
+    # HSV without preprocessing preserves the existing behavior. See color_*.yaml presets.
+    color_method: hsv       # hsv | lab | rgb (track2026)
+    gamma_enabled: false
+    gamma: 1.2              # output = round(255 * (input / 255)^gamma); >1 darkens
+    clahe_enabled: false
+    clahe_clip_limit: 2.0   # 8-bit Lab L only
+    clahe_grid_size: 8
+    lab_yellow_b_min: 2.0   # float CIELab: L 0..100, signed a/b
+    lab_yellow_a_abs_max: 25.0
+    lab_yellow_l_min: 40.0
+    lab_white_chroma_max: 16.0
+    lab_white_l_min: 80.0
+    rgb_yellow_difference_min: 5   # min(R,G) - B, 0..255 channels
+    rgb_yellow_v_min: 90
+    rgb_white_spread_max: 30      # max(R,G,B) - min(R,G,B)
+    rgb_white_v_min: 190
+
     # Yellow lane line: tuned on all seven 11-17 venue bags (limo2, 7424 images).
     # Reflections desaturate the tape; the higher V floor rejects dim low-S noise.
     # Fully overexposed tape has no reliable hue and cannot be recovered by HSV alone.
