@@ -326,7 +326,12 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         if last is not None and last[0] == key and now - last[1] < self.get_parameter('exit_log_repeat').value - 1e-6:
             return
         self.exit_logged = (key, now)
-        (self.get_logger().warn if warn else self.get_logger().info)(message)
+        # one call site per severity: rclpy refuses a call site that changes severity (ValueError
+        # 'Logger severity cannot be changed between calls'), which killed the node at every cone exit
+        if warn:
+            self.get_logger().warn(message)
+        else:
+            self.get_logger().info(message)
 
     def publish_stop(self):
         self.last_command_steering = 0.
