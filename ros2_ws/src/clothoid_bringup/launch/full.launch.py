@@ -57,7 +57,8 @@ def generate_launch_description():
     switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_avoid', 'use_parking', 'use_finish',
                 'use_mission']
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
-                     'use_image_10hz', 'steering_scale', 'max_inner_angle']
+                     'use_image_10hz', 'steering_scale', 'max_inner_angle', 'camera_exposure',
+                     'camera_white_balance']
     debug = LaunchConfiguration('debug')
     # defaults must match bringup.launch.py
     mux_args = {'require_arm': 'false', 'mux_output': '/cmd_vel', 'cmd_timeout': '0.5'}
@@ -87,6 +88,8 @@ def generate_launch_description():
                               description='show yolo detection window'),
         DeclareLaunchArgument('camera_pitch', default_value='0.0'),
         DeclareLaunchArgument('use_camera', default_value='true'),
+        DeclareLaunchArgument('camera_exposure', default_value='1200', description='-1 = auto exposure'),
+        DeclareLaunchArgument('camera_white_balance', default_value='-1', description='-1 = auto'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_ekf', default_value='false'),
         DeclareLaunchArgument('use_joint_states', default_value='false'),
