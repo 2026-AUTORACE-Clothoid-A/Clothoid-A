@@ -148,8 +148,11 @@ class AvoidParams:
     course_snap_max_deg: float = 15.0
     # no start line confirmed by the map although the car came within start_line_radius of the point
     # and is course_fallback_past m further off again, or the odometer passed start_line_odometer by
-    # course_fallback_odometer: the dashed lane-line pair decides from then on (a wrong start pose)
-    course_fallback_past: float = 1.0
+    # course_fallback_odometer: the dashed lane-line pair decides from then on and a blocker starts
+    # the mission (a wrong start pose). 0: as soon as it leaves the circle (1.0 put it ~2 m past the
+    # line). The line is decided 0.05~0.42 m from the point, 0.85~1.22 m before the car leaves the
+    # circle (20 runs 1115~1118: decided when the line is lost from view, before the base is on it)
+    course_fallback_past: float = 0.0
     start_line_odometer: float = 14.2
     course_fallback_odometer: float = 3.0
     # m: a start line crossed after the start must be this close. Only lines confirmed as the

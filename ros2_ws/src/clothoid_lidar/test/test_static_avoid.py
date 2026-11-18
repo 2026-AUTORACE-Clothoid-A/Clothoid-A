@@ -1227,6 +1227,19 @@ def test_course_map_falls_back_after_passing_the_point_without_a_line():
     assert 'never within' in far.should_fall_back(17.5, entry)
 
 
+def test_course_map_falls_back_as_soon_as_it_leaves_the_circle():
+    """No start line on the map and out of the start-line circle again: the fallback at once (it
+    waited for 1 m more, ~2 m past the line)."""
+    from clothoid_lidar.section_cues import EntryLineTracker
+    tr, course = _course_tracker()
+    entry = EntryLineTracker()
+    course.min_far = 0.3
+    course.x, course.y = 8.25 - 0.95, -4.65                 # still inside
+    assert course.should_fall_back(14.5, entry) is None
+    course.x = 8.25 - 1.05                                  # just out
+    assert 'passed the start line point' in course.should_fall_back(14.6, entry)
+
+
 def test_course_map_decides_without_the_lane_line_pair():
     from clothoid_lidar.section_cues import Crossing, EntryLineTracker, check_start_line
     tr = EntryLineTracker()

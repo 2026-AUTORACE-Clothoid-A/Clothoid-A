@@ -76,7 +76,7 @@ static_avoid:
     course_straight: 1.5
     course_straight_spread_deg: 6.0
     course_snap_max_deg: 15.0
-    course_fallback_past: 1.0
+    course_fallback_past: 0.0     # m past the start-line circle without the line: fall back (pair / blocker) at once
     start_line_odometer: 14.2
     course_fallback_odometer: 3.0
     # where the node started, from the first turn (AvoidParams.course_turn_deg): the race start ->
