@@ -24,6 +24,7 @@ import math
 import inspect
 
 import cv2
+from clothoid_common.color import COLOR_NAMES, ColorPipeline, color_defaults, color_params, validate_hsv
 import numpy as np
 import rclpy
 from clothoid_common.qos import IMAGE_QOS
@@ -81,8 +82,13 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('odom_topic', '/odom_25hz')
         self.declare_parameter('line_debug_topic', '/mission/line_debug_image')
         self.declare_parameter('debug', False)
+        self.declare_parameter('white_h_min', 0)         # inclusive OpenCV hue range
+        self.declare_parameter('white_h_max', 179)
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=
         self.declare_parameter('white_v_min', 150)
+        for name, default in color_defaults().items():
+            self.declare_parameter(name, default)
+        color_params(lambda name: self.get_parameter(name).value)
         self.declare_parameter('line_require_crosswalk', True)
         self.declare_parameter('front_axle_x', 0.10)
         self.declare_parameter('entry_reaction_sec', 0.10)
@@ -290,6 +296,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.bev = None               # built once camera_info gives the intrinsics
         self.core = None
         self.core_phase = Phase.IDLE
+        self.add_on_set_parameters_callback(self.on_hsv_parameters)
         self.line_speed = None        # FinishCore's speed last tick, the /speed_limit while it runs
         self.bridge = CvBridge()
         self.image_sub = None
@@ -421,10 +428,31 @@ class MissionNode(QuietEventsMixin, Node):
             self.sign_time = self.now_sec()
 
     # ---- line stop (FinishCore) ------------------------------------------------------------------
+    def on_hsv_parameters(self, params):
+        """Update the existing colour mask without resetting the mission or its stop target."""
+        from rcl_interfaces.msg import SetParametersResult
+        hsv_names = ('white_h_min', 'white_h_max', 'white_s_max', 'white_v_min')
+        names = hsv_names + COLOR_NAMES
+        proposed = {p.name: p.value for p in params if p.name in names}
+        if not proposed:
+            return SetParametersResult(successful=True)
+        values = {name: proposed.get(name, self.get_parameter(name).value) for name in names}
+        try:
+            validate_hsv((0, 0, 0), (179, 255, 255), *(values[name] for name in hsv_names))
+            pipeline = ColorPipeline(color_params(values.__getitem__))
+        except (ValueError, TypeError) as exc:
+            return SetParametersResult(successful=False, reason=str(exc))
+        if self.core is not None:
+            for name in hsv_names:
+                setattr(self.core, name, values[name])
+            self.core.color_pipeline = pipeline
+        return SetParametersResult(successful=True)
+
     def new_core(self) -> LineStopCore:
         get = lambda n: self.get_parameter(n).value  # noqa: E731
         core = LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'),
-                            get('line_min_run'))
+                            get('line_min_run'), white_h_min=get('white_h_min'),
+                            white_h_max=get('white_h_max'), color=color_params(get))
         core.min_thickness = get('line_min_thickness')
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')

@@ -1,0 +1,11 @@
+# Preserve more white divider pixels at the expense of weak reflective yellow pixels.
+lane_main:
+  ros__parameters:
+    color_method: rgb
+    gamma_enabled: true
+    gamma: 1.2
+    clahe_enabled: false
+    rgb_yellow_difference_min: 12
+    rgb_yellow_v_min: 90
+    rgb_white_spread_max: 30
+    rgb_white_v_min: 190
