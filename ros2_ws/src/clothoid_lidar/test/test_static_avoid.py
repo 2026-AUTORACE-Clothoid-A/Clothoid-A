@@ -530,8 +530,11 @@ def test_skewed_frame_without_a_start_fit():
     w = 0.50
     limos = [(1.5, 0.0), (3.5, 0.0), (3.0, -w)]
     stuck = run(limos, direction=0, skew_deg=-12.0,
-                params=replace(AvoidParams(), sequence=False, escape=False))
+                params=replace(AvoidParams(), sequence=False, escape=False, stuck_repeat_back=False))
     assert stuck['x'] < 2.0 and stuck['stops'] > 0
+    # the dead end + 0.8 m back-up at the repeated stuck gets even these through
+    check(run(limos, direction=0, skew_deg=-12.0,
+              params=replace(AvoidParams(), sequence=False, escape=False)), w, 1)
     check(run(limos, direction=0, skew_deg=-12.0), w, 1)
     check(run(limos, direction=0, skew_deg=-12.0,
               params=replace(AvoidParams(), sequence=False, route=True)), w, 1)
@@ -758,6 +761,18 @@ def test_fork_turn_on_the_spot_into_the_sign_lane_without_the_island():
     out = run([(c2, 0.0), (3.0, 0.5)], direction=(0, 3.7), t_max=90)
     check(out, 0.50, 1)
     assert not out.get('island_tip'), out
+
+
+def test_a_dead_end_and_a_longer_back_up_at_a_repeated_stuck():
+    # 1118_1616 (LIMO clusters from the bag): stuck 1.5 m before the island with lane 1 the sign's
+    # lane, it backed up 0.2 m and drove into the same spot six times (in the simulation: never
+    # through in 90 s). Stuck there again: that spot is a dead end, the back-up 0.8 m
+    layout = [(1.07, 0.09), (1.68, 0.09), (2.13, 0.66), (2.36, -0.49), (3.11, 0.10), (3.57, 0.67),
+              (3.80, -0.44)]
+    out = run(layout, direction=0, seed=1, t_max=90)
+    check(out, 0.50, 1)
+    old = run(layout, direction=0, seed=1, t_max=40, params=replace(AvoidParams(), stuck_repeat_back=False))
+    assert old['x'] < 6.0
 
 
 def _active_at_origin(p=None):
