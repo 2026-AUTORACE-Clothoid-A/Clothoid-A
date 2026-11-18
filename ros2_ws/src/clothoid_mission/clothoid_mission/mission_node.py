@@ -98,7 +98,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('entry_min_span', 0.26)
         self.declare_parameter('entry_rate_hz', 10.0)
         for name, value in [('line_band', 0.22), ('line_min_run', 0.7),
-                            ('line_min_thickness', 0.008), ('line_max_thickness', 0.12),
+                            ('line_min_thickness', 0.008), ('line_max_thickness', 0.12), ('line_max_gap', 0.0),
                             ('line_max_frame_gap', 0.25)]:
             self.declare_parameter(name, value)
         # warp and camera pose: clothoid_lane camera_limo*.yaml (as finish)
@@ -169,6 +169,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('approach_speed', d.approach_speed)
         self.declare_parameter('fork_left_direction', d.fork_left_direction)
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
+        self.declare_parameter('fork_lock_after_avoid', d.fork_lock_after_avoid)
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
         self.declare_parameter('require_scene_confirmation', d.require_scene_confirmation)
         self.declare_parameter('parking_enabled', d.parking_enabled)
@@ -209,6 +210,7 @@ class MissionNode(QuietEventsMixin, Node):
             approach_speed=get('approach_speed'),
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction'),
+            fork_lock_after_avoid=get('fork_lock_after_avoid'),
             parking_at_stopline=get('parking_at_stopline'),
             require_scene_confirmation=get('require_scene_confirmation'),
             parking_enabled=get('parking_enabled'),
@@ -220,6 +222,7 @@ class MissionNode(QuietEventsMixin, Node):
             cone_confirm_sec=get('cone_confirm_sec'),
             avoid_release_hold=get('avoid_release_hold')))
 
+        self.fork_lock_logged = False
         self.cone_active = False
         self.cone_entered_logged = False
         self.direction_logged = None
@@ -455,6 +458,7 @@ class MissionNode(QuietEventsMixin, Node):
                             get('line_min_run'), white_h_min=get('white_h_min'),
                             white_h_max=get('white_h_max'), color=color_params(get))
         core.min_thickness = get('line_min_thickness')
+        core.max_gap = get('line_max_gap')
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')
         core.require_crosswalk = get('line_require_crosswalk')
@@ -571,9 +575,9 @@ class MissionNode(QuietEventsMixin, Node):
         if arm:
             self.core.require_crosswalk = bool(
                 self.get_parameter('line_require_crosswalk').value and require_crosswalk)
-            # pedestrian stop only: the crosswalk may show in the images just after the line
-            pedestrian = self.logic.pedestrian_armed_at is not None and self.logic.light_armed_at is None
-            self.core.crosswalk_grace = self.get_parameter('line_crosswalk_grace').value if pedestrian else 0.
+            # pedestrian and traffic light stops: the crosswalk may show in the images just after the line
+            self.core.crosswalk_grace = self.get_parameter('line_crosswalk_grace').value if (
+                self.logic.pedestrian_armed_at is not None or self.logic.light_armed_at is not None) else 0.
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
             self.line_reason = ('light' if self.logic.light_armed_at is not None else
@@ -648,6 +652,10 @@ class MissionNode(QuietEventsMixin, Node):
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             cone_active=self.cone_active,
             avoid_active=self.avoid_active and self._fresh(self.avoid_time)))
+        if self.logic.fork_locked and not self.fork_lock_logged:
+            self.fork_lock_logged = True
+            self.get_logger().info(f'fork: direction {self.logic.direction} kept from now on (static obstacle '
+                                   'mission ended); later left/right signs are ignored')
         if self.logic.cone_entered and not self.cone_entered_logged:
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered')

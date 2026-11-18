@@ -64,6 +64,7 @@ mission:
     line_band: 0.22
     line_min_run: 0.7
     line_min_thickness: 0.008
+    line_max_gap: 0.01          # m, bridge the floor mats' seam across the stop line (1118 night: 0.3~0.6 cm)
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
     line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
@@ -96,6 +97,7 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
+    fork_lock_after_avoid: true # keep the direction once static_avoid ran and ended (later boxes: misdetections)
     # Only used when require_scene_confirmation is explicitly disabled (legacy mode).
     parking_at_stopline: true
     # Legacy parameter names: these refer to mission START lines, not crosswalk stop lines.

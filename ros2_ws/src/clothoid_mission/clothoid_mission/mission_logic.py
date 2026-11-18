@@ -144,6 +144,11 @@ class MissionParams:
     approach_speed: float = 0.2        # m/s target at the parking line; also the line stop fallback
     # fork (A/B): lane side to follow when the sign points left / right
     fork_left_direction: int = 0       # lane_main: 0 left lane, 1 right lane, 2 both
+    # keep the fork direction once static_avoid ran and ended (its release hold over): later left/right
+    # boxes are misdetections (1118 PM-5: flips past the traffic light, nothing there) and lane_main
+    # follows the direction until parking
+    fork_lock_after_avoid: bool = False
+    fork_lock_delay: float = 0.5       # s without /avoid/active before the lock (message gaps)
     fork_right_direction: int = 1
     # parking: the sign is seen from afar, the stop line before the bays is where the search starts
     parking_at_stopline: bool = True
@@ -200,6 +205,9 @@ class MissionLogic:
         self.slow_until = -1.0
         self.slow_armed_at: Optional[float] = None
         self.direction: Optional[int] = None
+        self.avoid_ran = False
+        self.avoid_last_active = -math.inf
+        self.fork_locked = False
         self.parking_flag = False
         self.parking_armed = False
         self.parking_seen_at = None
@@ -229,6 +237,10 @@ class MissionLogic:
 
         if inputs.avoid_active:
             self.avoid_until = now + p.avoid_release_hold
+            self.avoid_ran, self.avoid_last_active = True, now
+        elif (p.fork_lock_after_avoid and self.avoid_ran and now - self.avoid_last_active >= p.fork_lock_delay
+              and self.direction is not None):
+            self.fork_locked = True
         if inputs.cone_active and now >= self.avoid_until:
             if self.cone_active_since is None:
                 self.cone_active_since = now
@@ -303,6 +315,8 @@ class MissionLogic:
 
     def _update_fork(self, inputs: Inputs) -> None:
         seen, p = inputs.seen, self.p
+        if self.fork_locked:
+            return
         if 'sign_left' in seen and 'sign_right' not in seen:
             self.direction = p.fork_left_direction
         elif 'sign_right' in seen and 'sign_left' not in seen:
