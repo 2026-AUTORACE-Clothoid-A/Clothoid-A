@@ -78,3 +78,14 @@ def test_a_running_course_is_not_stopped_by_the_parking_flag(node):
     node.on_parking(Bool(data=True))
     scan(node, 100.2)
     assert node.mission.running and node.started == 1
+
+
+def test_no_start_after_the_traffic_light_stop(node):
+    """1118 PM: the parking area's cones restarted the course and slowed the parking."""
+    scan(node, 100.)
+    assert node.started == 1
+    node.mission.running = False
+    node.on_light_stopped(Bool(data=True))
+    node.on_light_stopped(Bool(data=False))          # latched for the run
+    scan(node, 200.)
+    assert node.started == 1 and node.hold_reason() == 'past the traffic light stop'

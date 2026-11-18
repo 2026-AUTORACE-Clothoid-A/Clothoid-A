@@ -28,6 +28,8 @@ lane_main:
     bump_gap_max_lateral_error: 0.1 # m from the last measured straight heading
     bump_gap_yaw_gain: 1.5
     steering_lock_timeout: 1.5 # seconds since mission heartbeat; prevents a stale lock persisting
+    yaw_hold_gain: 1.5         # /lane/yaw_hold (first slow zone, start hill): steer rad per rad of yaw error
+    yaw_hold_max_steer_deg: 8.0
     steering_lock_level_deg: 1.2 # cache steering while level, before the camera tilts
     steering_lock_reference_timeout: 1.0
     steering_lock_imu_timeout: 0.25

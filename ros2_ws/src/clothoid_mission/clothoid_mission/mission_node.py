@@ -111,6 +111,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('direction_topic', '/direction_flag')
         self.declare_parameter('parking_topic', '/parking_flag')
         self.declare_parameter('steering_lock_topic', '/steering_lock')
+        self.declare_parameter('yaw_hold_topic', '/lane/yaw_hold')
+        self.declare_parameter('light_stopped_topic', '/mission/light_stopped')
         self.declare_parameter('bump_approach_topic', '/bump/approaching')
         # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
         self.declare_parameter('parking_sign_topic', '/parking_sign')
@@ -160,6 +162,11 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
         self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
         self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
+        self.declare_parameter('hill_slow_imu', d.hill_slow_imu)
+        self.declare_parameter('hill_max_sec', d.hill_max_sec)
+        self.declare_parameter('first_slow_yaw_hold', d.first_slow_yaw_hold)
+        self.declare_parameter('yaw_hold_max_sec', d.yaw_hold_max_sec)
+        self.declare_parameter('yaw_hold_after_m', d.yaw_hold_after_m)
 
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
@@ -175,6 +182,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_enabled', d.parking_enabled)
         self.declare_parameter('slow_arms_bump', d.slow_arms_bump)
         self.declare_parameter('slow_at_stopline', d.slow_at_stopline)
+        self.declare_parameter('slow_until_pedestrian_stop', d.slow_until_pedestrian_stop)
         self.declare_parameter('bump_at_stopline', d.bump_at_stopline)
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
@@ -202,6 +210,11 @@ class MissionNode(QuietEventsMixin, Node):
             bump_level_duration_sec=get('bump_level_duration'),
             bump_arm_timeout_sec=get('bump_arm_timeout'),
             bump_cooldown_sec=get('bump_cooldown'),
+            hill_slow_imu=get('hill_slow_imu'),
+            hill_max_sec=get('hill_max_sec'),
+            first_slow_yaw_hold=get('first_slow_yaw_hold'),
+            yaw_hold_max_sec=get('yaw_hold_max_sec'),
+            yaw_hold_after_m=get('yaw_hold_after_m'),
             pedestrian_wait_sec=get('pedestrian_wait_sec'),
             stop_on_yellow=get('stop_on_yellow'),
             arm_timeout_sec=get('arm_timeout_sec'),
@@ -216,6 +229,7 @@ class MissionNode(QuietEventsMixin, Node):
             parking_enabled=get('parking_enabled'),
             slow_arms_bump=get('slow_arms_bump'),
             slow_at_stopline=get('slow_at_stopline'),
+            slow_until_pedestrian_stop=get('slow_until_pedestrian_stop'),
             bump_at_stopline=get('bump_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
@@ -223,6 +237,8 @@ class MissionNode(QuietEventsMixin, Node):
             avoid_release_hold=get('avoid_release_hold')))
 
         self.fork_lock_logged = False
+        self.yaw_hold_logged = False
+        self.light_stopped_logged = False
         self.cone_active = False
         self.cone_entered_logged = False
         self.direction_logged = None
@@ -259,6 +275,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.prepare_pub = self.create_publisher(Bool, get('parking_prepare_topic'), 1)
         self.entry_distance_pub = self.create_publisher(Float32, '/parking/entry_distance', 1)
         self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
+        self.yaw_hold_pub = self.create_publisher(Bool, get('yaw_hold_topic'), 1)
+        self.light_stopped_pub = self.create_publisher(Bool, get('light_stopped_topic'), 1)
         self.bump_approach_pub = self.create_publisher(Bool, get('bump_approach_topic'), 1)
 
         self.create_subscription(DetectionArray, get('detections_topic'), self.on_detections, 1)
@@ -648,6 +666,7 @@ class MissionNode(QuietEventsMixin, Node):
             line_phase=line_phase,
             line_speed=self.line_speed,
             entry_slow=entry_slow, entry_reached=entry_reached,
+            travel=self.travel if self._fresh(self.latest_speed_time) else None,
             parking_done=self.parking_done,
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             cone_active=self.cone_active,
@@ -713,6 +732,7 @@ class MissionNode(QuietEventsMixin, Node):
             'front': self.finish_params.front, 'entry_front': value('front_axle_x'),
             'speed_limit': out.speed_limit,
             'bump_state': self.logic.bump_state,
+            'hill_imu': self.logic.hill_active,
             'imu_pitch': self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             'steering_lock': out.steering_lock,
             'stopped_for': (round(now - self.logic.stopped_at, 2) if out.stop else None)})))
@@ -741,6 +761,8 @@ class MissionNode(QuietEventsMixin, Node):
             limit = '+'.join(name for name, on in (
                 ('slow sign', now < self.logic.slow_until),
                 ('bump', self.logic.bump_state in (BUMP_APPROACHING, BUMP_ON)),
+                ('hill imu', self.logic.hill_active),
+                ('slow to crosswalk', self.logic.slow_for_pedestrian and now >= self.logic.slow_until),
                 ('slow entry', self.logic.slow_armed_at is not None and now >= self.logic.slow_until),
                 ('parking approach', out.parking_prepare and self.logic.p.require_scene_confirmation
                  and parking_speed_limit is not None),
@@ -768,6 +790,16 @@ class MissionNode(QuietEventsMixin, Node):
 
         self._publish_changed('steering_lock', out.steering_lock,
                               lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
+        if out.yaw_hold != self.yaw_hold_logged:
+            self.get_logger().info(f'yaw hold {"on (first slow zone)" if out.yaw_hold else "off"}')
+            self.yaw_hold_logged = out.yaw_hold
+        self._publish_changed('yaw_hold', out.yaw_hold,
+                              lambda v: self.yaw_hold_pub.publish(Bool(data=bool(v))))
+        if out.light_stopped and not self.light_stopped_logged:
+            self.get_logger().info('traffic light stop: cone course START held from now on')
+            self.light_stopped_logged = True
+        self._publish_changed('light_stopped', out.light_stopped,
+                              lambda v: self.light_stopped_pub.publish(Bool(data=bool(v))))
         self._publish_changed('bump_approaching', self.logic.bump_state == BUMP_APPROACHING,
                               lambda v: self.bump_approach_pub.publish(Bool(data=bool(v))))
 
