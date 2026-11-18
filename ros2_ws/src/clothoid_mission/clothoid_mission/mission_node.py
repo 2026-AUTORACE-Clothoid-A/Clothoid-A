@@ -114,6 +114,11 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_scene_topic', '/parking/bay_candidate')
         self.declare_parameter('parking_scene_rate_hz', 6.0)
         self.declare_parameter('parking_entry_max_travel', 3.0)
+        self.parking_entry_reaction = self.declare_parameter('parking_entry_reaction_sec', 0.20).value
+        self.parking_entry_deceleration = self.declare_parameter('parking_entry_deceleration', 1.0).value
+        if (not math.isfinite(self.parking_entry_reaction) or self.parking_entry_reaction < 0. or
+                not math.isfinite(self.parking_entry_deceleration) or self.parking_entry_deceleration <= 0.):
+            raise ValueError('invalid parking entry braking parameters')
         self.declare_parameter('avoid_active_topic', '/avoid/active')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
@@ -590,6 +595,9 @@ class MissionNode(QuietEventsMixin, Node):
             value('entry_reaction_sec'), value('entry_deceleration'))
         entry_reached = self.mission_entry_active and self.mission_entry.reached(
             self.travel, value('front_axle_x'))
+        parking_speed_limit = self.entry_evidence.approach_limit(
+            self.travel, self.parking_front, self.logic.p.approach_speed,
+            self.parking_entry_reaction, self.parking_entry_deceleration)
         out = self.logic.step(Inputs(
             now=self.now_sec(),
             seen=seen,
@@ -598,6 +606,7 @@ class MissionNode(QuietEventsMixin, Node):
                           if self.logic.p.require_scene_confirmation else
                           self.line if self._fresh(self.line_time) else False),
             parking_scene=self._fresh(self.parking_scene_time),
+            parking_speed_limit=parking_speed_limit,
             parking_observing=self.parking_observing and self._fresh(self.parking_observing_time),
             parking_skipped=self.parking_skipped and self._fresh(self.parking_skipped_time),
             line_phase=line_phase,
@@ -693,6 +702,8 @@ class MissionNode(QuietEventsMixin, Node):
                 ('slow sign', now < self.logic.slow_until),
                 ('bump', self.logic.bump_state in (BUMP_APPROACHING, BUMP_ON)),
                 ('slow entry', self.logic.slow_armed_at is not None and now >= self.logic.slow_until),
+                ('parking approach', out.parking_prepare and self.logic.p.require_scene_confirmation
+                 and parking_speed_limit is not None),
                 ('line stop', out.stop_arm)) if on) or 'other'
         if limit != self.limit_logged:
             self.get_logger().info('speed limit off' if limit is None else

@@ -58,6 +58,8 @@ mission:
     parking_enabled: true      # full.launch overrides with use_parking; no idle P processing when off
     parking_scene_rate_hz: 6.0 # decode/warp cap while only preparing parking; stops use camera rate
     parking_entry_max_travel: 3.0 # entry evidence expires after this measured travel past the line
+    parking_entry_reaction_sec: 0.20 # reaction and command delay before parking entry braking
+    parking_entry_deceleration: 1.0 # m/s^2 for the gradual parking entry speed limit
     # Stop-line corridor and physical thickness, in metres on the ground.
     line_band: 0.22
     line_min_run: 0.7
@@ -102,7 +104,7 @@ mission:
     # (line_stop.py), independently of mission entry. Keep FinishCore's original stop settings.
     # Mission entry starts approach slowing with its own braking lead; the final stop stays separate.
     use_stop_line: true         # false: 2025 behaviour, stop the moment /stopline_detected is true
-    approach_speed: 0.2         # m/s while armed until FinishCore gives its speed; lane_main always steers
+    approach_speed: 0.2         # target speed at the parking entry line; also the line stop fallback
     image_topic: /camera/color/image_raw   # raw over shm: a compressed subscriber makes the camera driver JPEG-encode every frame
     compressed: false
     white_s_max: 60             # stop line white: S <= 60, V >= 150

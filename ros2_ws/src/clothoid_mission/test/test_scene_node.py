@@ -118,10 +118,16 @@ def test_delayed_source_data_and_duplicates_do_not_refresh_evidence(node):
 
 def test_parking_handover_requires_fresh_bay_and_reached_separate_entry(node):
     n, clock = node
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda msg: limits.append(msg.data))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, 'sign_parking')
     n.on_timer()
     assert n.logic.parking_armed and not n.logic.parking_flag
+    assert not limits
+    n.entry_evidence.entry_at = n.travel + n.finish_params.front + .25
+    n.on_timer()
+    assert .2 < limits[-1] < .8 and not n.logic.parking_flag
     scene = PoseStamped()
     scene.header.frame_id, scene.header.stamp.sec = 'base_link', 1000
     scene.header.stamp.nanosec = 200_000_000
@@ -355,8 +361,9 @@ def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():
     m=MissionLogic(MissionParams(require_cone_for_parking=False))
     m.step(Inputs(now=0.,seen={'sign_parking'}))
     assert m.step(Inputs(now=9.,parking_observing=True)).parking_prepare
-    out=m.step(Inputs(now=10.,parking_skipped=True,seen={'sign_parking'}))
+    out=m.step(Inputs(now=10.,parking_skipped=True,seen={'sign_parking'},parking_speed_limit=.2))
     assert not out.parking_flag and not out.parking_prepare and out.state==DRIVE
+    assert out.speed_limit is None
     assert not m.step(Inputs(now=11.,seen={'sign_parking'})).parking_prepare
     # A missed parking mission cannot block a subsequent independent pedestrian mission.
     out=m.step(Inputs(now=11.1,seen={'sign_pedestrian'},line_phase='arrived'))
