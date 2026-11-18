@@ -110,7 +110,11 @@ class AvoidParams:
     course_corner_tol_deg: float = 20.0   # within this of the next 90 deg axis: the turn is made
     course_corner1_x_min: float = 7.5     # m of straight on the map before the first turn, at least
     course_corner1_odometer_max: float = 11.0   # no turn yet by this odometer: not the race start
-    course_test_start: float = 1.0        # a LIMO in our lane within this odometer: an avoid test
+    # a LIMO in our lane within this odometer of the launch: an avoid test launched in the section.
+    # 0 = off: the race always starts at the race start (1118 PM 1618 / 1625: something in our lane at
+    # the launch made the race an avoid test; 1625 then took a white line on the first straight for
+    # the section start). Avoid-only tests: launch with avoid_course_map:=false
+    course_test_start: float = 0.0
     # race: from the start line until the first blocker (LIMO in our lane, obstacle cost over slow_cost
     # or a lane change) at this speed (lane_main's base speed), then speed / slow_speed to the end
     approach_speed: float = 0.8
