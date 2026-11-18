@@ -54,7 +54,7 @@
 # The global lane HSV values also feed the raw-image static avoidance cues.
 lane_main:
   ros__parameters:
-    blue_glare_strength: 0.75
+    blue_glare_strength: 1.0
     gamma_enabled: true
     gamma: 1.2
     hsv_lower: [18, 70, 76]
@@ -63,7 +63,7 @@ lane_main:
 
 mission:
   ros__parameters:
-    blue_glare_strength: 0.75
+    blue_glare_strength: 1.0
     gamma_enabled: true
     gamma: 1.2
     # Compensate gamma's brightness/saturation shift to keep dim crosswalk and entry paint.

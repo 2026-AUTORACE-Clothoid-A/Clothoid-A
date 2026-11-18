@@ -59,6 +59,19 @@ def test_blue_glare_suppresses_floor_spill_and_preserves_paint():
     assert white_mask.tolist() == [[False, False, True, True]]
 
 
+def test_glare_correction_tapers_before_blue_tinted_white_paint():
+    # Same blue excess (74 after the noise margin) on dark, intermediate and bright patches.
+    image = np.array([[[180, 100, 100], [205, 125, 125], [230, 150, 150],
+                       [247, 228, 235]]], np.uint8)
+    pipeline = ColorPipeline(ColorParams(blue_glare_strength=1.))
+    corrected = pipeline.preprocess(image)
+    assert corrected[0, :, 0].tolist() == [106, 168, 230, 247]
+    mission = ColorPipeline(ColorParams(blue_glare_strength=1., gamma_enabled=True, gamma=1.2))
+    _, white = mission.masks(mission.preprocess(image), white_s_max=68, white_v_min=137,
+                             exclude_yellow=False)
+    assert white[0].tolist() == [False, False, False, True]
+
+
 @pytest.mark.parametrize('values', [dict(color_method='guess'), dict(gamma=float('nan')),
     dict(gamma=0.), dict(gamma_enabled=1), dict(clahe_grid_size=2.5),
     dict(rgb_yellow_difference_min=-1), dict(lab_white_l_min=101.), dict(blue_glare_strength=1.1)])

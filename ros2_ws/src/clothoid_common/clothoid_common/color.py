@@ -83,9 +83,10 @@ class ColorPipeline:
         levels = np.arange(256)
         self._glare_weights = None
         if self.p.blue_glare_strength:
-            # Dark floor receives the full correction. Fade it out as both R and G brighten.
+            # LIMO2 stage lighting: suppress the dark floor fully, then taper to zero
+            # before gamma's mission white threshold (V=137 corresponds to input ~152).
             self._glare_weights = (self.p.blue_glare_strength
-                                   * np.clip((135 - levels) / 65, 0, 1)).astype(np.float32)
+                                   * np.interp(levels, (100, 150), (1., 0.))).astype(np.float32)
             self._glare_red = ((levels + 1) // 3).astype(np.uint8)
         self.lut = (np.rint(255*(levels/255.)**self.p.gamma).astype(np.uint8)
                     if self.p.gamma_enabled else None)
