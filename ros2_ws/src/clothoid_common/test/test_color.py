@@ -53,10 +53,23 @@ def test_blue_glare_suppresses_floor_spill_and_preserves_paint():
     image = np.array([[floor, yellow, white, tinted_white]], np.uint8)
     pipeline = ColorPipeline(ColorParams(blue_glare_strength=.75))
     corrected = pipeline.preprocess(image)
-    assert corrected.tolist() == [[[123, 62, 73], yellow, white, tinted_white]]
+    assert corrected.tolist() == [[[122, 62, 73], yellow, white, tinted_white]]
     assert image.tolist() == [[floor, yellow, white, tinted_white]]
     _, white_mask = pipeline.masks(corrected)
     assert white_mask.tolist() == [[False, False, True, True]]
+
+
+def test_residual_violet_spill_is_removed_only_on_dark_blue_pixels():
+    image = np.array([[[180, 55, 80], [210, 75, 118], [220, 75, 140]]], np.uint8)
+    corrected = ColorPipeline(ColorParams(blue_glare_strength=1.)).preprocess(image)
+    # First-pass blue levels are 86, 124 and 146. Only the first has dark-floor margin.
+    assert corrected[0, :, 0].tolist() == [61, 124, 146]
+
+    # The same patch in an otherwise neutral scene receives only the first pass.
+    neutral = np.full((64, 80, 3), 70, np.uint8)
+    neutral[32:40, :8] = image[0, 0]
+    corrected = ColorPipeline(ColorParams(blue_glare_strength=1.)).preprocess(neutral)
+    assert corrected[32, 0, 0] == 86
 
 
 def test_glare_correction_tapers_before_blue_tinted_white_paint():

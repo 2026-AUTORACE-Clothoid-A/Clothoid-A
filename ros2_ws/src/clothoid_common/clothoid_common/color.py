@@ -104,7 +104,17 @@ class ColorPipeline:
             correction = cv2.multiply(excess, weights, dtype=cv2.CV_8U)
             # The violet spill contributes some red too. Keep at least the original green level.
             red_correction = cv2.min(cv2.subtract(red, green), cv2.LUT(correction, self._glare_red))
-            image = cv2.merge((cv2.subtract(blue, correction), green, cv2.subtract(red, red_correction)))
+            corrected_blue = cv2.subtract(blue, correction)
+            # Red was the reference for violet pixels. Remove its residual spill from
+            # blue only on dark floor, tapering to zero at 124 before gamma.
+            # Confirm broad floor illumination from a sparse sample of the lower image.
+            # A small blue marking beside a curve should not alter steering references.
+            floor = np.s_[excess.shape[0] // 2::8, ::8]
+            spill = (excess[floor] > 34) & (green[floor] < 135)
+            if np.count_nonzero(spill) >= 0.15 * spill.size:
+                dark_margin = cv2.subtract(124, corrected_blue)
+                corrected_blue = cv2.subtract(corrected_blue, cv2.min(red_correction, dark_margin))
+            image = cv2.merge((corrected_blue, green, cv2.subtract(red, red_correction)))
         if self.lut is not None:
             image = cv2.LUT(image, self.lut)
         if self.clahe is not None:
