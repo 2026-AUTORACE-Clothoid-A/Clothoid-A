@@ -6,6 +6,7 @@ approve a bay or command steering; handover still needs entry + free-space evide
 import math
 from dataclasses import dataclass
 from clothoid_common.parking_geometry import PARKING_GEOMETRY
+from clothoid_parking.planner import turn_remaining
 
 
 @dataclass
@@ -75,11 +76,10 @@ class ParkingApproach:
             return self._hold(now, 'holding: registration or sensors unavailable', allow_skip=not self.blocked)
         if self.started is None:
             self.started = now
-        bay = layout.bays()[layout.p.target_bay-1]
-        rx = pose.x-plan.rear_offset*math.cos(pose.yaw)
-        ry = pose.y-plan.rear_offset*math.sin(pose.yaw)
-        self.remaining = ((bay.face_x-rx)*math.cos(bay.row_yaw)+
-                          (bay.face_y-ry)*math.sin(bay.row_yaw)-plan.turn_radius-plan.turn_lead)
+        bay = layout.observation_bay(pose, plan)
+        if bay is None:
+            return self._hold(now, 'holding: no observed accessible empty bay')
+        self.remaining = turn_remaining(bay, pose, plan)
         if self.remaining < -.10:
             self.skipped = True
             self.reason = 'skipped: turn point already passed'

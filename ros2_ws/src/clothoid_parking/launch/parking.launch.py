@@ -15,7 +15,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('debug', default_value='false'),
         DeclareLaunchArgument('registered_control', default_value='true'),
-        DeclareLaunchArgument('target_bay', default_value='2'),
+        DeclareLaunchArgument('target_bay', default_value='0'),
         Node(
             package='clothoid_parking',
             executable='parking',

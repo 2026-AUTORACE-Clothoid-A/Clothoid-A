@@ -18,8 +18,8 @@ def fill(layout, points, occupied=False, now=1.):
     for k in np.floor(points/layout.p.grid).astype(int): layout.cells[tuple(k)]=(now,occupied)
 
 
-def test_control_cannot_silently_select_an_unspecified_bay():
-    with pytest.raises(ValueError,match='designated'): ParkingLayout(LayoutParams(control_enabled=True))
+def test_zero_enables_sensor_selection_and_invalid_target_is_rejected():
+    assert ParkingLayout(LayoutParams(control_enabled=True)).p.target_bay == 0
     with pytest.raises(ValueError): ParkingLayout(LayoutParams(target_bay=7))
 
 

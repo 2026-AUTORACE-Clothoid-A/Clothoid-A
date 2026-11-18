@@ -9,7 +9,7 @@ from dataclasses import dataclass
 import numpy as np
 from clothoid_common.parking_geometry import PARKING_GEOMETRY
 from clothoid_parking.bay_finder import Bay
-from clothoid_parking.planner import wrap
+from clothoid_parking.planner import wrap, arc_forward_span, turn_remaining
 
 
 def unique_cells(points, resolution):
@@ -23,7 +23,7 @@ def unique_cells(points, resolution):
 class LayoutParams:
     enabled: bool = True
     control_enabled: bool = False  # observe until bag + closed-loop validation is sufficient
-    target_bay: int = 0  # 0: observe all; control requires an explicitly designated bay (1..6)
+    target_bay: int = 0  # 0: sensor-selected bay; 1..6: fixed target for diagnostics
     columns: int = 3
     rows: int = 2
     bay_width: float = .50
@@ -44,6 +44,7 @@ class LayoutParams:
     body_width: float = .220
     clearance: float = .03
     observation_stop_margin: float = .08  # braking + callback latency before the turn point
+    search_timeout: float = 20.  # no confirmed accessible goal is a failure, never DONE
 
 
 class ParkingLayout:
@@ -56,8 +57,8 @@ class ParkingLayout:
             raise ValueError('target_bay outside layout')
         if not math.isfinite(self.p.observation_stop_margin) or self.p.observation_stop_margin < 0:
             raise ValueError('invalid observation stop margin')
-        if self.p.control_enabled and not self.p.target_bay:
-            raise ValueError('registered control requires a designated target_bay')
+        if not math.isfinite(self.p.search_timeout) or self.p.search_timeout <= 0:
+            raise ValueError('invalid search timeout')
         p = self.p
         # Registration consistency tolerance is not a measured collision error.
         # Keep it independent from the physical vehicle clearance.
@@ -82,10 +83,13 @@ class ParkingLayout:
         self.retained_free = set()
         self.retaining = False
         self.states = ['unknown'] * (self.p.rows*self.p.columns)
+        self.spaces = list(self.states)  # goal occupancy, independent of its approach
+        self.free_counts = [0] * len(self.states)
         self.counts = [0] * len(self.states)
         self.selected = None
         self.reason = 'waiting for lane/entry/grid registration'
         self.support_count = 0
+        self.reference_fixed = False
         self.motion_reason = ''
         self.boundary_samples = deque(maxlen=self.p.confirm_frames)
         self.boundary_paired = None
@@ -174,6 +178,10 @@ class ParkingLayout:
                 out.append(Bay(*centre, self.yaw, self.yaw+p.side*math.pi/2,
                                p.bay_width, *face))
         return out
+
+    def goal(self, index):
+        """Park at the painted bay centre; scene objects never shift the goal."""
+        return self.bays()[index]
 
     def refine_boundaries(self, stamp, segments, pose):
         """Associate measured side lines; correct observable yaw/lateral only.
@@ -302,6 +310,22 @@ class ParkingLayout:
             return 'unknown'
         return 'free'
 
+    def goal_coverage(self, points, now):
+        """Keep measured free goal cells through static parked-car/sign occlusion.
+
+        Uses the same finite-ray memory as motion_clear. Any new return revokes
+        that cell's memory in scan(); never-seen cells remain unknown.
+        """
+        state = self.coverage(points, now)
+        if state != 'unknown' or not self.retaining:
+            return state
+        for key in map(tuple, unique_cells(points, self.p.grid)):
+            value = self.cells.get(key)
+            if key not in self.retained_free and not (
+                    value is not None and now-value[0] <= self.p.evidence_age and not value[1]):
+                return 'unknown'
+        return 'free'
+
     def footprint(self, x, y, yaw):
         # Physical vehicle plus clearance; independent of registration gates.
         c, s = math.cos(yaw), math.sin(yaw)
@@ -323,7 +347,7 @@ class ParkingLayout:
         inward = plan.side*np.array([-n[1], n[0]])
         rear = np.array([pose.x, pose.y])-plan.rear_offset*n
         along = float((np.array([bay.face_x, bay.face_y])-rear)@n)
-        distance = along-plan.turn_radius
+        distance = along-arc_forward_span(pose, bay, plan)
         if distance < -.1 or abs(wrap(pose.yaw-bay.row_yaw)) > .15:
             return None
         start = rear+distance*n
@@ -331,9 +355,11 @@ class ParkingLayout:
         for d in np.arange(0, max(0., distance), .04):
             q = rear+d*n+plan.rear_offset*n
             poses.append((*q, bay.row_yaw))
-        for t in np.linspace(0, math.pi/2, 25):
-            yaw = bay.row_yaw+plan.side*t
-            q = start+plan.turn_radius*math.sin(t)*n+plan.turn_radius*(1-math.cos(t))*inward
+        delta = wrap(pose.yaw-bay.row_yaw) if plan.entry_heading_compensation else 0.
+        for angle in np.linspace(delta, plan.side*math.pi/2, 25):
+            yaw = bay.row_yaw+angle
+            q = (start+plan.turn_radius/plan.side*(math.sin(angle)-math.sin(delta))*n+
+                 plan.turn_radius*(math.cos(delta)-math.cos(angle))*inward)
             q += plan.rear_offset*np.array([math.cos(yaw), math.sin(yaw)])
             poses.append((*q, yaw))
         end = np.array(poses[-1][:2]); target = np.array([bay.x, bay.y])
@@ -375,23 +401,33 @@ class ParkingLayout:
             self.support_count = 0
             self.counts = [0]*len(self.counts)
             self.states = ['unknown']*len(self.states)
+            self.spaces = list(self.states)
+            self.free_counts = [0]*len(self.states)
             self.reason = 'no recent consistent visual registration'
             return None
         if self.last_choice_scan == self.last_scan:
-            bays = self.bays()
-            return None if self.selected is None else bays[self.selected]
+            return None if self.selected is None else self.goal(self.selected)
         self.last_choice_scan = self.last_scan
-        self.support_count = self.support_count+1 if self.supported(now) else 0
+        # Once control fixes a corroborated reference, driving past a parked
+        # car naturally hides it behind the rear-masked lidar. That does not
+        # invalidate the grid. Goal and swept-space evidence stay live.
+        if not (self.reference_fixed and self.support_count >= self.p.confirm_scans):
+            self.support_count = self.support_count+1 if self.supported(now) else 0
         if self.support_count < self.p.confirm_scans:
             self.selected = None
             self.counts = [0]*len(self.counts)
+            self.free_counts = [0]*len(self.states)
             self.reason = 'visual candidate not corroborated by lidar layout'
             return None
-        bays = self.bays()
+        bays = [self.goal(i) for i in range(self.p.rows*self.p.columns)]
         candidates = []
         for i, bay in enumerate(bays):
-            space = self.coverage(self.footprint(bay.x, bay.y, bay.entry_yaw), now)
-            if self.p.control_enabled and i != self.p.target_bay-1:
+            points = self.footprint(bay.x, bay.y, bay.entry_yaw)
+            space = (self.goal_coverage(points, now) if self.p.control_enabled and not self.p.target_bay
+                     else self.coverage(points, now))
+            self.spaces[i] = space
+            self.free_counts[i] = self.free_counts[i]+1 if space == 'free' else 0
+            if self.p.target_bay and i != self.p.target_bay-1:
                 self.states[i] = space
                 self.counts[i] = 0
                 continue
@@ -408,14 +444,57 @@ class ParkingLayout:
             if self.counts[i] >= self.p.confirm_scans:
                 if not self.p.target_bay or i == self.p.target_bay-1:
                     candidates.append(i)
+        if not self.p.target_bay:
+            # A free near-row bay is the access corridor when the deeper bay
+            # in that column is also free. Do not stop there, or guess its
+            # depth while the deeper bay is still hidden from the lidar.
+            candidates = [i for i in candidates if all(
+                self.spaces[j] == 'occupied'
+                for j in range(i+self.p.columns, len(bays), self.p.columns))]
         if self.selected not in candidates:
             self.selected = candidates[0] if candidates else None
         if self.selected is None:
-            self.reason = 'no clear designated bay and collision-free nominal route'
+            self.reason = ('no clear designated bay and collision-free nominal route' if self.p.target_bay
+                           else 'no observed free bay with an accessible existing entry route')
         else:
             self.reason = f'bay {self.selected+1}: target observed free; '+(
                 'approach checked incrementally' if self.p.control_enabled else 'nominal approach observed free')
         return None if self.selected is None else bays[self.selected]
+
+    @property
+    def empty_bays(self):
+        """One-based observed-empty IDs; a blocked approach does not change occupancy."""
+        return [i+1 for i, count in enumerate(self.free_counts) if count >= self.p.confirm_scans]
+
+    def observation_bay(self, pose, plan):
+        """Where to slow/stop for another view; never certifies an unknown goal.
+
+        Both depths in a column share the existing turn point. A front-row
+        obstacle vetoes the deeper route; it is not removed or ignored.
+        """
+        bays = [self.goal(i) for i in range(self.p.rows*self.p.columns)] if self.origin is not None else []
+        if not bays:
+            return None
+        if self.p.target_bay:
+            return bays[self.p.target_bay-1]
+        if self.selected is not None:
+            return bays[self.selected]
+        candidates = []
+        for i, bay in enumerate(bays):
+            if self.spaces[i] == 'occupied':
+                continue
+            if any(self.spaces[j] == 'occupied' for j in range(i % self.p.columns, i, self.p.columns)):
+                continue
+            remaining = turn_remaining(bay, pose, plan)
+            if remaining < -0.10:
+                continue
+            path = self.path(bay, pose, plan)
+            # Observation can creep up to the turn stop even if a distant
+            # nominal route is blocked. Every near-term motion is checked by
+            # motion_clear; choose() still vetoes the blocked entry itself.
+            if path is not None:
+                candidates.append((remaining, i))
+        return bays[min(candidates)[1]] if candidates else None
 
     def motion_clear(self, now, pose, speed, steer, wheelbase, distance=.20):
         self.motion_reason = ''
