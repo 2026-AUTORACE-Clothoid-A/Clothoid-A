@@ -196,14 +196,18 @@ def test_cone_gate_blocks_bump_after_cone_entry():
 def test_cone_gate_keeps_scene_handover_checks_after_unlock():
     logic = MissionLogic(MissionParams())
     evidence = dict(seen={'sign_parking'}, parking_line=True, parking_scene=True)
-    assert not logic.step(Inputs(now=0., **evidence)).parking_prepare
+    before_cone = logic.step(Inputs(now=0., **evidence))
+    assert not before_cone.parking_prepare and before_cone.speed_limit is None
     assert not logic.parking_flag
     logic.step(Inputs(now=1., cone_active=True))
     logic.step(Inputs(now=2.5, cone_active=True))
     out = logic.step(Inputs(now=2.6, seen={'sign_parking'}))
     assert out.parking_prepare and not out.parking_flag
-    assert not logic.step(Inputs(now=2.7, parking_line=True)).parking_flag
-    assert logic.step(Inputs(now=2.8, parking_line=True, parking_scene=True)).parking_flag
+    assert out.speed_limit is None  # a sign opens observation; the line sets the speed limit
+    out = logic.step(Inputs(now=2.7, parking_speed_limit=.43))
+    assert not out.parking_flag and out.speed_limit == .43
+    out = logic.step(Inputs(now=2.8, parking_line=True, parking_scene=True, parking_speed_limit=.2))
+    assert out.parking_flag and not out.parking_prepare and out.speed_limit is None
 
 
 def test_cone_active_during_and_right_after_avoidance_does_not_latch():

@@ -32,6 +32,19 @@ def test_stale_duplicate_and_inconsistent_lines_do_not_confirm():
     assert gate.entry_at is None
 
 
+def test_parking_entry_limits_speed_progressively_until_line_evidence_expires():
+    gate = ParkingEntryEvidence(max_travel=.5)
+    cap = lambda travel: gate.approach_limit(travel, .16, .2, .20, 1.0)
+    assert cap(0.) is None
+    for t in (1., 1.1, 1.2):
+        gate.observe(t, 0., FloorObservation((1.,)))
+    assert cap(0.) > .8
+    assert .2 < cap(.60) < .8
+    assert cap(.80) == .2
+    assert cap(.90) == .2
+    assert cap(1.35) is None
+
+
 def test_parking_needs_sign_entry_and_bay_but_no_previous_mission():
     logic = MissionLogic(MissionParams(require_cone_for_parking=False))
     out = logic.step(Inputs(0., seen={'sign_parking'}, parking_line=True))

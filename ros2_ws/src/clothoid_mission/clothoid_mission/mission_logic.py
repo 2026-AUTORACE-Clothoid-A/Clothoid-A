@@ -141,7 +141,7 @@ class MissionParams:
     arm_timeout_sec: float = 8.0       # a sign/light seen this long ago without a stop line expires
     cooldown_sec: float = 15.0         # ignore the same trigger after a stop
     use_stop_line: bool = True         # stop with FinishCore (see the docstring)
-    approach_speed: float = 0.2        # m/s under lane_main while armed, before FinishCore drives
+    approach_speed: float = 0.2        # m/s target at the parking line; also the line stop fallback
     # fork (A/B): lane side to follow when the sign points left / right
     fork_left_direction: int = 0       # lane_main: 0 left lane, 1 right lane, 2 both
     fork_right_direction: int = 1
@@ -176,6 +176,7 @@ class Inputs:
     avoid_active: bool = False                    # /avoid/active from static_avoid (fresh)
     entry_slow: bool = False       # braking point before the separate mission boundary
     entry_reached: bool = False    # front wheels reached that boundary (not a stop request)
+    parking_speed_limit: Optional[float] = None  # braking envelope from the measured entry line
 
 
 @dataclass
@@ -273,6 +274,9 @@ class MissionLogic:
             limits.append(p.slow_speed)
         if self.slow_armed_at is not None and inputs.entry_slow:
             limits.append(p.slow_speed)
+        parking_prepare = self.parking_armed and not self.parking_flag
+        if p.require_scene_confirmation and parking_prepare and inputs.parking_speed_limit is not None:
+            limits.append(inputs.parking_speed_limit)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
         parking_line_arm = p.use_stop_line and self.state == DRIVE and (
             not p.require_scene_confirmation and self.parking_armed and not self.parking_flag
@@ -291,7 +295,7 @@ class MissionLogic:
             stop_require_crosswalk=arm,
             entry_arm=p.use_stop_line and self.state == DRIVE and (
                 arm or self.slow_armed_at is not None or self.bump_line_armed_at is not None),
-            parking_prepare=self.parking_armed and not self.parking_flag,
+            parking_prepare=parking_prepare,
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
