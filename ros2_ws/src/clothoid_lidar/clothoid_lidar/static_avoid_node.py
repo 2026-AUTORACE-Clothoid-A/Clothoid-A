@@ -393,6 +393,7 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         had_line = self.avoid.line_start is not None
         # course map: a blocker starts the mission only away from the race start (see CourseMap); one
         # right after the launch is an avoid test launched in the section (nothing there at the race start)
+        # (course_test_start 0: off, the race always starts at the race start)
         if (self.course is not None and self.course.origin == 'pending'
                 and self.tracker.distance < self.p.course_test_start and self.avoid.blocked(limos)):
             self.course.set_origin('elsewhere', f'a LIMO in our lane {self.tracker.distance:.2f} m after '
