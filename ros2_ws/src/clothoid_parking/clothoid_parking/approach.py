@@ -101,7 +101,9 @@ class ParkingApproach:
             return self._hold(now, 'holding before turn: waiting for entry and clear bay')
         # v*t + v^2/(2*a) <= distance. Geometry sets where to brake.
         a, t = self.p.deceleration, self.p.reaction_sec
-        cap = min(self.p.speed, math.sqrt((a*t)**2+2*a*distance)-a*t)
+        cap = math.sqrt((a*t)**2+2*a*distance)-a*t
+        if entry_distance <= layout.p.body_length/2:
+            cap = min(self.p.speed, cap)
         self.holding_since = None
-        self.reason = 'observing registered bay at reduced lane speed'
+        self.reason = 'observing registered bay with turn braking limit'
         return cap
