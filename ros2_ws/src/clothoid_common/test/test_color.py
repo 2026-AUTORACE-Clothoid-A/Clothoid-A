@@ -47,9 +47,21 @@ def test_gamma_convention_endpoints_and_input_ownership():
     assert np.all(neutral == 120)
 
 
+def test_blue_glare_suppresses_floor_spill_and_preserves_paint():
+    floor = [190, 62, 95]
+    yellow, white, tinted_white = [80, 198, 202], [213, 211, 214], [237, 199, 207]
+    image = np.array([[floor, yellow, white, tinted_white]], np.uint8)
+    pipeline = ColorPipeline(ColorParams(blue_glare_strength=.75))
+    corrected = pipeline.preprocess(image)
+    assert corrected.tolist() == [[[123, 62, 73], yellow, white, tinted_white]]
+    assert image.tolist() == [[floor, yellow, white, tinted_white]]
+    _, white_mask = pipeline.masks(corrected)
+    assert white_mask.tolist() == [[False, False, True, True]]
+
+
 @pytest.mark.parametrize('values', [dict(color_method='guess'), dict(gamma=float('nan')),
     dict(gamma=0.), dict(gamma_enabled=1), dict(clahe_grid_size=2.5),
-    dict(rgb_yellow_difference_min=-1), dict(lab_white_l_min=101.)])
+    dict(rgb_yellow_difference_min=-1), dict(lab_white_l_min=101.), dict(blue_glare_strength=1.1)])
 def test_invalid_parameters_rejected(values):
     with pytest.raises(ValueError):
         ColorParams(**values)

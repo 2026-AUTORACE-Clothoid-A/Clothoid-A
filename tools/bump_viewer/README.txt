@@ -45,9 +45,10 @@ H는 0~179, S/V는 0~255이며 최소·최대 순서는 자동으로 맞춥니�
 
 차선과 미션은 clothoid_common/color.py의 같은 색 판정 함수를 사용합니다.
   color_method: hsv | lab | rgb
+  blue_glare_strength: 어두운 영역의 청색·보라색 조명 반사를 줄이는 강도 (0~1). 0은 끄기.
   gamma_enabled / gamma: 각 RGB 채널 round(255*(입력/255)^gamma). 1 초과는 어둡게.
   clahe_enabled / clahe_clip_limit / clahe_grid_size: 8-bit Lab L에만 국소 대비 조절.
-처리 순서는 감마 → CLAHE → 기존 5×5 블러 → BEV → 색 판정입니다.
+처리 순서는 빛번짐 억제 → 감마 → CLAHE → 기존 5×5 블러 → BEV → 색 판정입니다.
   Lab 노란색: b >= lab_yellow_b_min, |a| <= lab_yellow_a_abs_max, L >= lab_yellow_l_min.
   Lab 흰색: sqrt(a*a+b*b) <= lab_white_chroma_max, L >= lab_white_l_min.
   Lab 단위는 L 0..100, a/b 부호 있는 float CIELab이며 8-bit의 128 오프셋을 쓰지 않습니다.
@@ -55,7 +56,7 @@ H는 0~179, S/V는 0~255이며 최소·최대 순서는 자동으로 맞춥니�
   RGB 흰색: max(R,G,B)-min(R,G,B) <= rgb_white_spread_max, max(R,G,B) >= rgb_white_v_min.
 RGB 값은 보정·블러·BEV 후 0..255입니다. 차선은 노란색 우선으로 흰색과 중복을 제거합니다.
 미션은 기존 정책처럼 흰색만 판정하며 노란색을 빼지 않습니다. 미션의 yellow 파라미터는 사용하지 않습니다.
-기본값은 HSV + 보정 꺼짐입니다. 새로운 차선 색 모드는 track2026에서 지원하며 sliding2025는 기존 HSV만 지원합니다.
+LIMO2 카메라 프로필은 빛번짐 억제와 감마를 켭니다. 새로운 차선 색 모드는 track2026에서 지원하며 sliding2025는 기존 HSV만 지원합니다.
 카메라 노출·게인·화이트밸런스, IMU·odom 주기, 곡률 유지·보간 동작은 이 설정으로 바뀌지 않습니다.
 하늘색은 정지선 검사 영역, 자홍색은 검사에서 선택된 횡방향 정지선 후보입니다.
 주황색은 별도로 추적한 미션 시작선입니다. 위쪽에 시작선 상태/앞바퀴까지 남은 거리와

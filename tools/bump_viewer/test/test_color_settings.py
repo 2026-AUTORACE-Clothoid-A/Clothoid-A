@@ -15,11 +15,13 @@ def baseline():
 
 def test_presets_are_lane_only_and_clear_previous_preprocessing():
     base = baseline(); changed = deepcopy(base)
+    base['lane']['blue_glare_strength'] = .75
     changed['mission']['gamma_enabled'] = True
     changed['lane']['clahe_enabled'] = True
     best = preset_settings(1, changed, base)
     assert best['lane']['color_method'] == 'rgb' and best['lane']['gamma_enabled']
     assert not best['lane']['clahe_enabled']
+    assert best['lane']['blue_glare_strength'] == 0.
     assert best['mission'] == changed['mission']
     assert changed['lane']['clahe_enabled']  # caller remains unchanged
     conservative = preset_settings(2, best, base)

@@ -1,7 +1,7 @@
 """Current-image color segmentation shared by detectors and diagnostic viewers.
 
-Gamma is RGB channel-wise round(255*(input/255)**gamma), followed by optional
-CLAHE on 8-bit Lab L. Apply before the existing blur/BEV. Classify Lab using
+Optional blue glare suppression precedes channel-wise RGB gamma
+round(255*(input/255)**gamma) and CLAHE on 8-bit Lab L. Apply before blur/BEV. Classify Lab using
 OpenCV float CIELab (L 0..100, signed a/b), RGB differences in signed arithmetic.
 No temporal prediction, interpolation of missing lines, or camera controls.
 """
@@ -29,6 +29,7 @@ class ColorParams:
     rgb_yellow_v_min: int = 90
     rgb_white_spread_max: int = 30
     rgb_white_v_min: int = 190
+    blue_glare_strength: float = 0.0
 
     def __post_init__(self):
         if self.color_method not in ('hsv', 'lab', 'rgb'):
@@ -36,7 +37,8 @@ class ColorParams:
         for name in ('gamma_enabled', 'clahe_enabled'):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f'{name} must be boolean')
-        bounds = {'gamma': (.1, 4.), 'clahe_clip_limit': (.1, 16.), 'clahe_grid_size': (2, 32),
+        bounds = {'gamma': (.1, 4.), 'blue_glare_strength': (0., 1.),
+                  'clahe_clip_limit': (.1, 16.), 'clahe_grid_size': (2, 32),
                   'lab_yellow_b_min': (0., 127.), 'lab_yellow_a_abs_max': (0., 128.),
                   'lab_yellow_l_min': (0., 100.), 'lab_white_chroma_max': (0., 200.),
                   'lab_white_l_min': (0., 100.), 'rgb_yellow_difference_min': (0, 255),
@@ -78,14 +80,32 @@ def validate_hsv(lower, upper, white_h_min, white_h_max, white_s_max, white_v_mi
 class ColorPipeline:
     def __init__(self, params=None):
         self.p = params or ColorParams()
-        self.lut = (np.rint(255*(np.arange(256)/255.)**self.p.gamma).astype(np.uint8)
+        levels = np.arange(256)
+        self._glare_weights = None
+        if self.p.blue_glare_strength:
+            # Dark floor receives the full correction. Fade it out as both R and G brighten.
+            self._glare_weights = (self.p.blue_glare_strength
+                                   * np.clip((135 - levels) / 65, 0, 1)).astype(np.float32)
+            self._glare_red = ((levels + 1) // 3).astype(np.uint8)
+        self.lut = (np.rint(255*(levels/255.)**self.p.gamma).astype(np.uint8)
                     if self.p.gamma_enabled else None)
         self.clahe = (cv2.createCLAHE(clipLimit=self.p.clahe_clip_limit,
                       tileGridSize=(self.p.clahe_grid_size, self.p.clahe_grid_size))
                       if self.p.clahe_enabled else None)
 
     def preprocess(self, bgr):
-        image = cv2.LUT(bgr, self.lut) if self.lut is not None else bgr
+        image = bgr
+        if self._glare_weights is not None:
+            blue, green, red = cv2.split(image)
+            # Blue dominates the stage-light reflection. Preserve the first six levels as noise margin.
+            excess = cv2.subtract(cv2.subtract(blue, cv2.max(green, red)), 6)
+            weights = cv2.LUT(cv2.min(green, red), self._glare_weights)
+            correction = cv2.multiply(excess, weights, dtype=cv2.CV_8U)
+            # The violet spill contributes some red too. Keep at least the original green level.
+            red_correction = cv2.min(cv2.subtract(red, green), cv2.LUT(correction, self._glare_red))
+            image = cv2.merge((cv2.subtract(blue, correction), green, cv2.subtract(red, red_correction)))
+        if self.lut is not None:
+            image = cv2.LUT(image, self.lut)
         if self.clahe is not None:
             lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
             lab[..., 0] = self.clahe.apply(lab[..., 0])

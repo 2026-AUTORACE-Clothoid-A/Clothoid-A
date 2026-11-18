@@ -41,8 +41,10 @@ def intervals(times):
 
 def run(row, output):
     config = detector_defaults()
-    for name, scope in [('lane.yaml', 'lane_main'), ('camera_limo2.yaml', '/**')]:
-        config.update(yaml.safe_load((ROOT/'ros2_ws/src/clothoid_lane/config'/name).read_text())[scope]['ros__parameters'])
+    for name in ('lane.yaml', 'camera_limo2.yaml'):
+        profile = yaml.safe_load((ROOT/'ros2_ws/src/clothoid_lane/config'/name).read_text())
+        for scope in ('/**', 'lane_main'):
+            config.update(profile.get(scope, {}).get('ros__parameters', {}))
     lane = make_detector(config.__getitem__)
     inv = np.linalg.inv(make_warp_matrix(lane.p))
     visual = ParkingLandmark()

@@ -190,8 +190,8 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
     lane_module = loaded['clothoid_lane.lane_main']
     cfg = ROOT/'ros2_ws/src'
     configs = [cfg/'clothoid_bringup/config/topics.yaml', cfg/'clothoid_lane/config/lane.yaml',
-               cfg/'clothoid_lane/config/stopline.yaml', cfg/f'clothoid_lane/config/camera_{camera}.yaml',
-               cfg/'clothoid_mission/config/mission.yaml']
+               cfg/'clothoid_lane/config/stopline.yaml', cfg/'clothoid_mission/config/mission.yaml',
+               cfg/f'clothoid_lane/config/camera_{camera}.yaml']
     args = ['--ros-args']
     for file in configs:
         args += ['--params-file', str(file)]
@@ -244,7 +244,7 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
             node.get_logger = lambda captured_logger=captured_logger: captured_logger
         for key, callback in (('limit_pub', lane.on_speed_limit), ('direction_pub', lane.on_direction),
                               ('parking_pub', lane.on_parking), ('steering_lock_pub', lane.on_steering_lock),
-                              ('bump_approach_pub', lane.on_bump_approach)):
+                              ('bump_approach_pub', lane.on_bump_approach), ('yaw_hold_pub', lane.on_yaw_hold)):
             if key in mp:
                 mp[key].callback = callback
         warnings = []
@@ -266,12 +266,26 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         info = mission.get_parameter('camera_info_topic').value
         if info not in topics:
             warnings.append('CameraInfo 미기록: 정지선 거리 재계산 불가')
-        if '/detections' not in topics:
+        value = lambda n: mission.get_parameter(n).value
+        detections_topic = value('detections_topic')
+        if detections_topic not in topics:
             warnings.append('YOLO 검출 미기록: 표지판·미션 재계산 제한')
-        wanted = {image_topic, info, mi, li, mo, lo, '/detections', '/mission/state',
+        inputs = [
+            (value('parking_done_topic'), mission.on_parking_done),
+            (value('parking_sign_topic'), mission.on_parking_sign),
+            (value('parking_line_topic'), mission.on_parking_line),
+            (value('parking_scene_topic'), mission.on_parking_scene),
+            ('/parking/observing', mission.on_parking_observing),
+            ('/parking/skipped', mission.on_parking_skipped),
+            (value('avoid_active_topic'), mission.on_avoid_active),
+            (value('cone_active_topic'), mission.on_cone_active),
+            (lane.get_parameter('cone_active_topic').value, lane.on_cone_active),
+            ('/parking/approach_speed_limit', lane.on_parking_approach),
+        ]
+        wanted = {image_topic, info, mi, li, mo, lo, '/mission/state',
                   '/cmd_vel', '/cmd_vel_lane', '/speed_limit', '/steering_lock',
-                  '/bump/approaching', '/parking_done', '/parking_sign', '/stopline_near',
-                  '/cone/mission_active'}-{None}
+                  '/bump/approaching', detections_topic}-{None}
+        wanted.update(topic for topic, _ in inputs)
         frames, events = [], []
         recorded = {}; dets = []; det_stamp = None
         current_result = None
@@ -285,7 +299,6 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         last_replay_state = None
         next_tick = start
         period = round(1e9/mission.get_parameter('rate_hz').value)
-        value = lambda n: mission.get_parameter(n).value
         def tick(stamp):
             nonlocal last_state, last_confirmed
             nonlocal last_replay_state
@@ -327,12 +340,10 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
                 mission.on_odom(message)
             if name == lo:
                 lane.on_odom(message)
-            if name == '/detections':
+            if name == detections_topic:
                 mission.on_detections(message)
                 dets = detection_rows(mission, message.detections); det_stamp = stamp
-            for topic, callback in (('/parking_done', mission.on_parking_done),
-                    ('/parking_sign', mission.on_parking_sign), ('/stopline_near', mission.on_parking_line),
-                    ('/cone/mission_active', mission.on_cone_active)):
+            for topic, callback in inputs:
                 if name == topic:
                     callback(message)
             if name == '/mission/state':
@@ -399,7 +410,7 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
             raise ValueError('카메라 프레임을 읽지 못했습니다.')
         parameters = {n: mission.get_parameter(n).value for n in (
             'white_h_min', 'white_h_max', 'white_s_max', 'white_v_min', 'line_min_run', 'line_band', 'line_min_thickness',
-            'line_max_thickness', 'line_require_crosswalk', 'input_timeout', 'bump_pitch_thresh',
+            'line_max_thickness', 'line_max_gap', 'line_require_crosswalk', 'input_timeout', 'bump_pitch_thresh',
             'bump_level_thresh', 'bump_level_duration', 'bump_arm_timeout', 'bump_cooldown',
             'bump_min_area', 'bump_min_height', 'detection_confidence', 'detection_confirm_hits',
             'detection_window', 'block_bump_after_cone', 'front_axle_x',

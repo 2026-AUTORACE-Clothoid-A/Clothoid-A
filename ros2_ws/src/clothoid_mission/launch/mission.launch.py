@@ -18,8 +18,8 @@ def nodes(context):
         package='clothoid_mission', executable='mission', name='mission', output='screen',
         parameters=[
             os.path.join(bringup_share, 'config', 'topics.yaml'),
-            os.path.join(lane_share, 'config', f'camera_{camera}.yaml'),
             os.path.join(mission_share, 'config', 'mission.yaml'),
+            os.path.join(lane_share, 'config', f'camera_{camera}.yaml'),
             {'debug': LaunchConfiguration('debug'), 'parking_enabled': LaunchConfiguration('parking_enabled')},
         ])]
 

@@ -47,9 +47,12 @@ def params(pkg, file, node):
 
 def build(camera='limo2'):
     # as lane.launch.py: the node's yaml, then the per-car camera file on top
-    cam = params('clothoid_lane', f'camera_{camera}.yaml', '/**')
+    with open(os.path.join(SRC, 'clothoid_lane', 'config', f'camera_{camera}.yaml')) as f:
+        profile = yaml.safe_load(f)
+    cam = profile['/**']['ros__parameters']
+    camera_lane = profile.get('lane_main', {}).get('ros__parameters', {})
     ly = {**detector_defaults(), 'steer_gain': 1.0, 'max_steer_rad': MAX_STEER_RAD,
-          **params('clothoid_lane', 'lane.yaml', 'lane_main'), **cam}
+          **params('clothoid_lane', 'lane.yaml', 'lane_main'), **cam, **camera_lane}
     lane = make_detector(lambda name: ly[name])
     sy = {**params('clothoid_lane', 'stopline.yaml', 'stopline'), **cam}
     sp = StopLineParams(

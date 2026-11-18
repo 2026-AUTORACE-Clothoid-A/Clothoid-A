@@ -49,3 +49,23 @@
     # 1.1 deg RMS, corners +0.3 deg); 205+ jitters on straights (lines at the edge of the camera view in
     # the bottom rows), 215+ under-steers in corners, 165- turns earlier before corners.
     look_row: 185
+
+# Exposure 1200, 11-18 REAL track. Keep the correction on the camera used for these bags.
+# The global lane HSV values also feed the raw-image static avoidance cues.
+lane_main:
+  ros__parameters:
+    blue_glare_strength: 0.75
+    gamma_enabled: true
+    gamma: 1.2
+    hsv_lower: [18, 70, 76]
+    white_s_max: 57
+    white_v_min: 157
+
+mission:
+  ros__parameters:
+    blue_glare_strength: 0.75
+    gamma_enabled: true
+    gamma: 1.2
+    # Compensate gamma's brightness/saturation shift to keep dim crosswalk and entry paint.
+    white_s_max: 68
+    white_v_min: 137
