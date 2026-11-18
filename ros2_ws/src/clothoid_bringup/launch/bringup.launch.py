@@ -11,10 +11,15 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import Command, LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
+
+
+def auto_if_negative(name):
+    """'true' (driver's auto mode) when the launch argument is negative, else 'false'."""
+    return PythonExpression(["'true' if float('", LaunchConfiguration(name), "') < 0 else 'false'"])
 
 
 def static_tf(name, parent, child, xyz, rpy=('0', '0', '0'), pitch=None):
@@ -68,6 +73,11 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_pitch', default_value='0.0',
                               description='camera pitch in rad, measure the real mounting angle'),
         DeclareLaunchArgument('use_camera', default_value='true'),
+        DeclareLaunchArgument('camera_exposure', default_value='1200',
+                              description='colour exposure, -1 = auto. Auto exposure drops the camera to '
+                                          '16-25 Hz in the dark; manual keeps 30 Hz up to 2399 (2026-11-18)'),
+        DeclareLaunchArgument('camera_white_balance', default_value='-1',
+                              description='colour white balance in K, -1 = auto (larger = bluer image)'),
         DeclareLaunchArgument('use_lidar', default_value='true'),
         DeclareLaunchArgument('use_image_10hz', default_value='true',
                               description='republish the colour image at 10 Hz on /camera/color/image_10hz '
@@ -124,6 +134,12 @@ def generate_launch_description():
                 'enable_point_cloud': 'false',
                 'enable_colored_point_cloud': 'false',
                 'publish_tf': 'false',
+                # the driver prints "Failed to setup devices" every start but still applies these;
+                # check brightness and Hz, not that line. `ros2 param set` at runtime does not work.
+                'enable_color_auto_exposure': auto_if_negative('camera_exposure'),
+                'color_exposure': LaunchConfiguration('camera_exposure'),
+                'enable_color_auto_white_balance': auto_if_negative('camera_white_balance'),
+                'color_white_balance': LaunchConfiguration('camera_white_balance'),
             }.items(),
             condition=IfCondition(LaunchConfiguration('use_camera'))),
 
