@@ -1,0 +1,11 @@
+lane_main:
+  ros__parameters:
+    color_method: hsv
+    gamma_enabled: false
+    clahe_enabled: false
+    hsv_lower: [10, 5, 120]
+    hsv_upper: [50, 255, 255]
+    white_h_min: 0
+    white_h_max: 179
+    white_s_max: 30
+    white_v_min: 210

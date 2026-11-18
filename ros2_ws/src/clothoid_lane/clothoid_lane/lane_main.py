@@ -22,6 +22,7 @@ from sensor_msgs.msg import Image, Imu
 from std_msgs.msg import Bool, Float32, Int32
 
 from clothoid_common.image_utils import bgr_to_image, image_to_bgr
+from clothoid_common.color import color_defaults, color_params
 from clothoid_common.qos import IMAGE_QOS
 from clothoid_common.quiet_node import QuietEventsMixin
 from clothoid_lane.lane_detector import (SIDE_RIGHT, LaneDetector, LaneParams)
@@ -49,6 +50,7 @@ def detector_defaults() -> dict:
               'hsv_lower': list(d.hsv_lower), 'hsv_upper': list(d.hsv_upper),
               'canny_low': d.canny_low, 'canny_high': d.canny_high}
     values.update(TrackerParams().__dict__)
+    values.update(color_defaults())
     return values
 
 
@@ -71,10 +73,13 @@ def make_detector(value):
     kind = value('detector')
     if kind not in DETECTORS:
         raise ValueError(f'detector must be one of {DETECTORS}, got {kind!r}')
+    color = color_params(value)
     if kind == 'sliding2025':
+        if color.color_method != 'hsv' or color.gamma_enabled or color.clahe_enabled:
+            raise ValueError('Lab/RGB/gamma/CLAHE require detector=track2026')
         return LaneDetector(lane_params(value))
     return LaneTracker(lane_params(value),
-                       TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}))
+                       TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}), color)
 
 
 class LaneMainNode(QuietEventsMixin, Node):

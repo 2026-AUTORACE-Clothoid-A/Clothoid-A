@@ -62,6 +62,24 @@ lane_main:
     # detector: track2026 (yellow outer lines + white dividers, lane_tracker.py) or sliding2025 (2025 port)
     detector: track2026
 
+    # Current-image color pipeline; gamma/CLAHE run before blur and BEV.
+    # HSV without preprocessing preserves the existing behavior. See color_*.yaml presets.
+    color_method: hsv       # hsv | lab | rgb (track2026)
+    gamma_enabled: false
+    gamma: 1.2              # output = round(255 * (input / 255)^gamma); >1 darkens
+    clahe_enabled: false
+    clahe_clip_limit: 2.0   # 8-bit Lab L only
+    clahe_grid_size: 8
+    lab_yellow_b_min: 2.0   # float CIELab: L 0..100, signed a/b
+    lab_yellow_a_abs_max: 25.0
+    lab_yellow_l_min: 40.0
+    lab_white_chroma_max: 16.0
+    lab_white_l_min: 80.0
+    rgb_yellow_difference_min: 5   # min(R,G) - B, 0..255 channels
+    rgb_yellow_v_min: 90
+    rgb_white_spread_max: 30      # max(R,G,B) - min(R,G,B)
+    rgb_white_v_min: 190
+
     # yellow lane line (HSV). Measured on the 11-05 bags: tape H 18~28, S 70~180, V 100~220,
     # floor S 0~35, V 35~65. The 2025 value S >= 215 matched no tape at all.
     hsv_lower: [18, 60, 90]
@@ -70,6 +88,8 @@ lane_main:
     canny_high: 100          # sliding2025 only
 
     # track2026: white lane dividers between the yellow lines (warped image px)
+    white_h_min: 0           # inclusive 0..179; full range keeps the previous white mask
+    white_h_max: 179
     white_s_max: 50          # white = S <= 50 and V >= 170
     white_v_min: 170
     # white_min_length (divider dash >= this many px) depends on the warp: camera_limo1.yaml / camera_limo2.yaml

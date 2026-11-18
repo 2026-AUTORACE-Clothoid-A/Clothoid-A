@@ -1,0 +1,10 @@
+lane_main:
+  ros__parameters:
+    color_method: lab
+    gamma_enabled: false
+    clahe_enabled: false
+    lab_yellow_b_min: 2.0
+    lab_yellow_a_abs_max: 25.0
+    lab_yellow_l_min: 40.0
+    lab_white_chroma_max: 16.0
+    lab_white_l_min: 80.0
