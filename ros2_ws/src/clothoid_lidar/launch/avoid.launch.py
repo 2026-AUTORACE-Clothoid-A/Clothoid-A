@@ -50,6 +50,9 @@ def _nodes(context):
              for k in ('ignore_cone', 'debug_heavy', 'course_map')}
     flags['recovery_reverse'] = LaunchConfiguration('reverse').perform(context).lower() == 'true'
     flags['escape'] = LaunchConfiguration('escape').perform(context).lower() == 'true'
+    repeat = LaunchConfiguration('stuck_repeat').perform(context).lower()
+    if repeat in ('true', 'false'):         # '' = static_avoid.yaml's stuck_repeat_back
+        flags['stuck_repeat_back'] = repeat == 'true'
     cam_file, white = _lane_files(camera)
     extra = LaunchConfiguration('params').perform(context)
     flags['image_source'] = LaunchConfiguration('image').perform(context)
@@ -90,5 +93,9 @@ def generate_launch_description():
         DeclareLaunchArgument('escape', default_value='true',
                               description='stuck: drive a free curvature-limited three-arc escape path '
                                           '(AvoidParams.escape), first after a back-up'),
+        DeclareLaunchArgument('stuck_repeat', default_value='',
+                              description='stuck again at the same spot: a dead end for the plans and a '
+                                          '0.8 m back-up (AvoidParams.stuck_repeat_back). true / false; '
+                                          'empty: static_avoid.yaml (on)'),
         OpaqueFunction(function=_nodes),
     ])

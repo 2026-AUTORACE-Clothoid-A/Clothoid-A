@@ -29,6 +29,8 @@ latter (an avoid-only test launched inside the section, with no turn before it).
 way the car came / drive a free three-arc escape path (first after a back-up). The 11-13 crash once
 blamed on them (1113 auto 01 / 02: ~90 deg, off the track) was cone_follower publishing on
 /cmd_vel_avoid before it got its own /cmd_vel_cone (11-13 17:54); none of their commands is in those bags.
+`avoid_stuck_repeat` (empty = static_avoid.yaml, on): stuck again at the same spot, that spot is a dead
+end for the plans and the back-up 0.8 m (1118_1616: the same spot six times). false: off.
 
 Off by default: `require_arm:=true` locks autonomy until /estop receives `false` (config/twist_mux_arm.yaml).
 Shadow run (nothing drives, see what the stack would send): `mux_output:=/cmd_vel_dry`.
@@ -108,6 +110,9 @@ def generate_launch_description():
         DeclareLaunchArgument('avoid_escape', default_value='true',
                               description='static_avoid drives a free escape path when every path stays '
                                           'blocked (first after a back-up)'),
+        DeclareLaunchArgument('avoid_stuck_repeat', default_value='',
+                              description='static_avoid: stuck again at the same spot -> a dead end and a '
+                                          '0.8 m back-up. false = off; empty: static_avoid.yaml (on)'),
         DeclareLaunchArgument('avoid_debug_heavy', default_value='false',
                               description='static_avoid also publishes /avoid/candidates and /avoid/costmap'),
         DeclareLaunchArgument('steering_scale', default_value='1.06'),
@@ -142,6 +147,7 @@ def generate_launch_description():
                  'ignore_cone': LaunchConfiguration('ignore_cone'),
                  'reverse': LaunchConfiguration('avoid_reverse'),
                  'escape': LaunchConfiguration('avoid_escape'),
+                 'stuck_repeat': LaunchConfiguration('avoid_stuck_repeat'),
                  'course_map': LaunchConfiguration('avoid_course_map'),
                  'debug_heavy': LaunchConfiguration('avoid_debug_heavy')}, enabled('use_avoid')),
         include('clothoid_parking', 'parking.launch.py', {'debug': debug}, enabled('use_parking')),
