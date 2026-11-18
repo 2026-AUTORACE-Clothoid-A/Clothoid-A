@@ -218,6 +218,8 @@ def test_mission_start_brakes_before_front_wheel_entry_without_committing_a_stop
     from test_line_stop import render
 
     n, clock = node
+    # the start-line path (mission.yaml slows at once on the slow sign since 1118 PM)
+    n.logic.p.slow_at_stopline = True
     cam = CameraModel()
     n.on_info(CameraInfo(width=640, height=480,
                          k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
@@ -347,6 +349,7 @@ def test_entry_slowing_does_not_move_or_complete_the_existing_bumper_stop_target
 @pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump', 'sign_pedestrian', 'traffic_light_red'])
 def test_start_line_slows_near_entry_instead_of_starting_a_long_crawl(node, sign):
     n, clock = node
+    n.logic.p.slow_at_stopline = True    # the start-line path (mission.yaml: at once since 1118 PM)
     limits = []
     n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
     for now in (1000., 1000.1, 1000.2):
@@ -440,3 +443,14 @@ def test_configured_fork_sweep_confirms_after_missing_frames(node, name, directi
     n.on_timer()
     assert name in n.seen and n.logic.direction == direction
     assert not n.logic.parking_flag and n.logic.state == DRIVE
+
+
+def test_configured_slow_sign_slows_at_once(node):
+    """mission.yaml (1118 PM): slow_speed on the confirmed slow sign, no start line needed."""
+    n, clock = node
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, 'sign_slow')
+        n.on_timer()
+    assert limits and limits[-1] == pytest.approx(.2)

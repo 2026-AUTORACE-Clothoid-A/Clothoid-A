@@ -69,6 +69,9 @@ class ConeSorterNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_topic', '/parking_flag')
         self.declare_parameter('parking_hold_timeout', 2.0)   # s; mission re-sends the flag every 1 s
         self.declare_parameter('single_course', True)         # no START after a handover END
+        # /mission/light_stopped (latched true once the car stopped at the traffic light): no course START
+        # after it (1118 PM: the parking area's cones restarted the course and slowed the parking)
+        self.declare_parameter('light_stopped_topic', '/mission/light_stopped')
 
         defaults = SorterParams()
         for name, _ in _FIELDS:
@@ -88,11 +91,14 @@ class ConeSorterNode(QuietEventsMixin, Node):
         self.held = None
         self.parking, self.parking_seen = False, None
         self.completed = False
+        self.light_stopped = False
         self.exit_logged = False
         self.create_subscription(
             Bool, self.get_parameter('avoid_active_topic').value, self.on_avoid_active, 1)
         self.create_subscription(
             Bool, self.get_parameter('parking_topic').value, self.on_parking, 1)
+        self.create_subscription(
+            Bool, self.get_parameter('light_stopped_topic').value, self.on_light_stopped, 1)
 
         self.exit_pub = self.create_publisher(Bool, '/cone/exiting', 1)
         self.create_subscription(Bool, '/cone/exit_complete', self.on_exit_complete, 1)
@@ -119,6 +125,9 @@ class ConeSorterNode(QuietEventsMixin, Node):
             self.exit_pub.publish(Bool(data=False))
             self.active_pub.publish(Bool(data=False))
 
+    def on_light_stopped(self, msg: Bool):
+        self.light_stopped = self.light_stopped or bool(msg.data)      # latched for the run
+
     def on_parking(self, msg: Bool):
         self.parking, self.parking_seen = msg.data, self.get_clock().now()
 
@@ -133,6 +142,8 @@ class ConeSorterNode(QuietEventsMixin, Node):
             return 'static obstacle mission running or just ended'
         if self.parking_holds():
             return 'parking'
+        if self.light_stopped:
+            return 'past the traffic light stop'
         if self.completed and self.get_parameter('single_course').value:
             return 'course already done'
         return None

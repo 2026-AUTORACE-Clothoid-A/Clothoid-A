@@ -136,7 +136,7 @@ class Viewer(QMainWindow):
         for label,field in [('원본 라이다','show_raw'),('조향 궤적','show_turn')]:
             checkbox=QCheckBox(label);checkbox.setChecked(True);checkbox.toggled.connect(lambda value,key=field:self.set_layer(key,value));row.addWidget(checkbox)
         row.addStretch();save=QPushButton('현재 화면 저장');save.clicked.connect(self.save);row.addWidget(save);layout.addLayout(row)
-        footer=QLabel('카메라·차선 준비 신호·기록 명령 = 원본 백 | 콘 경로 = 현재 코드 | 스캔 단위 재계산·ROS 콜백 지연 미재현 | 끝에서 정지')
+        footer=QLabel('카메라·기록 명령 = 원본 백 | 콘 경로 = 현재 코드 | 스캔 단위 재계산·ROS 콜백 지연 미재현 | 끝에서 정지')
         footer.setStyleSheet('color:#a9bdce');layout.addWidget(footer)
         self.shortcuts=[]
         for sequence,callback in [('Space',self.toggle),('Left',lambda:self.step(-1)),('Right',lambda:self.step(1))]:
@@ -208,11 +208,16 @@ class Viewer(QMainWindow):
             details+=f'   관측 끝점까지 {distance*100:.0f}cm (후륜 기준)'
         if f.get('rear_remaining') is not None:
             details+=f"   후차축 통과까지 {f['rear_remaining']*100:+.0f}cm"
+        if f.get('lane_image') is not None:
+            found, speed = f['lane_image']
+            details += '   카메라 차선 ' + ('검출' if found else '유실')
+            details += ' · 차선 명령 ' + (f'{speed:.2f} m/s' if speed is not None else '없음')
         self.status.setText(f"{f['state']}   |   좌 {len(f['left'])} / 우 {len(f['right'])}개"+details)
         recorded='기록 명령 없음';ri=bisect.bisect_right(self.recorded_times,t)-1
         if ri>=0 and t-self.recorded_times[ri]<=.3:
             _,v,w=self.data['recorded'][ri];recorded=f'기록 /cmd_vel  v {v:+.2f} m/s · ω {w:+.2f} rad/s'
-        methods={'observed':'main 중심 경로·호장 목표점', 'main_reverse':'main 한쪽 경계 후진',
+        methods={'camera wait':'카메라 차선 후보 대기','camera blocked':'차선 경로 라이다 검사',
+                 'camera lane':'검출 차선 저속 추종','observed':'main 중심 경로·호장 목표점', 'main_reverse':'main 한쪽 경계 후진',
                  'exit_path':'콘 출구 저장 경로·후축 원 목표점', 'exit_wait':'탈출 관측 대기 정지',
                  'lane_connection':'저속 차선 연결', 'lane_connection_wait':'차선 연결 입력·피드백 대기'}
         method=methods[c.source] if c is not None and c.source in methods else ('안쪽 콘–바깥 경계 중간점' if f['fan'] else '기존 중심 경로' if c is not None and not c.reverse else '전진 경로 없음')

@@ -64,9 +64,12 @@ mission:
     line_band: 0.22
     line_min_run: 0.7
     line_min_thickness: 0.008
+    line_max_gap: 0.01          # m, bridge the floor mats' seam across the stop line (1118 night: 0.3~0.6 cm)
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
     line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
+    line_crosswalk_grace: 0.35    # s, pedestrian / light stop: bars seen just past the line within this still confirm
+                                  # it (1118 1607: blue light, line at 0.81~0.73 m, bars only in the next image)
     front_axle_x: 0.10          # mission entry only: base_link -> front wheels
     entry_reaction_sec: 0.10    # timer/actuation lead; 0738/0816 bags reach 0.2 in 0.20-0.24 s
     entry_deceleration: 2.5     # m/s^2; 0.8 -> 0.2 starts about 0.24 m before entry, including 4 cm margin
@@ -74,13 +77,24 @@ mission:
     entry_min_span: 0.26       # metres across the road; partial boundary while leaving a corner
     entry_rate_hz: 10.0        # shared image/mask, entry fit at most once per 100 ms time slot
     slow_speed: 0.2             # rules: 0.2 m/s or less
-    slow_hold_sec: 4.0          # general slow sign hold timer
+    slow_hold_sec: 5.0          # s after the last confirmed slow sign (1118: 4 s ended before the hill)
+    slow_until_pedestrian_stop: true  # zigzag zone: a pedestrian sign in the slow hold keeps it to that stop
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: 3.5      # deg, absolute pitch; supports either IMU sign convention
     bump_level_thresh: 1.2      # deg, abs angle to detect vehicle leveled
     bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
+    # 1118 PM: the start's bump sign became a slow sign, whose 4 s hold ended before the hill. The IMU
+    # alone now slows over any tilt >= bump_pitch_thresh (speed only, lane keeps steering) until level
+    # after the opposite tilt, at most hill_max_sec after the last tilt
+    hill_slow_imu: true
+    hill_max_sec: 6.0
+    # first slow zone (start hill): lane_main holds the IMU yaw from the first slow sign until the hill is
+    # over (hill imu rose and fell), at most yaw_hold_max_sec; the hill's yellow paint pulled the target
+    first_slow_yaw_hold: true
+    yaw_hold_max_sec: 10.0
+    yaw_hold_after_m: 1.0       # m after the first slow sign: steady heading until just before the hill
     # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.
     require_cone_for_parking: true
     block_bump_after_cone: true
@@ -94,11 +108,12 @@ mission:
     cooldown_sec: 15.0
     fork_left_direction: 0      # lane_main side: 0 left lane, 1 right lane, 2 both
     fork_right_direction: 1
+    fork_lock_after_avoid: true # keep the direction once static_avoid ran and ended (later boxes: misdetections)
     # Only used when require_scene_confirmation is explicitly disabled (legacy mode).
     parking_at_stopline: true
     # Legacy parameter names: these refer to mission START lines, not crosswalk stop lines.
     # Signs prepare the entry observer; braking begins before front-wheel entry.
-    slow_at_stopline: true
+    slow_at_stopline: false     # 1118 PM: slow at once on the confirmed sign (the zone start lines were missed)
     bump_at_stopline: true
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py), independently of mission entry. Keep FinishCore's original stop settings.

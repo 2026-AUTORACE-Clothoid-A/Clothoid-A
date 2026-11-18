@@ -6,6 +6,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 HERE = os.path.dirname(__file__)
 for rel in ('..', '../../clothoid_finish', '../../clothoid_lane', '../../clothoid_parking'):
@@ -210,3 +211,65 @@ def test_entry_component_fit_rejects_diamond_and_letter_markings():
         core.image(0., render(cam, 1.1, 0., yaw, crosswalk=False,
                               boundary=False, letters=True, diamond=True))
         assert not core.observation.entry_lines
+
+
+def _grace_core(grace):
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam), FinishParams(band=.22))
+    core.require_crosswalk, core.crosswalk_grace = True, grace
+    core.start(0.)
+    return cam, core
+
+
+@pytest.mark.parametrize('grace,gap,committed', [(.35, .05, True), (0., .05, False), (.35, .5, False)])
+def test_crosswalk_just_after_the_line_confirms_it_within_the_grace(grace, gap, committed):
+    """1118 1607: blue light; the line was seen without its bars, the bars only in the next image."""
+    cam, core = _grace_core(grace)
+    for k in range(4):                                           # the line alone
+        core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=False, letters=False))
+    assert core.phase == Phase.FOLLOW
+    core.image(.15+gap, render(cam, 1.3, 0., 0., crosswalk=True, boundary=False, letters=False))
+    assert (core.phase == Phase.COMMIT) == committed
+
+
+def test_crosswalk_alone_confirms_nothing():
+    cam, core = _grace_core(.35)
+    for k in range(5):
+        core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=True, boundary=False, letters=False))
+    assert core.phase == Phase.FOLLOW
+
+
+def _seamed(img, cam):
+    """Cut a 5 mm floor-mat seam along the lane centre through every painted marking."""
+    h, w = img.shape[:2]
+    v, u = np.mgrid[0:h, 0:w].astype(np.float64)
+    below = np.arctan((v - cam.cy) / cam.fy) + cam.pitch
+    ok = below > 0.01
+    fwd = np.where(ok, cam.height / np.tan(np.where(ok, below, 1.0)), 0)
+    zc = fwd * math.cos(cam.pitch) + cam.height * math.sin(cam.pitch)
+    wy = -(u - cam.cx) / cam.fx * zc + cam.y
+    out = img.copy()
+    out[ok & (np.abs(wy - .03) < .0025)] = (40, 45, 50)
+    return out
+
+
+@pytest.mark.parametrize('gap,committed', [(0., False), (.01, True)])
+def test_floor_seam_through_the_stop_line_is_bridged(gap, committed):
+    """1118 night (limo2): the mats' seam split the light's stop line, longest run 58 % < 70 %."""
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam), FinishParams(band=.22))
+    core.require_crosswalk, core.max_gap = True, gap
+    core.start(0.)
+    for k in range(5):
+        core.image(k*.05, _seamed(render(cam, 1.3, 0., 0., letters=False), cam))
+    assert (core.phase == Phase.COMMIT) == committed
+
+
+def test_bridging_does_not_turn_the_letters_into_a_line():
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam), FinishParams(band=.22))
+    core.max_gap = .01
+    core.start(0.)
+    for k in range(5):
+        core.image(k*.05, render(cam, 1.3 - .2, 0., 0., crosswalk=False, boundary=False, letters=True))
+    assert core.phase == Phase.FOLLOW

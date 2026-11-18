@@ -131,6 +131,11 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.declare_parameter('initial_side', SIDE_RIGHT)  # 0 left, 1 right, 2 both
         self.declare_parameter('steering_lock_topic', '/steering_lock')
         self.declare_parameter('steering_lock_timeout', 1.5)  # mission refreshes every 1 s
+        # /lane/yaw_hold (mission, first slow zone = the start's hill): keep the IMU yaw of the moment it
+        # turned on instead of the camera target (the hill's yellow paint pulled the target sideways)
+        self.declare_parameter('yaw_hold_topic', '/lane/yaw_hold')
+        self.declare_parameter('yaw_hold_gain', 1.5)            # steer rad per rad of yaw error
+        self.declare_parameter('yaw_hold_max_steer_deg', 8.0)
         self.declare_parameter('imu_topic', '/imu_25hz')
         self.declare_parameter('steering_lock_level_deg', 1.2)
         self.declare_parameter('steering_lock_reference_timeout', 1.0)
@@ -158,6 +163,8 @@ class LaneMainNode(QuietEventsMixin, Node):
         self.cone_handover = ConeHandover()
         self.cone_connecting = False
         self.steering_locked = False
+        self.yaw_hold = False
+        self.yaw_hold_stamp = self.yaw_hold_ref = None
         self.steering_lock_stamp = None
         self.imu_pitch = self.imu_stamp = None
         self.imu_yaw = None
@@ -199,6 +206,8 @@ class LaneMainNode(QuietEventsMixin, Node):
             Odometry, self.get_parameter('odom_topic').value, self.on_odom, qos_profile_sensor_data)
         self.create_subscription(
             Bool, self.get_parameter('bump_approach_topic').value, self.on_bump_approach, 1)
+        self.create_subscription(
+            Bool, self.get_parameter('yaw_hold_topic').value, self.on_yaw_hold, 1)
 
         self.create_subscription(
             Bool, self.get_parameter('cone_active_topic').value, self.on_cone_active, 1)
@@ -340,6 +349,30 @@ class LaneMainNode(QuietEventsMixin, Node):
                 self.odom_travel += step
         self.odom_pose, self.odom_stamp = pose, stamp
 
+    def on_yaw_hold(self, msg: Bool):
+        hold = bool(msg.data)
+        if hold and not self.yaw_hold:
+            self.yaw_hold_ref = self.imu_yaw          # None until the IMU reports: set on first use
+            self.get_logger().info('yaw hold on' + (f' at {math.degrees(self.imu_yaw):.1f} deg'
+                                                    if self.imu_yaw is not None else ''))
+        elif self.yaw_hold and not hold:
+            self.get_logger().info('yaw hold off')
+            self.yaw_hold_ref = None
+        self.yaw_hold, self.yaw_hold_stamp = hold, self.get_clock().now()
+
+    def yaw_hold_steering(self, now):
+        """Steering that keeps the reference yaw, or None (no hold, stale hold or stale IMU)."""
+        if (not self.yaw_hold or self.yaw_hold_stamp is None or
+                (now-self.yaw_hold_stamp).nanoseconds*1e-9 > self.get_parameter('steering_lock_timeout').value
+                or self.imu_yaw is None or self.imu_stamp is None or
+                not 0 <= (now-self.imu_stamp).nanoseconds*1e-9 <= .25):
+            return None
+        if self.yaw_hold_ref is None:
+            self.yaw_hold_ref = self.imu_yaw
+        error = math.remainder(self.imu_yaw - self.yaw_hold_ref, 2*math.pi)
+        limit = math.radians(self.get_parameter('yaw_hold_max_steer_deg').value)
+        return max(-limit, min(limit, -self.get_parameter('yaw_hold_gain').value*error))
+
     def on_bump_approach(self, msg: Bool):
         self.bump_approaching = bool(msg.data)
         self.bump_approach_stamp = self.get_clock().now()
@@ -466,6 +499,15 @@ class LaneMainNode(QuietEventsMixin, Node):
 
         if result.zigzag:
             self.last_zigzag_stamp = now
+        yaw_steer = self.yaw_hold_steering(now)
+        if yaw_steer is not None:
+            cmd = Twist()
+            cmd.linear.x = self.current_speed()
+            cmd.angular.z = angular_z(cmd.linear.x, yaw_steer, self.get_parameter('wheelbase').value)
+            self.last_cmd, self.last_steer = cmd, yaw_steer
+            self.bump_gap.clear()
+            self.cmd_pub.publish(cmd)
+            return result
         if gap_steer is not None:
             cmd = Twist()
             cmd.linear.x = min(self.current_speed(), self.get_parameter('bump_gap_speed').value)

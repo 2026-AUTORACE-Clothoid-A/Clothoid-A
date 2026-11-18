@@ -111,6 +111,7 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         self.entry = EntryLineTracker()
         self.course = None
         self.snaps_logged = 0
+        self.shift_logged = False
         self.origin_logged = 'pending'
         self.line_start_odo = None          # odometer of the requested section start line
         self.blocker_fallback = False       # race start, the line start dropped: a blocker starts it
@@ -321,6 +322,12 @@ class StaticAvoidNode(QuietEventsMixin, Node):
                     self.get_logger().info(f'course map: heading snapped by {deg:+.1f} deg on the '
                                            f'straight at odometer {odo:.1f} m')
             self.snaps_logged = len(self.course.snaps)
+            if self.course.shift and not self.shift_logged:
+                self.shift_logged = True
+                self.get_logger().warn(
+                    f'course map: the first right turn at map x {self.course.corner1[1]:.2f} m, '
+                    f'moved by {self.course.shift:+.2f} m to x {self.p.course_corner1_x:.2f} '
+                    '(node started late or the car set down off the race start)')
             why = self.course.should_fall_back(self.tracker.distance, self.entry)
             if why:
                 self.entry.start_by_map = None
@@ -393,12 +400,15 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         had_line = self.avoid.line_start is not None
         # course map: a blocker starts the mission only away from the race start (see CourseMap); one
         # right after the launch is an avoid test launched in the section (nothing there at the race start)
+        # (course_test_start 0: off, the race always starts at the race start)
         if (self.course is not None and self.course.origin == 'pending'
                 and self.tracker.distance < self.p.course_test_start and self.avoid.blocked(limos)):
             self.course.set_origin('elsewhere', f'a LIMO in our lane {self.tracker.distance:.2f} m after '
                                    'the launch')
             self.log_origin()
-        allowed = self.course is None or self.course.origin == 'elsewhere' or self.blocker_fallback
+        turn2 = self.course is not None and self.course.turn2_blocker(self.tracker.distance)
+        allowed = (self.course is None or self.course.origin == 'elsewhere' or self.blocker_fallback
+                   or turn2)
         started = self.avoid.on_limos(self.now(), limos, self.inhibit(), self.tracker.speed, pose,
                                       entry_back, entry_pose, allowed)
         if self.avoid.done and not was_done:
@@ -413,6 +423,8 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         if started:
             how = ('section start line, at approach speed until a blocker'
                    if self.avoid.approach else 'blocked ahead')
+            if turn2 and not self.avoid.approach:
+                how += ', past the second right turn without the start line on the map'
             self.get_logger().info(f'static obstacle START ({how}) at odometer '
                                    f'{self.tracker.distance:.2f} m, island '
                                    f'{self.avoid.island[0]:.2f} m ({self.avoid.island_source})')
