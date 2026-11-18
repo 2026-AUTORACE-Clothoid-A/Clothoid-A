@@ -7,9 +7,10 @@ from typing import Optional, Tuple
 import numpy as np
 
 from clothoid_parking.bay_finder import BayParams, find_bay, row_slope_angle
-from clothoid_parking.planner import Phase, PlanParams, Planner
+from clothoid_parking.planner import Phase, PlanParams, Planner, turn_remaining
 from clothoid_parking.tracker import Tracker, Pose2D
 from clothoid_parking.layout import ParkingLayout
+from clothoid_common.parking_geometry import PARKING_GEOMETRY
 
 
 class ParkingCore:
@@ -89,6 +90,8 @@ class ParkingCore:
         return refined
 
     def set_flag(self, now: float, on: bool):
+        if self.layout is not None:
+            self.layout.reference_fixed = on
         if not on and self.layout is not None:
             self.layout.retain_free(now, False)
         if on and not self.flag and self.planner.phase == Phase.IDLE:
@@ -116,13 +119,14 @@ class ParkingCore:
                         # Preparation may advertise this geometry, but mission
                         # still requires its sign/entry checks; command() checks
                         # each near-term swept footprint after handover.
-                        if (candidate is None and confirmed and
+                        if (self.layout.p.target_bay and candidate is None and confirmed and
                                 self.layout.states[self.layout.p.target_bay-1] == 'unknown'):
-                            target = self.layout.bays()[self.layout.p.target_bay-1]
+                            target = self.layout.goal(self.layout.p.target_bay-1)
                             path = self.layout.path(target, self.tracker.pose, self.planner.p)
                             if path is not None and self.layout.coverage(path, now) != 'occupied':
                                 candidate = target
-                        self.approach_bay = candidate
+                        self.approach_bay = candidate or (self.layout.observation_bay(
+                            self.tracker.pose, self.planner.p) if confirmed and not self.layout.p.target_bay else None)
                     if self.layout.p.control_enabled and self.phase == Phase.SEARCH:
                         # Revoke a candidate even inside the legacy freeze distance.
                         self.planner.bay = candidate
@@ -171,30 +175,57 @@ class ParkingCore:
             if now-self.layout.last_scan > .5:
                 self.layout.retain_free(now, False)
                 return 0., 0.
+            if self.phase == Phase.SEARCH and now-self.planner._t_phase >= self.layout.p.search_timeout:
+                self.planner._go(Phase.ABORT, now, 'no confirmed accessible empty bay before search timeout')
+                return 0., 0.
             if self.phase == Phase.SEARCH and (self.layout.origin is None or self.layout.support_count < self.layout.p.confirm_scans):
                 return 0., 0.
             if self.phase == Phase.SEARCH and self.planner.bay is None:
                 # Observe from a closer viewpoint, but never cross the turn
                 # commitment point without a confirmed target footprint.
-                target = self.layout.bays()[self.layout.p.target_bay-1]
-                pose, p = self.tracker.pose, self.planner.p
-                along = (target.face_x-pose.x)*math.cos(target.row_yaw)+(target.face_y-pose.y)*math.sin(target.row_yaw)
-                remaining = along-p.turn_radius-p.turn_lead-self.layout.p.observation_stop_margin
-                if now-self.layout.last_observation > self.layout.p.max_pose_age or remaining <= 0:
-                    self.layout.reason = 'holding: designated bay not confirmed before turn'
+                target = self.layout.observation_bay(self.tracker.pose, self.planner.p)
+                if target is None:
+                    self.layout.reason = 'holding: no observable bay with a clear existing entry route'
                     return 0., 0.
-                self.layout.reason = 'observing designated bay before turn'
+                pose, p = self.tracker.pose, self.planner.p
+                remaining = turn_remaining(target, pose, p)-self.layout.p.observation_stop_margin
+                if now-self.layout.last_observation > self.layout.p.max_pose_age or remaining <= 0:
+                    self.layout.reason = 'holding: bay not confirmed before turn'
+                    return 0., 0.
+                self.layout.reason = 'observing bay before turn'
                 v = min(p.search_speed, max(p.min_speed, remaining))
                 out = v, self.planner._hold(pose, target.row_yaw, v)
             else:
                 out = self.planner.step(now, self.tracker.pose, self.front_range)
+            if self.phase == Phase.SEARCH and not self.layout.p.target_bay and out is not None and out[0] > 0:
+                # Align to the measured road centre before the existing arc.
+                # Heading hold alone preserves a lateral spawn error, which
+                # can push the first column's sweep into the parking sign.
+                pose = self.tracker.pose
+                yaw = self.layout.yaw
+                normal = -self.layout.p.side * (-math.sin(yaw)*(pose.x-self.layout.origin[0])+
+                                               math.cos(yaw)*(pose.y-self.layout.origin[1]))
+                error = PARKING_GEOMETRY.boundary_spacing/2-normal
+                reference = yaw-self.layout.p.side*math.atan2(error, .25)
+                aligned = out[0], self.planner._hold(pose, reference, out[0])
+                # At first observation the rear corners' lateral sweep may be
+                # hidden. Keep the existing heading hold until that correction
+                # itself has measured clearance; the final gate checks it too.
+                if self.layout.motion_clear(now, pose, *aligned, .2):
+                    out = aligned
             if previous_phase == Phase.SEARCH and self.phase == Phase.TURN and not self.layout.retaining:
                 self.layout.retain_free(now, True)
             elif self.phase not in (Phase.SEARCH, Phase.TURN, Phase.ENTER):
                 self.layout.retain_free(now, False)
-            if self.phase == Phase.PARKED and not self.layout.inside_bay(self.planner.bay, self.tracker.pose):
-                self.planner._go(Phase.ABORT, now, 'vehicle corners outside designated bay')
-                return 0., 0.
+            if self.phase == Phase.PARKED:
+                # Count judging time after wheel-speed feedback has settled,
+                # rather than including the final braking interval.
+                if abs(self.tracker.speed) >= .01:
+                    self.planner._t_phase = now
+                index = self.layout.p.target_bay-1 if self.layout.p.target_bay else self.layout.selected
+                if index is None or not self.layout.inside_bay(self.layout.bays()[index], self.tracker.pose):
+                    self.planner._go(Phase.ABORT, now, 'vehicle corners outside designated bay')
+                    return 0., 0.
             if self.phase in (Phase.EXIT_BACK, Phase.EXIT_TURN):
                 # Fixed parking obstacles: use the legacy IMU/odom reverse exit
                 # along the entry route. The rear lidar sector is masked, so

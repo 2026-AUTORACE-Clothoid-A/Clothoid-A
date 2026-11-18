@@ -213,7 +213,9 @@ class ParkingNode(QuietEventsMixin, Node):
             self.observation_pub.publish(observation_markers(self.core, msg.header.stamp, self.now()))
         mode = 'control' if layout.p.control_enabled else 'observe'
         reference = 'fixed' if self.core.flag or self.core.phase != Phase.IDLE else 'aligning'
+        selected = layout.selected+1 if layout.selected is not None else None
         self.layout_status_pub.publish(String(data=mode+': '+layout.reason+'; reference='+reference+
+            f'; empty_bays={layout.empty_bays}; selected_bay={selected}'+
             '; '+layout.alignment_reason+'; '+', '.join(
             f'{i+1}:{state}' for i, state in enumerate(layout.states))))
 
@@ -247,7 +249,7 @@ class ParkingNode(QuietEventsMixin, Node):
         if layout is not None and layout.p.control_enabled:
             if layout.selected is None and self.core.approach_bay is None:
                 return
-            bay = (layout.bays()[layout.selected] if layout.selected is not None
+            bay = (layout.goal(layout.selected) if layout.selected is not None
                    else self.core.approach_bay)
             if layout.selected is None:
                 # Handover to incremental observation is allowed only with a

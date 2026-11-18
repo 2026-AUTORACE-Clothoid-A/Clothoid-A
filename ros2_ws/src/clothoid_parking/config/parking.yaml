@@ -21,9 +21,9 @@ parking:
 
     # Experimental registered six-bay search. False selects the legacy lidar gap finder.
     layout.enabled: true
-    layout.control_enabled: true   # user-enabled registered target control (lane-side middle bay)
-    layout.target_bay: 2           # designated lane-side middle bay
-    layout.observation_stop_margin: 0.08 # stop before turn if goal remains unobserved
+    layout.control_enabled: true
+    layout.target_bay: 0           # automatic selection from measured free space in all six bays
+    layout.observation_stop_margin: 0.03 # final observation creep is at plan.min_speed (0.06 m/s)
     layout.scan_hz: 5.0
     layout.columns: 3
     layout.rows: 2
@@ -45,6 +45,7 @@ parking:
     approach.timeout_sec: 15.0
 
     plan.side: -1.0            # bays on the right
+    plan.entry_heading_compensation: true
     # limo2, fitted to 5 parking bags against the lidar (2026-11-09): rear slides at full lock.
     # Simulator: -p plan.rear_offset:=0.0 -p plan.odom_scale:=0.985 -p plan.turn_radius:=0.46
     plan.rear_offset: 0.02
