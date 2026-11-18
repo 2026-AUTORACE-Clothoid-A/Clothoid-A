@@ -97,8 +97,12 @@ class _Components:
 
 def _recover_faded_yellow(warped: np.ndarray, seed: np.ndarray) -> np.ndarray:
     """Extend confident HSV detections along locally warm, narrow strips of paint."""
-    if not seed.any():
-        return seed
+    # With only one boundary visible, extending it can switch the selected side
+    # through a corner. Require existing yellow support on both halves of the BEV.
+    height, width = seed.shape
+    for half in (seed[:, :width // 2], seed[:, width // 2:]):
+        if np.count_nonzero(half.any(axis=1)) < height / 2:
+            return seed
     blue, green, red = cv2.split(warped)
     cast = cv2.subtract(blue, green)
     # Only compensate a broad blue cast. A small blue marking in a neutral scene

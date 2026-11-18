@@ -38,10 +38,13 @@ def test_faded_yellow_recovery_requires_blue_floor_and_connected_paint():
     seed = np.zeros(frame.shape[:2], bool)
     seed[15:20, 20:24] = True
 
+    assert np.array_equal(_recover_faded_yellow(frame, seed), seed)
+    seed[:32, 2] = True
+    seed[:32, 76] = True
     mask = _recover_faded_yellow(frame, seed)
     assert mask[25, 22]
     assert not mask[:, 50:54].any()
-    assert not mask[30:, :].any()
+    assert not mask[30:, 20:24].any()
 
     frame[:, :20] = frame[:, 24:50] = frame[:, 54:] = (60, 60, 60)
     # A small tinted patch beside the seed does not indicate widespread blue lighting.
