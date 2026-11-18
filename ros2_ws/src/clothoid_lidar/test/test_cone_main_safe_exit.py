@@ -22,7 +22,9 @@ REFERENCE = json.loads((Path(__file__).parent/'data/main_cone_bce61a0.json').rea
 @pytest.fixture
 def node(monkeypatch):
     config = Path(__file__).parents[1]/'config/lidar.yaml'
-    rclpy.init(args=['--ros-args', '--params-file', str(config)])
+    # Reproduce the operating point and exit controller used by the frozen reference.
+    rclpy.init(args=['--ros-args', '--params-file', str(config),
+                     '-p', 'speed:=0.4', '-p', 'exit_from_camera:=false'])
     n = ConeFollowerNode()
     monkeypatch.setattr(n, 'get_clock', lambda: SimpleNamespace(now=lambda: Time(seconds=100.)))
     for name in ('cmd_pub', 'center_pub', 'target_pub', 'exit_done_pub', 'connecting_pub'):

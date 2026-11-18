@@ -76,10 +76,9 @@ cone_follower:
     exit_speed: 0.25
     exit_lfd: 0.35
     exit_clearance: 0.2      # minimum path distance to current detected obstacle centres
-    # After rear-axle arrival, connect to fresh detected lane commands under cone
-    # priority. Limits apply equally to straight, left and right exits; no exit
-    # waypoint / timed turn. Completion requires measured speed + IMU turn agreement.
-    exit_connect_speed: 0.2
+    exit_from_camera: true   # reset tracks on exit entry and follow the fresh lane command
+    exit_connect_speed: 0.2  # until LaneMain confirms consecutive detections
+    # The remaining connection settings apply to the IMU-based mode.
     exit_connect_steer_rate_deg_s: 20.0
     exit_connect_confirm_sec: 0.3
     exit_connect_max_distance: 1.0 # abort bound, never an arrival / release condition

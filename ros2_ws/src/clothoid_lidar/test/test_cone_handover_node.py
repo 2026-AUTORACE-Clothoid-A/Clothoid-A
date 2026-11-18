@@ -102,3 +102,30 @@ def test_stamped_candidate_cannot_be_refreshed_by_replay_or_delayed_delivery(nod
         msg.header.frame_id=frame;msg.twist.linear.x=.1
         node.on_lane_candidate(msg)
         assert node.lane_candidate is original
+
+
+def test_camera_exit_uses_fresh_lane_and_lidar_without_pose_or_endpoint(node):
+    from rclpy.parameter import Parameter
+    assert node.set_parameters([Parameter('exit_from_camera', value=True)])[0].successful
+    node.exit_memory.clear()
+    node.pose = node.pose_time = None
+    node.lane_ready = False
+    node.exit_control()
+    assert node.connecting_pub.publish.call_args.args[0].data
+    assert node.cmd_pub.publish.call_args.args[0].linear.x == pytest.approx(.2)
+    node.exit_done_pub.publish.assert_not_called()
+
+    node.lane_ready = True
+    node.obstacles = np.array([[.2, 0.]])
+    node.exit_control()
+    assert node.cmd_pub.publish.call_args.args[0].linear.x == 0.
+    node.exit_done_pub.publish.assert_not_called()
+
+    node.obstacles = np.zeros((0, 2))
+    node.exit_control()
+    assert node.exit_done_pub.publish.call_args.args[0].data
+    node.exit_done_pub.publish.reset_mock()
+    node.lane_candidate_time = Time(seconds=99.)
+    node.exit_control()
+    assert node.cmd_pub.publish.call_args.args[0].linear.x == 0.
+    node.exit_done_pub.publish.assert_not_called()

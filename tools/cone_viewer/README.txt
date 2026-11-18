@@ -1,3 +1,14 @@
+namgyu/cone_develop · limo2 카메라 출구 실험
+  python3 tools/cone_viewer/launch.py bag/REAL/1118_1615_full --at 94.95
+
+lidar.yaml의 exit_from_camera가 true이면 스캔마다 출구 인계를 재계산합니다.
+차선 트랙은 출구 연결 시작 때 초기화합니다. 촬영한 영상을 limo2 카메라 설정으로
+LaneMain에 넣고, 새 차선 후보와 연속 검출 신호를 콘 팔로워에 전달합니다.
+차선 경로에 대한 라이다 여유가 있어야 저속 추종합니다. 상단의 차선 명령은
+영상 시점의 차선 추종기 출력이며 하단의 기록 /cmd_vel은 당시 백에 저장된 값입니다.
+이벤트 목록의 ‘콘 종료’를 선택한 뒤 오른쪽 방향키로 인계 후 속도를 확인할 수 있습니다.
+아래의 저장 경로·후축 도달과 기록 차선 신호 설명은 exit_from_camera=false에 해당합니다.
+
 전용 콘 시각화 창 (Qt, Docker)
 
 cone-main-safe-exit 브랜치에서는 콘 내부 분류·주행을 main 방식으로 재계산합니다.

@@ -15,6 +15,6 @@ for value in args:
     mapped.append(value)
 subprocess.run(['docker','start','clothoid-dev'],check=True,stdout=subprocess.DEVNULL)
 command=['python3','tools/cone_viewer/viewer.py',*mapped]
-shell='source /opt/ros/humble/setup.bash && cd /home/user/Clothoid-A && OPENBLAS_NUM_THREADS=1 QT_X11_NO_MITSHM=1 '+shlex.join(command)
+shell='source /opt/ros/humble/setup.bash && cd /home/user/Clothoid-A && source ros2_ws/install/setup.bash && PYTHONNOUSERSITE=1 OPENBLAS_NUM_THREADS=1 QT_X11_NO_MITSHM=1 '+shlex.join(command)
 # Use the container's existing DISPLAY/XAUTHORITY; no access-control changes.
 raise SystemExit(subprocess.call(['docker','exec','clothoid-dev','bash','-lc',shell]))
