@@ -191,3 +191,41 @@ def test_entry_component_fit_rejects_diamond_and_letter_markings():
         core.image(0., render(cam, 1.1, 0., yaw, crosswalk=False,
                               boundary=False, letters=True, diamond=True))
         assert not core.observation.entry_lines
+
+
+def test_bridge_gaps_joins_a_seam_but_keeps_crosswalk_bars_apart():
+    from clothoid_mission.line_stop import bridge_gaps, longest_runs
+    seam = np.zeros((1, 100), bool)
+    seam[0, 10:55] = seam[0, 59:95] = True          # 4 px seam inside one line
+    assert longest_runs(seam)[0] == 45
+    assert longest_runs(bridge_gaps(seam, 6))[0] == 85
+    bars = np.zeros((1, 100), bool)
+    for start in range(5, 95, 22):                  # 12 px bars, 10 px apart
+        bars[0, start:start+12] = True
+    assert longest_runs(bridge_gaps(bars, 6))[0] == 12
+    edge = np.zeros((1, 20), bool)
+    edge[0, 3:8] = True                             # row ends are never extended
+    assert (bridge_gaps(edge, 6) == edge).all()
+
+
+def test_stop_line_split_by_a_floor_seam_is_seen_with_line_max_gap():
+    cam = CameraModel()
+    bev = Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam)
+    frame = render(cam, 1.3, 0., 0., crosswalk=False, letters=False)
+    # a dark 1 cm floor seam along the lane, 6 cm left of centre, splitting the stop line
+    h, w = frame.shape[:2]
+    v, u = np.mgrid[0:h, 0:w].astype(np.float64)
+    below = np.arctan((v - cam.cy) / cam.fy) + cam.pitch
+    ok = below > 0.01
+    fwd = np.where(ok, cam.height / np.tan(np.where(ok, below, 1.0)), 0)
+    zc = fwd * math.cos(cam.pitch) + cam.height * math.sin(cam.pitch)
+    left = -(u - cam.cx) / cam.fx * zc + cam.y
+    frame[ok & (np.abs(left - .06) < .005)] = (40, 45, 50)
+    found = {}
+    for gap in (0.0, 0.02):
+        core = LineStopCore(bev, FinishParams(band=.22))
+        core.max_gap = gap
+        core.image(0., frame)
+        found[gap] = core.observation.lines
+    assert not found[0.0]
+    assert len(found[0.02]) == 1 and .65 < found[0.02][0] < .75

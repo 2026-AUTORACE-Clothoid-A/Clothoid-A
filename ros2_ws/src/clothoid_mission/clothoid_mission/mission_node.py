@@ -92,7 +92,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('entry_rate_hz', 10.0)
         for name, value in [('line_band', 0.22), ('line_min_run', 0.7),
                             ('line_min_thickness', 0.008), ('line_max_thickness', 0.12),
-                            ('line_max_frame_gap', 0.25)]:
+                            ('line_max_frame_gap', 0.25), ('line_max_gap', 0.0)]:
             self.declare_parameter(name, value)
         # warp and camera pose: clothoid_lane camera_limo*.yaml (as finish)
         for name, default in (('warp_x_h', 60), ('warp_x_l', 327), ('warp_y_h', 91), ('warp_y_l', 2)):
@@ -428,6 +428,7 @@ class MissionNode(QuietEventsMixin, Node):
         core.min_thickness = get('line_min_thickness')
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')
+        core.max_gap = get('line_max_gap')
         core.require_crosswalk = get('line_require_crosswalk')
         core.observe_scene = True
         core.entry_min_span = get('entry_min_span')

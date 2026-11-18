@@ -1,9 +1,26 @@
 """Stop at the white stop line (traffic light, pedestrian) with clothoid_finish's FinishCore.
 
+FIX 2026-11-18 (floor-mat seam, `line_max_gap`):
+  Problem: the track's painted white lines cross the floor-mat seams, so each line is split by a
+    ~1 cm dark gap. A cross line row needs one *unbroken* white run over `min_run` (70 %) of the
+    band, and the longest piece was only ~59 %, so no line was ever accepted:
+      - parking: the entry line before the bays was never confirmed (parking_entry stayed None in
+        all seven 1118_16xx runs); parking never started and lane_main kept driving straight on.
+      - red light: 1118_1600 / 1615 / 1618 saw the red light but never found the stop line and
+        drove through the crosswalk at 0.2 m/s.
+    The line colour was fine (S 12, V 212 against S <= 60, V >= 150).
+  Fix: `bridge_gaps` joins gaps up to `max_gap` (mission.yaml `line_max_gap` 0.02 m) inside a row
+    before the unbroken-run check. Measured: seam 0.9-1.2 cm, crosswalk bar gaps 4.4-5.1 cm, so the
+    bars stay separate and the "천천히" letters are still rejected. Only the run check uses the
+    bridged mask; crosswalk and mission-entry detection see the original mask.
+  Replay check (bump_viewer backend, 1118_1600-1628): parking entry line found 0/7 -> 7/7, each
+  overlapping the recorded lidar bay evidence; the red-light stop line is now committed in 1600 /
+  1615 / 1618 (in 1600 just before the crosswalk bars); no new stop on letters or other markings.
+
 Everything is FinishCore as it is: the left yellow line follow, the cross line scan, `confirm_frames`
 sightings, the target (line - front 0.161 - stop_gap 0.03; the line reads ~3 cm further while it
 leaves the bottom of the view, so the bumper ends about on the line, as finish does), the speed
-ramp, STOP / ABORT, the parking Tracker (odom x 0.98). Three changes:
+ramp, STOP / ABORT, the parking Tracker (odom x 0.98). Changes:
 
   * `image`: the cross line is looked for in white (the 2026 stop lines) instead of yellow; the left
     line stays yellow
@@ -11,6 +28,7 @@ ramp, STOP / ABORT, the parking Tracker (odom x 0.98). Three changes:
     parking trigger's rule (clothoid_lane NearLineParams.min_run), instead of finish's 50 % filled.
     The "천천히" letters before the signal's stop line filled 50 % of a row with their strokes and
     were confirmed as the line (sim 2026-11-09: stopped 26 cm short); the letters have gaps.
+    Gaps up to `max_gap` (2 cm, a floor-mat seam) still count as unbroken; see FIX above.
   * `_sighting`: once committed, a line more than `confirm_tolerance` (4 cm) further than the current
     one is ignored. Past the stop line come the crosswalk bars (white, along the lane, ~55 % of the
     band) and the crosswalk's far line; when the stop line left the view FinishCore took them and
@@ -31,6 +49,24 @@ from clothoid_finish.finish_core import FinishCore, FinishParams, Phase  # noqa:
 from clothoid_mission.scene_evidence import FloorObservation
 
 
+def bridge_gaps(mask: np.ndarray, max_gap: int) -> np.ndarray:
+    """Fill gaps of at most `max_gap` False pixels between True pixels in every row.
+
+    A painted line crossing a floor-mat seam is split by a ~1 cm dark gap (1118 parking entry
+    line: the longest piece was 59 % of the band). Crosswalk bars are ~5 cm apart, so a small
+    `max_gap` joins the seam but keeps the bars separate. Row ends are never extended.
+    """
+    if max_gap <= 0 or not mask.size:
+        return mask
+    width = mask.shape[1]
+    idx = np.arange(width)
+    # index of the last True at or before each column, and of the next True at or after it
+    prev = np.maximum.accumulate(np.where(mask, idx, -1), axis=1)
+    nxt = np.minimum.accumulate(np.where(mask, idx, width)[:, ::-1], axis=1)[:, ::-1]
+    gap = nxt - prev - 1
+    return mask | ((prev >= 0) & (nxt < width) & (gap <= max_gap))
+
+
 def longest_runs(mask: np.ndarray) -> np.ndarray:
     """Longest unbroken run of True in every row (numpy: count since the last False)."""
     m = mask.astype(np.int32)
@@ -46,6 +82,7 @@ class LineStopCore(FinishCore):
         super().__init__(bev, p)
         self.white_s_max, self.white_v_min = white_s_max, white_v_min
         self.min_run = min_run
+        self.max_gap = 0.0            # m: gaps up to this wide count as part of a cross line run
         self.debug = False            # True: keep full-size masks for mission's debug image
         self.white = None
         self.min_thickness, self.max_thickness = 0.008, 0.12
@@ -66,6 +103,9 @@ class LineStopCore(FinishCore):
         self._gx = bev.gx[:, self._c0:self._c1]
         self._row_x = np.array([np.median(x[b]) if b.any() else np.nan
                                for x, b in zip(self._gx, self._band)])
+        gy = bev.gy[:, self._c0:self._c1]
+        steps = np.abs(np.diff(gy, axis=1))[self._band[:, 1:] & self._band[:, :-1]]
+        self._col_m = float(np.median(steps)) if steps.size else 0.0   # lateral metres per column
 
     def crosswalk_behind(self, white, far_row):
         """Longitudinal white bars with gaps, immediately beyond the transverse line."""
@@ -146,7 +186,8 @@ class LineStopCore(FinishCore):
 
         # cross line: rows whose central band holds one unbroken white run over min_run of it
         per_row = self._per_row
-        runs = longest_runs(white)
+        gap_px = int(self.max_gap / self._col_m) if self._col_m > 0 else 0
+        runs = longest_runs(bridge_gaps(white, gap_px) & self._band)
         rows = np.nonzero((per_row > 10) & (runs >= self.min_run * np.maximum(per_row, 1)))[0]
         self.cross_x = None
         groups = np.split(rows, np.where(np.diff(rows) > 1)[0] + 1)

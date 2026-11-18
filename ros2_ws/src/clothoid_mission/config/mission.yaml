@@ -63,6 +63,9 @@ mission:
     # Stop-line corridor and physical thickness, in metres on the ground.
     line_band: 0.22
     line_min_run: 0.7
+    # A floor-mat seam splits a painted line with a ~1 cm gap (1118 parking entry line); crosswalk
+    # bars are ~5 cm apart. Gaps up to this width still count as one unbroken cross line run.
+    line_max_gap: 0.02
     line_min_thickness: 0.008
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
