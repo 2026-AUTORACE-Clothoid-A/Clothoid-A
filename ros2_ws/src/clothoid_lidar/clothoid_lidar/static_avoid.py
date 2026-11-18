@@ -261,6 +261,16 @@ class AvoidParams:
     fork_turn: bool = True
     fork_turn_deg: float = 70.0
     fork_turn_range: float = 0.8      # m before the island front at most (1.5 began before a row of obstacles and turned into it)
+    # stuck again within stuck_repeat_radius of an earlier stuck: that spot becomes a dead end (no path
+    # may pass the car centre within deadend_radius of it) and the back-up is stuck_repeat_reverse m
+    # (1118_1616: 0.2 m back, then the same plan into the same spot six times; with this its layout in
+    # the simulation went through 5 / 6, before 0 / 6; the sim layouts 1108 / random / dense unchanged.
+    # A turn on the spot towards the sign's lane after a stuck instead (fork turn anywhere) hit LIMOs
+    # in 3~5 dense layouts). The sim layouts never stick twice in one spot: no change there
+    stuck_repeat_back: bool = True
+    stuck_repeat_radius: float = 0.15   # 0.3 took two stucks 0.27 m apart in a way through (sim dense 15)
+    stuck_repeat_reverse: float = 0.8
+    deadend_radius: float = 0.10
     escape_handover_margin: float = 0.0
     escape_handover_slow: float = 0.6   # m after the hand-over at escape_speed / escape_lookahead
     escape_w_near: float = 0.02       # per obstacle cost point (0..100), against m of progress
@@ -590,6 +600,7 @@ class Costmap:
         self.ns = int(round((p.grid_s_max - p.grid_s_min) / p.resolution))
         self.nd = int(round(2 * self.d_max / p.resolution))
         self.count = np.zeros((self.ns, self.nd), np.int16)
+        self.deadends: List[np.ndarray] = []   # costmap points no path may pass (stuck_repeat_back)
         self.cost = np.zeros((self.ns, self.nd))
 
     def cells(self, pts: np.ndarray):
@@ -696,6 +707,9 @@ class Costmap:
         i, j, ok = self.cells(pts)
         out = np.zeros(len(pts))
         out[ok] = self.cost[i[ok], j[ok]]
+        for q in self.deadends:             # AvoidParams.stuck_repeat_back
+            near = (pts[:, 0] - q[0]) ** 2 + (pts[:, 1] - q[1]) ** 2 <= self.p.deadend_radius ** 2
+            out[near] = np.maximum(out[near], LETHAL)
         return out
 
     def occupied_at(self, pts: np.ndarray) -> np.ndarray:
@@ -1807,6 +1821,8 @@ class StaticAvoid:
         self.fork_arc: Optional[Tuple[int, float, float]] = None   # (+1 / -1, s, d) of the fork turn arc
         self.fork_turn_off = False      # the fork turn gave up (reached its heading or both arcs blocked)
         self.fork_mode = False          # turning towards the sign's lane now
+        self.stuck_spots: List[Tuple[float, float]] = []   # (s, d) of every logged stuck
+        self.long_backup = False        # the next stuck back-up is stuck_repeat_reverse long
         self.escape_tried: Optional[float] = None
         self.sequence: Optional[Sequence] = None
         self.stuck_since: Optional[float] = None
@@ -1834,8 +1850,10 @@ class StaticAvoid:
         if stuck >= p.stuck_time and not self.recovering:
             self.recovering = True
             self.event = 'stuck: recovery candidates'
+        goal = p.stuck_repeat_reverse if self.long_backup else p.reverse_distance
         if p.recovery_reverse and stuck >= p.reverse_after and self.backing_from is None \
-                and self._start_back_up(p.reverse_distance, 'stuck'):
+                and self._start_back_up(goal, 'stuck'):
+            self.long_backup = False
             self.event = 'stuck: backing up along the way the car came'
             return self._back_up(t) or (0.0, 0.0)
         return 0.0, 0.0
@@ -1988,8 +2006,18 @@ class StaticAvoid:
                 t0, where, logged = self.stuck_log
                 if not logged and (t is None or t - t0 >= p.stuck_log_after):
                     self.stuck_log = (t0, where, True)
+                    if p.stuck_repeat_back and self.costmap is not None and any(
+                            math.hypot(a - pose[0], b - pose[1]) <= p.stuck_repeat_radius
+                            for a, b in self.stuck_spots):
+                        pt = np.array([[pose[0], pose[1]]])
+                        rel = self.lane_in_costmap()
+                        self.costmap.deadends.append((pt if rel is None else rel.points_from(pt))[0])
+                        self.long_backup = True
+                    self.stuck_spots.append((pose[0], pose[1]))
                     self.event = ('stuck: every path blocked at ' + where
-                                  + ('; recovery candidates' if self.recovering else ''))
+                                  + ('; recovery candidates' if self.recovering else '')
+                                  + ('; the same spot again: a dead end, backing up %.1f m'
+                                     % p.stuck_repeat_reverse if self.long_backup else ''))
                 return cmd
         if esc is not None:
             delta = pure_pursuit(esc.path, pose, replace(p, lookahead=p.escape_lookahead))
