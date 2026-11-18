@@ -1182,6 +1182,37 @@ def test_course_map_start_line():
     assert check(slow) is False
 
 
+def test_course_map_moves_a_late_start_to_the_first_turn():
+    """1117 1855: the node started after the car had driven 0.71 m; the first right turn moves the
+    map's x (and what was driven so far) to where the race start makes it, so the start line is
+    judged in the radius again. The race start itself (turn at x 9.0) stays as it is."""
+    from clothoid_lidar.section_cues import Crossing
+    from clothoid_lidar.static_avoid import course_start_line
+    p = AvoidParams()
+    tr, course = _course_tracker(legs=((0.0, 820), (-math.pi / 2, 470), (math.pi, 200)))
+    assert course.corner1[1] == pytest.approx(8.2, abs=0.02)
+    assert course.shift == pytest.approx(p.course_corner1_x - 8.2, abs=0.02)
+    assert course.x == pytest.approx(7.0 - 0.8 + course.shift, abs=0.05)
+    assert course.hist[0][1] == pytest.approx(course.shift, abs=0.01)     # the start moved too
+    real = Crossing(odometer=tr.distance - 1.25, heading=0.0, t=0.0)
+    assert course_start_line(course, p)(real) is True
+    assert _course_tracker()[1].shift == 0.0
+
+
+def test_course_map_lets_a_blocker_start_past_the_second_turn():
+    """Still 'pending' (no start line on the map: the map too far off) 0.8 m past the second right turn:
+    a blocker may start the mission there, not before (the start line comes 0.37~0.57 m past it),
+    not before the first turn, and not once the race start is confirmed."""
+    tr, course = _course_tracker()                           # 9 m, right, 4.7 m, right, 2 m
+    assert course.corner2 == pytest.approx(9.0 + 4.7, abs=0.05)
+    assert not course.turn2_blocker(course.corner2 + 0.7)
+    assert course.turn2_blocker(tr.distance)
+    course.set_origin('race', 'line')
+    assert not course.turn2_blocker(tr.distance)
+    tr, course = _course_tracker(legs=((0.0, 900), (-math.pi / 2, 470)))
+    assert course.corner2 is None and not course.turn2_blocker(tr.distance)
+
+
 def test_course_map_falls_back_after_passing_the_point_without_a_line():
     from clothoid_lidar.section_cues import EntryLineTracker
     tr, course = _course_tracker()
@@ -1194,6 +1225,19 @@ def test_course_map_falls_back_after_passing_the_point_without_a_line():
     far = _course_tracker()[1]
     far.x, far.y = 3.0, 3.0                               # a wrong start pose: never near it
     assert 'never within' in far.should_fall_back(17.5, entry)
+
+
+def test_course_map_falls_back_as_soon_as_it_leaves_the_circle():
+    """No start line on the map and out of the start-line circle again: the fallback at once (it
+    waited for 1 m more, ~2 m past the line)."""
+    from clothoid_lidar.section_cues import EntryLineTracker
+    tr, course = _course_tracker()
+    entry = EntryLineTracker()
+    course.min_far = 0.3
+    course.x, course.y = 8.25 - 0.95, -4.65                 # still inside
+    assert course.should_fall_back(14.5, entry) is None
+    course.x = 8.25 - 1.05                                  # just out
+    assert 'passed the start line point' in course.should_fall_back(14.6, entry)
 
 
 def test_course_map_decides_without_the_lane_line_pair():

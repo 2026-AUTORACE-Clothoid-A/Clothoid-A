@@ -110,6 +110,22 @@ class AvoidParams:
     course_corner_tol_deg: float = 20.0   # within this of the next 90 deg axis: the turn is made
     course_corner1_x_min: float = 7.5     # m of straight on the map before the first turn, at least
     course_corner1_odometer_max: float = 11.0   # no turn yet by this odometer: not the race start
+    # the first right turn is made (course_corner_tol_deg) at map x 8.71~9.00 from the race start
+    # (11 runs 1115~1117, practice and venue alike). Made further than course_corner1_shift_min off
+    # course_corner1_x (but not over course_corner1_shift_max), the map's x is moved by that, once:
+    # the node started late or the car was set down off the start (1117 1855: the node started
+    # after 0.71 m, the turn at x 8.02, the start line judged 1.33 m off and missed)
+    course_corner1_x: float = 8.83
+    course_corner1_shift_min: float = 0.25
+    course_corner1_shift_max: float = 1.3
+    # still 'pending' (no start line on the map) this far past the second right turn (heading within
+    # course_corner_tol_deg of 180 after the first right turn): a blocker starts the mission. The map
+    # more than start_line_radius off never comes near the start-line point, and the odometer fallback
+    # (start_line_odometer + course_fallback_odometer) comes ~3 m past the line, behind the first
+    # obstacle. A blocker before the first turn still starts nothing (1114 0231, the parking area).
+    # The start line is judged 0.43~0.68 m past that turn (22 runs 1115~1118, 0.68 in 1118 1626): 0.5
+    # left a blocker start in the way of the line start
+    course_turn2_blocker: float = 0.8
     # a LIMO in our lane within this odometer of the launch: an avoid test launched in the section.
     # 0 = off: the race always starts at the race start (1118 PM 1618 / 1625: something in our lane at
     # the launch made the race an avoid test; 1625 then took a white line on the first straight for
@@ -132,8 +148,11 @@ class AvoidParams:
     course_snap_max_deg: float = 15.0
     # no start line confirmed by the map although the car came within start_line_radius of the point
     # and is course_fallback_past m further off again, or the odometer passed start_line_odometer by
-    # course_fallback_odometer: the dashed lane-line pair decides from then on (a wrong start pose)
-    course_fallback_past: float = 1.0
+    # course_fallback_odometer: the dashed lane-line pair decides from then on and a blocker starts
+    # the mission (a wrong start pose). 0: as soon as it leaves the circle (1.0 put it ~2 m past the
+    # line). The line is decided 0.05~0.42 m from the point, 0.85~1.22 m before the car leaves the
+    # circle (20 runs 1115~1118: decided when the line is lost from view, before the base is on it)
+    course_fallback_past: float = 0.0
     start_line_odometer: float = 14.2
     course_fallback_odometer: float = 3.0
     # m: a start line crossed after the start must be this close. Only lines confirmed as the
@@ -992,6 +1011,8 @@ class CourseMap:
         self.origin = 'pending'
         self.origin_why = ''
         self.corner1: Optional[Tuple[float, float]] = None        # (odometer, map x) of the right turn
+        self.shift = 0.0                      # m, x moved at the first right turn (course_corner1_x)
+        self.corner2: Optional[float] = None  # odometer where the second right turn was made
 
     def set_origin(self, origin: str, why: str) -> None:
         if self.origin == 'pending':
@@ -1009,6 +1030,7 @@ class CourseMap:
                                 'drives %.1f m before its first turn)' % (deg, self.x, p.course_corner1_x_min))
             elif abs(deg + 90.0) <= p.course_corner_tol_deg:
                 self.corner1 = (odometer, self.x)
+                self._shift_to_corner1()
             elif abs(deg) > 90.0 - p.course_corner_tol_deg and deg > 0.0:
                 self.set_origin('elsewhere', 'the first turn went left (%.0f deg)' % deg)
             elif odometer > p.course_corner1_odometer_max:
@@ -1016,6 +1038,18 @@ class CourseMap:
         elif abs(deg) <= p.course_corner_tol_deg or abs(deg - 90.0) <= p.course_corner_tol_deg:
             self.set_origin('elsewhere', 'turned to %.0f deg after the first right turn (the race goes '
                             'on to 180 deg)' % deg)
+
+    def _shift_to_corner1(self) -> None:
+        """Move the map's x so the first right turn is where the race start makes it (see
+        AvoidParams.course_corner1_x): the whole path so far, so lines already crossed agree."""
+        p = self.p
+        dx = p.course_corner1_x - self.x
+        if not p.course_corner1_shift_min <= abs(dx) <= p.course_corner1_shift_max:
+            return
+        self.x += dx
+        self.hist = [(o, x + dx, y, h) for o, x, y, h in self.hist]
+        self.win = [(o, x + dx, y, h) for o, x, y, h in self.win]
+        self.shift = dx
 
     def step(self, odometer: float, step: float, yaw: float) -> None:
         if yaw is None:
@@ -1031,6 +1065,15 @@ class CourseMap:
             self.hist.append((odometer, self.x, self.y, self.h))
         self._snap(odometer)
         self._judge(odometer)
+        if (self.corner1 is not None and self.corner2 is None
+                and abs(wrap(self.h - math.pi)) <= math.radians(self.p.course_corner_tol_deg)):
+            self.corner2 = odometer
+
+    def turn2_blocker(self, odometer: float) -> bool:
+        """May a blocker start the mission although the start line was not found on the map yet
+        (see AvoidParams.course_turn2_blocker)?"""
+        return (self.origin == 'pending' and self.corner2 is not None
+                and odometer >= self.corner2 + self.p.course_turn2_blocker)
 
     def _snap(self, odometer: float) -> None:
         p = self.p

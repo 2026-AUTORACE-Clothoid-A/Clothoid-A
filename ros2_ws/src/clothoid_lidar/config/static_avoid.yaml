@@ -76,7 +76,7 @@ static_avoid:
     course_straight: 1.5
     course_straight_spread_deg: 6.0
     course_snap_max_deg: 15.0
-    course_fallback_past: 1.0
+    course_fallback_past: 0.0     # m past the start-line circle without the line: fall back (pair / blocker) at once
     start_line_odometer: 14.2
     course_fallback_odometer: 3.0
     # where the node started, from the first turn (AvoidParams.course_turn_deg): the race start ->
@@ -86,6 +86,12 @@ static_avoid:
     course_corner_tol_deg: 20.0
     course_corner1_x_min: 7.5
     course_corner1_odometer_max: 11.0
+    # the first right turn moved to map x course_corner1_x when 0.25~1.3 m off (node started late,
+    # car set down off the start)
+    course_corner1_x: 8.83
+    course_corner1_shift_min: 0.25
+    course_corner1_shift_max: 1.3
+    course_turn2_blocker: 0.8    # m past the second right turn, no start line yet: a blocker starts it
     course_test_start: 0.0       # off (always the race start); > 0: a LIMO in our lane this soon after the launch = an avoid test
     approach_speed: 0.8
     island_handover: 1.0         # handover_after_island false: m before the island front, lane_main enters A / B
