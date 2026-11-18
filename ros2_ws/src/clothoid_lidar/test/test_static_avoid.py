@@ -1182,6 +1182,23 @@ def test_course_map_start_line():
     assert check(slow) is False
 
 
+def test_course_map_moves_a_late_start_to_the_first_turn():
+    """1117 1855: the node started after the car had driven 0.71 m; the first right turn moves the
+    map's x (and what was driven so far) to where the race start makes it, so the start line is
+    judged in the radius again. The race start itself (turn at x 9.0) stays as it is."""
+    from clothoid_lidar.section_cues import Crossing
+    from clothoid_lidar.static_avoid import course_start_line
+    p = AvoidParams()
+    tr, course = _course_tracker(legs=((0.0, 820), (-math.pi / 2, 470), (math.pi, 200)))
+    assert course.corner1[1] == pytest.approx(8.2, abs=0.02)
+    assert course.shift == pytest.approx(p.course_corner1_x - 8.2, abs=0.02)
+    assert course.x == pytest.approx(7.0 - 0.8 + course.shift, abs=0.05)
+    assert course.hist[0][1] == pytest.approx(course.shift, abs=0.01)     # the start moved too
+    real = Crossing(odometer=tr.distance - 1.25, heading=0.0, t=0.0)
+    assert course_start_line(course, p)(real) is True
+    assert _course_tracker()[1].shift == 0.0
+
+
 def test_course_map_falls_back_after_passing_the_point_without_a_line():
     from clothoid_lidar.section_cues import EntryLineTracker
     tr, course = _course_tracker()

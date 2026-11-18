@@ -110,6 +110,14 @@ class AvoidParams:
     course_corner_tol_deg: float = 20.0   # within this of the next 90 deg axis: the turn is made
     course_corner1_x_min: float = 7.5     # m of straight on the map before the first turn, at least
     course_corner1_odometer_max: float = 11.0   # no turn yet by this odometer: not the race start
+    # the first right turn is made (course_corner_tol_deg) at map x 8.71~9.00 from the race start
+    # (11 runs 1115~1117, practice and venue alike). Made further than course_corner1_shift_min off
+    # course_corner1_x (but not over course_corner1_shift_max), the map's x is moved by that, once:
+    # the node started late or the car was set down off the start (1117 1855: the node started
+    # after 0.71 m, the turn at x 8.02, the start line judged 1.33 m off and missed)
+    course_corner1_x: float = 8.83
+    course_corner1_shift_min: float = 0.25
+    course_corner1_shift_max: float = 1.3
     course_test_start: float = 1.0        # a LIMO in our lane within this odometer: an avoid test
     # race: from the start line until the first blocker (LIMO in our lane, obstacle cost over slow_cost
     # or a lane change) at this speed (lane_main's base speed), then speed / slow_speed to the end
@@ -988,6 +996,7 @@ class CourseMap:
         self.origin = 'pending'
         self.origin_why = ''
         self.corner1: Optional[Tuple[float, float]] = None        # (odometer, map x) of the right turn
+        self.shift = 0.0                      # m, x moved at the first right turn (course_corner1_x)
 
     def set_origin(self, origin: str, why: str) -> None:
         if self.origin == 'pending':
@@ -1005,6 +1014,7 @@ class CourseMap:
                                 'drives %.1f m before its first turn)' % (deg, self.x, p.course_corner1_x_min))
             elif abs(deg + 90.0) <= p.course_corner_tol_deg:
                 self.corner1 = (odometer, self.x)
+                self._shift_to_corner1()
             elif abs(deg) > 90.0 - p.course_corner_tol_deg and deg > 0.0:
                 self.set_origin('elsewhere', 'the first turn went left (%.0f deg)' % deg)
             elif odometer > p.course_corner1_odometer_max:
@@ -1012,6 +1022,18 @@ class CourseMap:
         elif abs(deg) <= p.course_corner_tol_deg or abs(deg - 90.0) <= p.course_corner_tol_deg:
             self.set_origin('elsewhere', 'turned to %.0f deg after the first right turn (the race goes '
                             'on to 180 deg)' % deg)
+
+    def _shift_to_corner1(self) -> None:
+        """Move the map's x so the first right turn is where the race start makes it (see
+        AvoidParams.course_corner1_x): the whole path so far, so lines already crossed agree."""
+        p = self.p
+        dx = p.course_corner1_x - self.x
+        if not p.course_corner1_shift_min <= abs(dx) <= p.course_corner1_shift_max:
+            return
+        self.x += dx
+        self.hist = [(o, x + dx, y, h) for o, x, y, h in self.hist]
+        self.win = [(o, x + dx, y, h) for o, x, y, h in self.win]
+        self.shift = dx
 
     def step(self, odometer: float, step: float, yaw: float) -> None:
         if yaw is None:

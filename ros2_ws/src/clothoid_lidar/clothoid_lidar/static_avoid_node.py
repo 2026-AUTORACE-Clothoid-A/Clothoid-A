@@ -111,6 +111,7 @@ class StaticAvoidNode(QuietEventsMixin, Node):
         self.entry = EntryLineTracker()
         self.course = None
         self.snaps_logged = 0
+        self.shift_logged = False
         self.origin_logged = 'pending'
         self.line_start_odo = None          # odometer of the requested section start line
         self.blocker_fallback = False       # race start, the line start dropped: a blocker starts it
@@ -321,6 +322,12 @@ class StaticAvoidNode(QuietEventsMixin, Node):
                     self.get_logger().info(f'course map: heading snapped by {deg:+.1f} deg on the '
                                            f'straight at odometer {odo:.1f} m')
             self.snaps_logged = len(self.course.snaps)
+            if self.course.shift and not self.shift_logged:
+                self.shift_logged = True
+                self.get_logger().warn(
+                    f'course map: the first right turn at map x {self.course.corner1[1]:.2f} m, '
+                    f'moved by {self.course.shift:+.2f} m to x {self.p.course_corner1_x:.2f} '
+                    '(node started late or the car set down off the race start)')
             why = self.course.should_fall_back(self.tracker.distance, self.entry)
             if why:
                 self.entry.start_by_map = None
