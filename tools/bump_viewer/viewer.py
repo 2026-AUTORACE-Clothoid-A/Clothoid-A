@@ -163,7 +163,10 @@ class Viewer(QMainWindow):
         self.profile.currentIndexChanged.connect(self.load_selected); top.addWidget(self.profile)
         self.open_button = QPushButton('백 열기'); self.open_button.clicked.connect(self.open_bag); top.addWidget(self.open_button)
         self.reload_button = QPushButton('현재 코드로 재계산'); self.reload_button.clicked.connect(self.load_selected)
-        top.addWidget(self.reload_button); layout.addLayout(top)
+        top.addWidget(self.reload_button)
+        self.stopline_settings_button = QPushButton('정지선 마스크 조정')
+        self.stopline_settings_button.clicked.connect(self.open_stopline_settings)
+        top.addWidget(self.stopline_settings_button); layout.addLayout(top)
         self.source = QLabel('현재 소스와 YAML을 읽는 중'); self.source.setWordWrap(True); layout.addWidget(self.source)
         cards = QHBoxLayout(); self.cards = []
         for _ in range(4):
@@ -182,7 +185,7 @@ class Viewer(QMainWindow):
             picture = Picture(name); picture.hovered.connect(self.hover)
             self.pictures[key] = picture; grid.addWidget(picture, i//4, i%4)
         splitter.addWidget(gallery)
-        side = QTabWidget(); self.events = QListWidget(); self.events.itemClicked.connect(
+        side = self.side_tabs = QTabWidget(); self.events = QListWidget(); self.events.itemClicked.connect(
             lambda item: self.seek_time(item.data(Qt.UserRole)))
         side.addTab(self.events, '이벤트 · 클릭 이동')
         self.hsv_tab = self.make_hsv_tab(); side.addTab(self.hsv_tab, '색상 / 보정')
@@ -233,6 +236,12 @@ class Viewer(QMainWindow):
     def hover(self, value):
         self.pixel.setText(value)
 
+    def open_stopline_settings(self):
+        self.side_tabs.setCurrentWidget(self.hsv_tab)
+        self.color_sections.setCurrentWidget(self.stopline_color_page)
+        self.white_mode.setCurrentIndex(0)
+        self.color_source.setCurrentIndex(1)
+
     def hsv_focus_changed(self, old, current):
         editing = current is not None and self.hsv_tab.isAncestorOf(current)
         self.play_shortcut.setEnabled(not editing)
@@ -255,8 +264,10 @@ class Viewer(QMainWindow):
         preset_row.addWidget(self.preset_button); layout.addLayout(preset_row)
         # Each source has its own preprocessing and classifier. Mission is white-only.
         containers = {}
-        for group, title in [('lane', '차선'), ('mission', '미션 흰선')]:
+        for group, title in [('lane', '차선'), ('mission', '정지선 / 시작선')]:
             page = QWidget(); page_layout = QVBoxLayout(page)
+            if group == 'mission':
+                self.stopline_color_page = page
             inner_scroll = QScrollArea(); inner_scroll.setWidgetResizable(True)
             form = QWidget(); form_layout = QVBoxLayout(form); containers[group] = form_layout
             method = QComboBox(); method.addItems(['hsv', 'lab', 'rgb'])
@@ -664,6 +675,15 @@ class Viewer(QMainWindow):
             if not getattr(self, '_tested_hsv', False):
                 self._tested_hsv = True
                 self._test_hsv_baseline = deepcopy(self.data['hsv_baseline'])
+                self.side_tabs.setCurrentWidget(self.log_tab)
+                self.white_mode.setCurrentIndex(1)
+                self.stopline_settings_button.click()
+                assert self.side_tabs.currentWidget() is self.hsv_tab
+                assert self.color_sections.currentWidget() is self.stopline_color_page
+                assert self.white_mode.currentIndex() == 0 and self.color_source.currentIndex() == 1
+                assert self.hsv_controls['mission', 'white_v_min', None][1].isVisible()
+                assert self.hsv_settings == self._test_hsv_baseline
+                self.color_sections.setCurrentIndex(0)
                 self.hsv_controls['lane', 'hsv_lower', 0][0].setValue(179)
                 assert self.hsv_settings['lane']['hsv_upper'][0] == 179
                 self.hsv_controls['lane', 'hsv_upper', 0][0].setValue(0)
