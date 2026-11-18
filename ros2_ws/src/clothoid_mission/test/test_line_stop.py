@@ -6,6 +6,7 @@ import os
 import sys
 
 import numpy as np
+import pytest
 
 HERE = os.path.dirname(__file__)
 for rel in ('..', '../../clothoid_finish', '../../clothoid_lane', '../../clothoid_parking'):
@@ -210,3 +211,29 @@ def test_entry_component_fit_rejects_diamond_and_letter_markings():
         core.image(0., render(cam, 1.1, 0., yaw, crosswalk=False,
                               boundary=False, letters=True, diamond=True))
         assert not core.observation.entry_lines
+
+
+def _grace_core(grace):
+    cam = CameraModel()
+    core = LineStopCore(Bev(LaneParams(x_h=60, x_l=327, y_h=91, y_l=2), cam), FinishParams(band=.22))
+    core.require_crosswalk, core.crosswalk_grace = True, grace
+    core.start(0.)
+    return cam, core
+
+
+@pytest.mark.parametrize('grace,gap,committed', [(.35, .05, True), (0., .05, False), (.35, .5, False)])
+def test_crosswalk_just_after_the_line_confirms_it_within_the_grace(grace, gap, committed):
+    """1118 1607: blue light; the line was seen without its bars, the bars only in the next image."""
+    cam, core = _grace_core(grace)
+    for k in range(4):                                           # the line alone
+        core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=False, letters=False))
+    assert core.phase == Phase.FOLLOW
+    core.image(.15+gap, render(cam, 1.3, 0., 0., crosswalk=True, boundary=False, letters=False))
+    assert (core.phase == Phase.COMMIT) == committed
+
+
+def test_crosswalk_alone_confirms_nothing():
+    cam, core = _grace_core(.35)
+    for k in range(5):
+        core.image(k*.05, render(cam, 1.3, 0., 0., crosswalk=True, boundary=False, letters=False))
+    assert core.phase == Phase.FOLLOW

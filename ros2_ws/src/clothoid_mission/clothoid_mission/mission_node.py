@@ -90,6 +90,7 @@ class MissionNode(QuietEventsMixin, Node):
             self.declare_parameter(name, default)
         color_params(lambda name: self.get_parameter(name).value)
         self.declare_parameter('line_require_crosswalk', True)
+        self.declare_parameter('line_crosswalk_grace', 0.0)
         self.declare_parameter('front_axle_x', 0.10)
         self.declare_parameter('entry_reaction_sec', 0.10)
         self.declare_parameter('entry_deceleration', 2.5)
@@ -570,6 +571,9 @@ class MissionNode(QuietEventsMixin, Node):
         if arm:
             self.core.require_crosswalk = bool(
                 self.get_parameter('line_require_crosswalk').value and require_crosswalk)
+            # pedestrian stop only: the crosswalk may show in the images just after the line
+            pedestrian = self.logic.pedestrian_armed_at is not None and self.logic.light_armed_at is None
+            self.core.crosswalk_grace = self.get_parameter('line_crosswalk_grace').value if pedestrian else 0.
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
             self.line_reason = ('light' if self.logic.light_armed_at is not None else

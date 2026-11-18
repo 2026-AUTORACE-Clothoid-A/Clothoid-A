@@ -67,6 +67,8 @@ mission:
     line_max_thickness: 0.12
     line_max_frame_gap: 0.25
     line_require_crosswalk: true  # pedestrian/light line must lead into white longitudinal bars
+    line_crosswalk_grace: 0.35    # s, pedestrian stop: bars seen just past the line within this still confirm
+                                  # it (1118 1607: blue light, line at 0.81~0.73 m, bars only in the next image)
     front_axle_x: 0.10          # mission entry only: base_link -> front wheels
     entry_reaction_sec: 0.10    # timer/actuation lead; 0738/0816 bags reach 0.2 in 0.20-0.24 s
     entry_deceleration: 2.5     # m/s^2; 0.8 -> 0.2 starts about 0.24 m before entry, including 4 cm margin
