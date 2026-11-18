@@ -56,8 +56,10 @@ def main():
     cfg = detector_defaults()
     for f in ('lane.yaml', f'camera_{a.camera}.yaml'):
         with open(os.path.join(SRC, 'clothoid_lane', 'config', f)) as fh:
-            for sec in yaml.safe_load(fh).values():
-                cfg.update({k: v for k, v in sec['ros__parameters'].items() if k in cfg})
+            profile = yaml.safe_load(fh)
+            for name in ('/**', 'lane_main'):
+                values = profile.get(name, {}).get('ros__parameters', {})
+                cfg.update({k: v for k, v in values.items() if k in cfg})
     det = make_detector(lambda k: cfg[k])
     small = [cv2.resize(f, (320, 240)) for f in frames]
     m = cv2.getPerspectiveTransform(np.float32([[60, 91], [580, 91], [2, 240], [638, 240]]),

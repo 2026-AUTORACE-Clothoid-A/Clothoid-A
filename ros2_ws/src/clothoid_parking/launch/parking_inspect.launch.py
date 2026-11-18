@@ -17,9 +17,13 @@ def generate_launch_description():
     parking = get_package_share_directory('clothoid_parking')
     lane = get_package_share_directory('clothoid_lane')
 
-    def load(folder, filename, scope):
+    def load(folder, filename, *scopes):
         with open(os.path.join(folder, 'config', filename)) as stream:
-            return yaml.safe_load(stream)[scope]['ros__parameters']
+            profile = yaml.safe_load(stream)
+        params = {}
+        for scope in scopes:
+            params.update(profile.get(scope, {}).get('ros__parameters', {}))
+        return params
 
     def processors(context):
         if not IfCondition(LaunchConfiguration('start_nodes')).evaluate(context):
@@ -31,7 +35,7 @@ def generate_launch_description():
         return [
             Node(package='clothoid_lane', executable='lane_main', name='parking_inspect_lane',
                  parameters=[load(lane, 'lane.yaml', 'lane_main'),
-                             load(lane, f'camera_{camera}.yaml', '/**'), clock,
+                             load(lane, f'camera_{camera}.yaml', '/**', 'lane_main'), clock,
                              {'parking_landmark.always_observe': True, 'debug': False}],
                  remappings=[('/cmd_vel_lane', '/parking_inspect/cmd_vel_lane'),
                              ('/parking_flag', '/parking_inspect/parking_flag'),

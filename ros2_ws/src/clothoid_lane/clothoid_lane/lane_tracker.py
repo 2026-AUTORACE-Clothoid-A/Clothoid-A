@@ -58,6 +58,7 @@ class TrackerParams:
     zigzag_width_ratio: float = 1.07  # zone lane width / normal: bags 182/170 px, drawing 570/520 mm
     white_h_min: int = 0             # inclusive OpenCV hue range; full range preserves S/V-only mask
     white_h_max: int = 179
+    recover_faded_yellow: bool = False
 
 
 @dataclass(eq=False)   # compared by identity: the generated __eq__ would compare numpy arrays
@@ -92,6 +93,48 @@ class _Side:
 class _Components:
     kept: np.ndarray                  # mask of the white pixels accepted as dividers
     rejected: np.ndarray = field(default=None, repr=False)
+
+
+def _recover_faded_yellow(warped: np.ndarray, seed: np.ndarray) -> np.ndarray:
+    """Extend confident HSV detections along locally warm, narrow strips of paint."""
+    # With only one boundary visible, extending it can switch the selected side
+    # through a corner. Require existing yellow support on both halves of the BEV.
+    height, width = seed.shape
+    for half in (seed[:, :width // 2], seed[:, width // 2:]):
+        if np.count_nonzero(half.any(axis=1)) < height / 2:
+            return seed
+    blue, green, red = cv2.split(warped)
+    cast = cv2.subtract(blue, green)
+    # Only compensate a broad blue cast. A small blue marking in a neutral scene
+    # should not change which boundary the steering tracker follows.
+    if np.count_nonzero((cast > 25) & (green > 20)) < 0.05 * seed.size:
+        return seed
+
+    # In the LIMO2 warp, ten pixels to either side usually reaches the floor.
+    def floor_samples(channel):
+        padded = cv2.copyMakeBorder(channel, 0, 0, 10, 10, cv2.BORDER_REPLICATE)
+        return padded[:, :-20], padded[:, 20:]
+
+    left, right = floor_samples(green)
+    bright_strip = ((cv2.subtract(green, cv2.max(left, right)) >= 26)
+                    & (cv2.min(left, right) >= 12))
+    left, right = floor_samples(cast)
+    floor_cast = cv2.min(left, right)
+    corrected_blue = cv2.subtract(blue, floor_cast)
+    warmth = cv2.subtract(red, green)
+    yellow_under_cast = (warmth >= 6) & (cv2.subtract(cv2.min(red, green), corrected_blue) >= 5)
+    left, right = floor_samples(warmth)
+    warmer_than_floor = cv2.subtract(warmth, cv2.max(left, right)) >= 16
+
+    weak = bright_strip & (yellow_under_cast | warmer_than_floor)
+    allowed = (seed | weak).astype(np.uint8)
+    region = seed.astype(np.uint8)
+    for _ in range(24):
+        extended = cv2.dilate(region, None) & allowed
+        if np.array_equal(extended, region):
+            break
+        region = extended
+    return region.astype(bool)
 
 
 class LaneTracker:
@@ -131,6 +174,9 @@ class LaneTracker:
         yellow, white = self.color_pipeline.masks(warped, hsv_lower=p.hsv_lower, hsv_upper=p.hsv_upper,
             white_h_min=t.white_h_min, white_h_max=t.white_h_max,
             white_s_max=t.white_s_max, white_v_min=t.white_v_min)
+        if t.recover_faded_yellow and self.color_pipeline.p.color_method == 'hsv':
+            yellow = _recover_faded_yellow(warped, yellow & self._valid)
+            white &= ~yellow
         return yellow & self._valid, white & self._valid
 
     # --- lines ------------------------------------------------------------------

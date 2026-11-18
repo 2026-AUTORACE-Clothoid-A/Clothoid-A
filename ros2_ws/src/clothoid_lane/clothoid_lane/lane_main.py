@@ -75,8 +75,8 @@ def make_detector(value):
         raise ValueError(f'detector must be one of {DETECTORS}, got {kind!r}')
     color = color_params(value)
     if kind == 'sliding2025':
-        if color.color_method != 'hsv' or color.gamma_enabled or color.clahe_enabled:
-            raise ValueError('Lab/RGB/gamma/CLAHE require detector=track2026')
+        if color.color_method != 'hsv' or color.gamma_enabled or color.clahe_enabled or color.blue_glare_strength:
+            raise ValueError('Lab/RGB and color preprocessing require detector=track2026')
         return LaneDetector(lane_params(value))
     return LaneTracker(lane_params(value),
                        TrackerParams(**{name: value(name) for name in TRACKER_FIELDS}), color)

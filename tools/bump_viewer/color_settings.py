@@ -60,8 +60,9 @@ def settings_yaml(settings):
 
 def validate_detector(settings, detector):
     lane = settings['lane']
-    if detector != 'track2026' and (lane['color_method'] != 'hsv' or lane['gamma_enabled'] or lane['clahe_enabled']):
-        raise ValueError('차선 Lab/RGB/감마/CLAHE는 track2026 검출기에서 사용할 수 있습니다.')
+    if detector != 'track2026' and (lane['color_method'] != 'hsv' or lane['gamma_enabled']
+                                    or lane['clahe_enabled'] or lane['blue_glare_strength']):
+        raise ValueError('차선 Lab/RGB 및 색상 보정은 track2026 검출기에서 사용할 수 있습니다.')
 
 
 def preset_settings(index, current, baseline):
@@ -69,4 +70,7 @@ def preset_settings(index, current, baseline):
     result = deepcopy(current)
     result['lane'] = deepcopy(baseline['lane'])
     filename = PRESETS[index][1]
-    return load_settings(ROOT/'ros2_ws/src/clothoid_lane/config'/filename, result) if filename else result
+    if filename:
+        result['lane']['blue_glare_strength'] = 0.0
+        return load_settings(ROOT/'ros2_ws/src/clothoid_lane/config'/filename, result)
+    return result

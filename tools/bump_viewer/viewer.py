@@ -274,6 +274,7 @@ class Viewer(QMainWindow):
             method.currentTextChanged.connect(lambda value, group=group: self.change_hsv((group, 'color_method', None), value))
             self.color_controls[group, 'color_method'] = method
             row = QHBoxLayout(); row.addWidget(QLabel('색 판정')); row.addWidget(method, 1); form_layout.addLayout(row)
+            self.add_color_number(form_layout, group, 'blue_glare_strength', '청색 빛번짐 억제', 0., 1., .05)
             for name, label in [('gamma_enabled', 'RGB 감마'), ('clahe_enabled', 'CLAHE · Lab 명암')]:
                 check = QCheckBox(label)
                 check.toggled.connect(lambda value, group=group, name=name: self.change_hsv((group, name, None), value))
@@ -283,7 +284,7 @@ class Viewer(QMainWindow):
                 else:
                     self.add_color_number(form_layout, group, 'clahe_clip_limit', '대비 제한', .1, 16., .1)
                     self.add_color_number(form_layout, group, 'clahe_grid_size', '격자 수 · 가로/세로', 2, 32)
-            hint = QLabel('감마 → CLAHE → 기존 블러·BEV → 색 판정\n'
+            hint = QLabel('빛번짐 억제 → 감마 → CLAHE → 기존 블러·BEV → 색 판정\n'
                           + ('노란색 우선, 나머지 픽셀에서 흰색 판정' if group == 'lane' else '차선과 독립된 흰색 판정 · 노란색 차감 없음'))
             hint.setWordWrap(True); form_layout.addWidget(hint)
             inner_scroll.setWidget(form); page_layout.addWidget(inner_scroll)

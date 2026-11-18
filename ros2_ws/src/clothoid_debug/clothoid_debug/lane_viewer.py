@@ -86,7 +86,9 @@ def load_params(camera: str, overrides) -> dict:
     with open(os.path.join(share, 'lane.yaml')) as f:
         lane = yaml.safe_load(f)['lane_main']['ros__parameters']
     with open(os.path.join(share, f'camera_{camera}.yaml')) as f:
-        cam = yaml.safe_load(f)['/**']['ros__parameters']
+        profile = yaml.safe_load(f)
+        cam = profile['/**']['ros__parameters']
+        camera_lane = profile.get('lane_main', {}).get('ros__parameters', {})
     values = {'steer_gain': 1.0, 'max_steer_rad': MAX_STEER_RAD, 'wheelbase': WHEELBASE,
               'target_max_step_px': 8.0,
               'initial_side': SIDE_RIGHT, 'lane_width_m': 0.5, 'warp_px_per_m': 340.0,
@@ -94,6 +96,7 @@ def load_params(camera: str, overrides) -> dict:
     values.update(detector_defaults())
     values.update(lane)
     values.update(cam)                 # the camera file wins, as in the launch files
+    values.update(camera_lane)
     for item in overrides:
         name, _, text = item.partition('=')
         if name not in values:

@@ -96,6 +96,7 @@ def panels(data, frame, hsv_settings=None, white_source='mission', color_source=
             probe = LineStopCore(bev, data['finish_params'], p['white_s_max'], p['white_v_min'], p['line_min_run'])
             probe.debug = True
             probe.min_thickness, probe.max_thickness = p['line_min_thickness'], p['line_max_thickness']
+            probe.max_gap = p['line_max_gap']
             probe.require_crosswalk = p['line_require_crosswalk']
             data['_probe'] = probe
         probe = data['_probe']

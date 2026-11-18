@@ -47,9 +47,47 @@ def test_gamma_convention_endpoints_and_input_ownership():
     assert np.all(neutral == 120)
 
 
+def test_blue_glare_suppresses_floor_spill_and_preserves_paint():
+    floor = [190, 62, 95]
+    yellow, white, tinted_white = [80, 198, 202], [213, 211, 214], [237, 199, 207]
+    image = np.array([[floor, yellow, white, tinted_white]], np.uint8)
+    pipeline = ColorPipeline(ColorParams(blue_glare_strength=.75))
+    corrected = pipeline.preprocess(image)
+    assert corrected.tolist() == [[[122, 62, 73], yellow, white, tinted_white]]
+    assert image.tolist() == [[floor, yellow, white, tinted_white]]
+    _, white_mask = pipeline.masks(corrected)
+    assert white_mask.tolist() == [[False, False, True, True]]
+
+
+def test_residual_violet_spill_is_removed_only_on_dark_blue_pixels():
+    image = np.array([[[180, 55, 80], [210, 75, 118], [220, 75, 140]]], np.uint8)
+    corrected = ColorPipeline(ColorParams(blue_glare_strength=1.)).preprocess(image)
+    # First-pass blue levels are 86, 124 and 146. Only the first has dark-floor margin.
+    assert corrected[0, :, 0].tolist() == [61, 124, 146]
+
+    # The same patch in an otherwise neutral scene receives only the first pass.
+    neutral = np.full((64, 80, 3), 70, np.uint8)
+    neutral[32:40, :8] = image[0, 0]
+    corrected = ColorPipeline(ColorParams(blue_glare_strength=1.)).preprocess(neutral)
+    assert corrected[32, 0, 0] == 86
+
+
+def test_glare_correction_tapers_before_blue_tinted_white_paint():
+    # Same blue excess (74 after the noise margin) on dark, intermediate and bright patches.
+    image = np.array([[[180, 100, 100], [205, 125, 125], [230, 150, 150],
+                       [247, 228, 235]]], np.uint8)
+    pipeline = ColorPipeline(ColorParams(blue_glare_strength=1.))
+    corrected = pipeline.preprocess(image)
+    assert corrected[0, :, 0].tolist() == [106, 168, 230, 247]
+    mission = ColorPipeline(ColorParams(blue_glare_strength=1., gamma_enabled=True, gamma=1.2))
+    _, white = mission.masks(mission.preprocess(image), white_s_max=68, white_v_min=137,
+                             exclude_yellow=False)
+    assert white[0].tolist() == [False, False, False, True]
+
+
 @pytest.mark.parametrize('values', [dict(color_method='guess'), dict(gamma=float('nan')),
     dict(gamma=0.), dict(gamma_enabled=1), dict(clahe_grid_size=2.5),
-    dict(rgb_yellow_difference_min=-1), dict(lab_white_l_min=101.)])
+    dict(rgb_yellow_difference_min=-1), dict(lab_white_l_min=101.), dict(blue_glare_strength=1.1)])
 def test_invalid_parameters_rejected(values):
     with pytest.raises(ValueError):
         ColorParams(**values)

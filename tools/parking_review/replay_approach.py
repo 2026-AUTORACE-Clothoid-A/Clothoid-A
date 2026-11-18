@@ -27,8 +27,8 @@ ROOT=Path(__file__).resolve().parents[2]
 
 
 def replay(bag, mode):
-    configs=['clothoid_lane/config/lane.yaml','clothoid_lane/config/camera_limo2.yaml',
-             'clothoid_mission/config/mission.yaml','clothoid_parking/config/parking.yaml']
+    configs=['clothoid_lane/config/lane.yaml','clothoid_mission/config/mission.yaml',
+             'clothoid_parking/config/parking.yaml','clothoid_lane/config/camera_limo2.yaml']
     args=['--ros-args']
     for path in configs:args+=['--params-file',str(ROOT/'ros2_ws/src'/path)]
     rclpy.init(args=args)
