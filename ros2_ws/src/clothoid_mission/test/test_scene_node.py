@@ -12,6 +12,7 @@ from clothoid_finish.finish_core import Phase
 from clothoid_interfaces.msg import Detection, DetectionArray
 from clothoid_mission.mission_node import MissionNode
 from clothoid_mission.mission_logic import STOPPED_LIGHT, DRIVE
+from rclpy.parameter import Parameter
 
 
 @pytest.fixture
@@ -42,6 +43,40 @@ def detections(node, clock, now, name, x=100):
     msg.header.stamp.nanosec = int(round((now - int(now)) * 1e9))
     node.on_detections(msg)
     return msg
+
+
+def test_live_white_hue_updates_existing_core_and_preserves_the_committed_target(node):
+    n, _ = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+        k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    core = n.core
+    core.phase, core.target = Phase.COMMIT, 1.2
+    result = n.set_parameters_atomically([Parameter('white_h_max', value=45)])
+    assert result.successful
+    assert n.core is core and core.white_h_max == 45
+    assert core.phase == Phase.COMMIT and core.target == 1.2
+    assert n.new_core().white_h_max == 45
+    result = n.set_parameters_atomically([Parameter('white_h_min', value=60)])
+    assert not result.successful
+    assert core.white_h_min == n.get_parameter('white_h_min').value == 0
+    assert core.white_h_max == 45
+
+
+def test_color_switch_preserves_committed_mission_and_updates_new_cores(node):
+    n, _ = node
+    cam = CameraModel()
+    n.on_info(CameraInfo(width=640, height=480,
+        k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
+    core = n.core
+    core.phase, core.target = Phase.COMMIT, 1.2
+    assert n.set_parameters_atomically([Parameter('color_method', value='rgb'),
+        Parameter('gamma_enabled', value=True)]).successful
+    assert n.core is core and core.target == 1.2 and core.phase == Phase.COMMIT
+    assert core.color_pipeline.p.color_method == n.new_core().color_pipeline.p.color_method == 'rgb'
+    pipeline = core.color_pipeline
+    assert not n.set_parameters_atomically([Parameter('gamma', value=-1.)]).successful
+    assert core.color_pipeline is pipeline and n.get_parameter('gamma').value == 1.2
 
 
 def test_selected_red_is_not_released_by_another_green(node):
@@ -118,10 +153,16 @@ def test_delayed_source_data_and_duplicates_do_not_refresh_evidence(node):
 
 def test_parking_handover_requires_fresh_bay_and_reached_separate_entry(node):
     n, clock = node
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda msg: limits.append(msg.data))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, 'sign_parking')
     n.on_timer()
     assert n.logic.parking_armed and not n.logic.parking_flag
+    assert not limits
+    n.entry_evidence.entry_at = n.travel + n.finish_params.front + .25
+    n.on_timer()
+    assert .2 < limits[-1] < .8 and not n.logic.parking_flag
     scene = PoseStamped()
     scene.header.frame_id, scene.header.stamp.sec = 'base_link', 1000
     scene.header.stamp.nanosec = 200_000_000
@@ -177,6 +218,8 @@ def test_mission_start_brakes_before_front_wheel_entry_without_committing_a_stop
     from test_line_stop import render
 
     n, clock = node
+    # the start-line path (mission.yaml slows at once on the slow sign since 1118 PM)
+    n.logic.p.slow_at_stopline = True
     cam = CameraModel()
     n.on_info(CameraInfo(width=640, height=480,
                          k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
@@ -306,6 +349,7 @@ def test_entry_slowing_does_not_move_or_complete_the_existing_bumper_stop_target
 @pytest.mark.parametrize('sign', ['sign_slow', 'sign_bump', 'sign_pedestrian', 'traffic_light_red'])
 def test_start_line_slows_near_entry_instead_of_starting_a_long_crawl(node, sign):
     n, clock = node
+    n.logic.p.slow_at_stopline = True    # the start-line path (mission.yaml: at once since 1118 PM)
     limits = []
     n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
     for now in (1000., 1000.1, 1000.2):
@@ -355,8 +399,9 @@ def test_observation_extends_parking_arm_but_skip_does_not_complete_mission():
     m=MissionLogic(MissionParams(require_cone_for_parking=False))
     m.step(Inputs(now=0.,seen={'sign_parking'}))
     assert m.step(Inputs(now=9.,parking_observing=True)).parking_prepare
-    out=m.step(Inputs(now=10.,parking_skipped=True,seen={'sign_parking'}))
+    out=m.step(Inputs(now=10.,parking_skipped=True,seen={'sign_parking'},parking_speed_limit=.2))
     assert not out.parking_flag and not out.parking_prepare and out.state==DRIVE
+    assert out.speed_limit is None
     assert not m.step(Inputs(now=11.,seen={'sign_parking'})).parking_prepare
     # A missed parking mission cannot block a subsequent independent pedestrian mission.
     out=m.step(Inputs(now=11.1,seen={'sign_pedestrian'},line_phase='arrived'))
@@ -398,3 +443,14 @@ def test_configured_fork_sweep_confirms_after_missing_frames(node, name, directi
     n.on_timer()
     assert name in n.seen and n.logic.direction == direction
     assert not n.logic.parking_flag and n.logic.state == DRIVE
+
+
+def test_configured_slow_sign_slows_at_once(node):
+    """mission.yaml (1118 PM): slow_speed on the confirmed slow sign, no start line needed."""
+    n, clock = node
+    limits = []
+    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, 'sign_slow')
+        n.on_timer()
+    assert limits and limits[-1] == pytest.approx(.2)

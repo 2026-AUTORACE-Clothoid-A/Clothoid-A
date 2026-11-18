@@ -32,6 +32,7 @@ import numpy as np
 
 from clothoid_lane.lane_detector import (SIDE_BOTH, SIDE_LEFT, SIDE_RIGHT, LaneParams, LaneResult,
                                          make_warp_matrix)
+from clothoid_common.color import ColorParams, ColorPipeline, validate_hsv
 
 YELLOW, WHITE = 'yellow', 'white'
 
@@ -55,6 +56,8 @@ class TrackerParams:
     zigzag_min_flips: int = 3         # sign changes of that swing along the line
     zigzag_hold: int = 15             # frames the zone lasts with no boundary in view
     zigzag_width_ratio: float = 1.07  # zone lane width / normal: bags 182/170 px, drawing 570/520 mm
+    white_h_min: int = 0             # inclusive OpenCV hue range; full range preserves S/V-only mask
+    white_h_max: int = 179
 
 
 @dataclass(eq=False)   # compared by identity: the generated __eq__ would compare numpy arrays
@@ -92,13 +95,20 @@ class _Components:
 
 
 class LaneTracker:
-    def __init__(self, params: LaneParams, tracker: Optional[TrackerParams] = None):
-        self.configure(params, tracker)
+    def __init__(self, params: LaneParams, tracker: Optional[TrackerParams] = None,
+                 color: Optional[ColorParams] = None):
+        self.configure(params, tracker, color)
 
-    def configure(self, params: LaneParams, tracker: Optional[TrackerParams] = None) -> None:
+    def configure(self, params: LaneParams, tracker: Optional[TrackerParams] = None,
+                  color: Optional[ColorParams] = None) -> None:
         matrix = make_warp_matrix(params)   # raises first, so a bad set keeps the old one
+        tuning = tracker or getattr(self, 't', None) or TrackerParams()
+        validate_hsv(params.hsv_lower, params.hsv_upper, tuning.white_h_min, tuning.white_h_max,
+                     tuning.white_s_max, tuning.white_v_min)
+        pipeline = ColorPipeline(color) if color is not None else getattr(self, 'color_pipeline', ColorPipeline())
         self._matrix, self.p = matrix, params
-        self.t = tracker or getattr(self, 't', None) or TrackerParams()
+        self.t = tuning
+        self.color_pipeline = pipeline
         size = (params.warp_w, params.warp_h)
         ones = np.full((params.height, params.width), 255, np.uint8)
         # pixels of the warped image that come from inside the camera image
@@ -117,12 +127,11 @@ class LaneTracker:
     # --- masks ------------------------------------------------------------------
     def _masks(self, bgr: np.ndarray):
         p, t = self.p, self.t
-        warped = cv2.warpPerspective(cv2.GaussianBlur(bgr, (5, 5), 0), self._matrix,
-                                     (p.warp_w, p.warp_h), flags=cv2.INTER_LINEAR)
-        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
-        yellow = cv2.inRange(hsv, np.array(p.hsv_lower), np.array(p.hsv_upper)) > 0
-        white = (hsv[..., 1] <= t.white_s_max) & (hsv[..., 2] >= t.white_v_min)
-        return yellow & self._valid, white & self._valid & ~yellow
+        warped = self.color_pipeline.warp(bgr, self._matrix, (p.warp_w, p.warp_h))
+        yellow, white = self.color_pipeline.masks(warped, hsv_lower=p.hsv_lower, hsv_upper=p.hsv_upper,
+            white_h_min=t.white_h_min, white_h_max=t.white_h_max,
+            white_s_max=t.white_s_max, white_v_min=t.white_v_min)
+        return yellow & self._valid, white & self._valid
 
     # --- lines ------------------------------------------------------------------
     def _is_zigzag(self, pts: np.ndarray, coeff: np.ndarray) -> bool:

@@ -5,7 +5,8 @@ Publishes a Twist on `cmd_topic` (twist_mux input `cone`, 90). Steering from pur
 converted with the bicycle model: w = v * tan(delta) / wheelbase. Normal cone
 sorting, pursuit and boundary-loss response match main. Exit uses separate
 rear-axle pursuit parameters and the retained measured path.
-After rear-axle exit arrival, retain priority while connecting to freshly
+With exit_from_camera, follow the live lane arc until LaneMain confirms reacquisition.
+In the legacy mode, after rear-axle exit arrival, retain priority while connecting to freshly
 detected lane steering; release only after the IMU / speed response agrees.
 """
 import math
@@ -59,6 +60,7 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.declare_parameter('centerline_ds', d.centerline_ds)
         self.declare_parameter('lsq_window_size', d.lsq_window_size)
         self.declare_parameter('boundary_timeout', d.boundary_timeout)
+        self.declare_parameter('exit_from_camera', False)
         self.declare_parameter('exit_speed', .25)
         self.declare_parameter('exit_lfd', .35)
         self.declare_parameter('exit_clearance', 0.2)  # path to detected obstacle centre, metres
@@ -263,7 +265,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
 
     def _reset_pose_memory(self):
         self.exit_memory.clear()
-        self.reset_connection()
+        if not self.get_parameter('exit_from_camera').value:
+            self.reset_connection()
         self.pose = self.pose_time = None
         self.pose_generation = self.odometry.generation
 
@@ -291,6 +294,9 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         p = self.exit_params
         pose = self.pose if self.pose is not None and self._fresh(self.pose_time) else None
         lane_ready = self.lane_ready and self._fresh(self.lane_ready_time)
+        if self.get_parameter('exit_from_camera').value:
+            self.follow_camera_exit(lane_ready)
+            return
         arrived = pose is not None and self.exit_memory.handover_ready(pose, p.rear_axle_x)
         if self.connection.active or arrived:
             self.connect_lane(pose, lane_ready)
@@ -318,6 +324,33 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         self.publish_result(FollowResult(p.speed, steering_from_target(target, p),
                                          center=center, target=target))
 
+    def follow_camera_exit(self, lane_ready):
+        # The rising edge resets LaneMain's boundary tracks once per exit attempt.
+        self.connecting_pub.publish(Bool(data=True))
+        p = self.exit_params
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if (self.lane_candidate is None or not self._fresh(self.lane_candidate_time)
+                or not 0. <= now - self.lane_candidate_stamp <= p.boundary_timeout
+                or self.lane_candidate.linear.x <= 0.):
+            self.publish_stop()
+            self._exit_log('camera wait', 'cone EXIT: waiting for fresh camera lane')
+            return
+        candidate = self.lane_candidate
+        limit = central_limit(p.wheelbase)
+        steering = float(np.clip(math.atan2(p.wheelbase * candidate.angular.z,
+                                            candidate.linear.x), -limit, limit))
+        arc = forward_arc(steering, p.wheelbase, p.rear_axle_x, p.lfd, p.centerline_ds)
+        if (not self._fresh(self.obstacles_time)
+                or clearance(arc, self.obstacles) < self.get_parameter('exit_clearance').value):
+            self.publish_stop()
+            self._exit_log('camera blocked', 'cone EXIT: camera lane arc blocked or LiDAR stale')
+            return
+        speed = min(candidate.linear.x, p.speed, self.connection.p.speed)
+        self.publish_result(FollowResult(speed, steering, center=arc))
+        self._exit_log('camera lane', 'cone EXIT: following detected camera lane')
+        if lane_ready:
+            self.exit_done_pub.publish(Bool(data=True))
+
     def _exit_log(self, key, message, warn=False):
         """Exit-phase status: at once when it changes, then every exit_log_repeat s while it holds
         (1116: a 1 s throttle repeated one waiting line for up to 190 s after the course)."""
@@ -326,7 +359,12 @@ class ConeFollowerNode(QuietEventsMixin, Node):
         if last is not None and last[0] == key and now - last[1] < self.get_parameter('exit_log_repeat').value - 1e-6:
             return
         self.exit_logged = (key, now)
-        (self.get_logger().warn if warn else self.get_logger().info)(message)
+        # one call site per severity: rclpy refuses a call site that changes severity (ValueError
+        # 'Logger severity cannot be changed between calls'), which killed the node at every cone exit
+        if warn:
+            self.get_logger().warn(message)
+        else:
+            self.get_logger().info(message)
 
     def publish_stop(self):
         self.last_command_steering = 0.
@@ -396,7 +434,8 @@ class ConeFollowerNode(QuietEventsMixin, Node):
             return
         if result.reverse:
             self.get_logger().warn('one boundary only, reversing', throttle_duration_sec=1.0)
-        if not result.reverse and len(result.center) and self.pose is not None and self._fresh(self.pose_time):
+        if (not self.get_parameter('exit_from_camera').value and not result.reverse and len(result.center)
+                and self.pose is not None and self._fresh(self.pose_time)):
             self.exit_memory.remember(result.center, self.pose, self.exit_params.lfd,
                                       self.exit_params.centerline_ds)
         self.publish_result(result)

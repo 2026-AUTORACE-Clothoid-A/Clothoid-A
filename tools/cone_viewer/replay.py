@@ -14,6 +14,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def analyse(path, progress=lambda value: None):
+    config = yaml.safe_load((ROOT/'ros2_ws/src/clothoid_lidar/config/lidar.yaml').read_text())
+    if config['cone_follower']['ros__parameters'].get('exit_from_camera'):
+        from camera_exit import camera_exit_replay
+        with camera_exit_replay() as camera_exit:
+            return _analyse(path, progress, camera_exit)
+    return _analyse(path, progress, None)
+
+
+def _analyse(path, progress, camera_exit):
     # A reload always follows source edits, even when the viewer is already open.
     from clothoid_lidar import cone_trace, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_exit_pursuit, cone_odometry, cone_lane_connection
     for module in (cone_trace, cone_exit, cone_exit_pursuit, cone_sorter, cone_follower, obstacle_extractor, cone_odometry, cone_lane_connection):
@@ -64,7 +73,7 @@ def analyse(path, progress=lambda value: None):
             if minimum is not None:start_stamps.append(minimum)
             topics = {i: (n, t) for i, n, t in db.execute('select id,name,type from topics')}
             wanted = {i: (n, t) for i, (n, t) in topics.items()
-                      if t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', odom_topic, imu_topic, '/lane/cone_exit_ready', '/lane/cone_exit_candidate', '/avoid/active')
+                      if (camera_exit and n in camera_exit.inputs) or t == 'sensor_msgs/msg/LaserScan' or n in ('/tf_static', '/tf', '/cmd_vel', '/cone/mission_active', odom_topic, imu_topic, '/lane/cone_exit_ready', '/lane/cone_exit_candidate', '/avoid/active')
                       or (t in ('sensor_msgs/msg/CompressedImage', 'sensor_msgs/msg/Image')
                           and 'debug' not in n and 'depth' not in n and 'warp' not in n)}
             camera = sorted([(i, n, t) for i, (n, t) in wanted.items() if 'Image' in t],
@@ -96,6 +105,7 @@ def analyse(path, progress=lambda value: None):
     avoid_active = False; avoid_seen = avoid_last = None
     lane_candidate = None; lane_candidate_stamp = lane_candidate_time = None
     exit_reference_end = None
+    gate_single_course = config['cone_sorter']['ros__parameters'].get('single_course', True)
     previous_scan = start_scan = None
     last_event = None; events = []; command_rows = []
     for idx, (stamp, name, ty, blob) in enumerate(sources):
@@ -105,7 +115,18 @@ def analyse(path, progress=lambda value: None):
         if name in ('/tf', '/tf_static'):
             continue
         kind = types.setdefault(ty, get_message(ty)); msg = deserialize_message(blob, kind)
+        if camera_exit:
+            camera_exit.stamp = stamp
+            if name in camera_exit.inputs:
+                camera_exit.inputs[name](msg)
+                continue
+            if name == imu_topic:
+                camera_exit.lane.on_imu(msg)
+            elif name == odom_topic:
+                camera_exit.lane.on_odom(msg)
         if 'Image' in ty:
+            if camera_exit:
+                camera_exit.image(msg)
             if ty.endswith('CompressedImage'):
                 cameras.append((t, bytes(msg.data)))
             else:
@@ -136,6 +157,8 @@ def analyse(path, progress=lambda value: None):
                 lane_candidate_stamp, lane_candidate_time = candidate_stamp, t
             continue
         if name in (odom_topic, imu_topic):
+            if camera_exit:
+                continue
             header_time = msg.header.stamp.sec+msg.header.stamp.nanosec*1e-9
             sensor_time = header_time-t0*1e-9 if header_time else t
             if -.02 <= t-sensor_time <= fp.boundary_timeout:
@@ -174,11 +197,14 @@ def analyse(path, progress=lambda value: None):
                 held = True
             elif avoid_last is not None:
                 held = t-avoid_last < gate.get('avoid_release_hold', 2.)
-        result = mission.update(points, t, may_start=not held)
+        finished = camera_exit and camera_exit.completed and gate_single_course
+        result = mission.update(points, t, may_start=not held and not finished)
+        if camera_exit:
+            camera_exit.flags(mission.running, mission.exiting)
         if mission.exiting and not was_exiting:
             connection.clear()
             lane_ready = False; lane_ready_time = None
-            events.append((t, '콘 출구: 저장 경로 유지'))
+            events.append((t, '콘 출구 · 차선 트랙 초기화' if camera_exit else '콘 출구: 저장 경로 유지'))
         elif was_exiting and not mission.exiting:
             connection.clear()
             events.append((t, '콘 경계 재검출'))
@@ -206,7 +232,18 @@ def analyse(path, progress=lambda value: None):
             if len(result.right):
                 right, rt = result.right, t
                 if active:command = control()
-        if active and mission.exiting:
+        camera_state = None
+        if active and mission.exiting and camera_exit:
+            command = camera_exit.step(points)
+            camera_state = {'camera wait': '카메라 차선 후보 대기', 'camera blocked': '차선 경로 라이다 간격 부족',
+                            'camera lane': '검출 차선 저속 추종'}[command.source]
+            callback_results.append(command)
+            command_rows.append((t, command.speed, command.steering))
+            if camera_exit.completed:
+                mission.finish_exit()
+                camera_exit.flags(False, False)
+                camera_state = '연속 차선 확인 · 콘 종료'
+        elif active and mission.exiting:
             fresh_pose = pose is not None and pose_time is not None and 0 <= t-pose_time <= xp.boundary_timeout
             current_pose = pose if fresh_pose else None
             arrived = current_pose is not None and exit_memory.handover_ready(current_pose, xp.rear_axle_x)
@@ -266,11 +303,15 @@ def analyse(path, progress=lambda value: None):
             state = '콘 출구 · 차선 준비 대기' if command is not None and command.speed == 0. else '콘 출구 · 저장 경로 추종'
             if command is not None and command.source.startswith('lane_connection'):
                 state = '콘 출구 · 저속 차선 연결' if command.speed>0. else '콘 출구 · 차선 연결 입력/안전 조건 대기'
+        if camera_state:
+            state = camera_state
+        if camera_exit:
+            observed_end = rear_remaining = None
         if active and state != last_event:
             events.append((t, state))
         last_event = state
         fan = False
-        frames.append(dict(t=t, scan=scan, obstacles=points, active=active, state=state,
+        frames.append(dict(lane_image=camera_exit.last_image if camera_exit else None, t=t, scan=scan, obstacles=points, active=active, state=state,
             left=left.copy() if lf else np.zeros((0,2)), right=right.copy() if rf else np.zeros((0,2)),
             stale_left=left.copy() if not lf else np.zeros((0,2)), stale_right=right.copy() if not rf else np.zeros((0,2)),
             left_age=None if lt is None else t-lt, right_age=None if rt is None else t-rt,
@@ -283,6 +324,10 @@ def analyse(path, progress=lambda value: None):
     for module in (cone_trace, cone_sorter, cone_follower, obstacle_extractor, cone_exit, cone_exit_pursuit, cone_odometry, cone_lane_connection):
         digest.update(Path(module.__file__).read_bytes())
     digest.update(Path(__file__).read_bytes())
+    if camera_exit:
+        from inspect import getfile
+        for cls in (type(camera_exit), type(camera_exit.lane), type(camera_exit.follower)):
+            digest.update(Path(getfile(cls)).read_bytes())
     digest.update(config_path.read_bytes())
     return dict(frames=frames, cameras=cameras, recorded=recorded, flags=flags, events=events,
                 params=fp, path=str(path), source_hash=digest.hexdigest()[:12], commands=command_rows,

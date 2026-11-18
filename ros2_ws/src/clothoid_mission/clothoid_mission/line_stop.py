@@ -25,6 +25,7 @@ target tolerance. MissionNode configures a 44 cm wide corridor for the 50 cm lan
 """
 import cv2
 import numpy as np
+from clothoid_common.color import ColorPipeline, validate_hsv
 
 from clothoid_finish.bev import Bev
 from clothoid_finish.finish_core import FinishCore, FinishParams, Phase  # noqa: F401  (re-exported)
@@ -42,16 +43,29 @@ def longest_runs(mask: np.ndarray) -> np.ndarray:
 
 class LineStopCore(FinishCore):
     def __init__(self, bev: Bev, p: FinishParams = FinishParams(),
-                 white_s_max: int = 60, white_v_min: int = 150, min_run: float = 0.7):
+                 white_s_max: int = 60, white_v_min: int = 150, min_run: float = 0.7,
+                 *, white_h_min: int = 0, white_h_max: int = 179, color=None):
+        validate_hsv((0, 0, 0), (179, 255, 255), white_h_min, white_h_max, white_s_max, white_v_min)
         super().__init__(bev, p)
+        self.color_pipeline = ColorPipeline(color)
+        self.white_h_min, self.white_h_max = white_h_min, white_h_max
         self.white_s_max, self.white_v_min = white_s_max, white_v_min
         self.min_run = min_run
         self.debug = False            # True: keep full-size masks for mission's debug image
         self.white = None
         self.min_thickness, self.max_thickness = 0.008, 0.12
+        # m: across-lane gaps up to this are bridged before the unbroken-run test (1118 night, limo2:
+        # the floor mats' seam split the light's stop line, 0.3~0.6 cm, longest run 58 % < 70 %).
+        # The "천천히" letters' gaps are wider (1.5 cm in the synthetic scene). 0 = off.
+        self.max_gap = 0.
         self.max_frame_gap = 0.25
         self._last_sighting = None
         self.require_crosswalk = False
+        # > 0: a line seen without the crosswalk beyond it still counts when the crosswalk shows up
+        # within this many seconds just past that line (1118 1607: blue stage light tinted the bars;
+        # the line was seen at 0.81~0.73 m, the bars only in the next image, at 0.77~0.84 m)
+        self.crosswalk_grace = 0.
+        self._pending = []           # (time, line position on odom) seen without the crosswalk
         self.observe_scene = False
         self.observe_entry = False
         self.entry_min_span = .26  # partial boundary at the edge of view during a turn
@@ -130,14 +144,41 @@ class LineStopCore(FinishCore):
                 lines.append(float(near))
         return tuple(sorted(lines))
 
+    def _promote_pending(self, now: float, crosswalks) -> None:
+        """crosswalk_grace: the bars just past recently seen lines confirm those lines as sightings."""
+        self._pending = [(t, at) for t, at in self._pending if now - t <= self.crosswalk_grace]
+        if not self._pending or not crosswalks or self.phase != Phase.FOLLOW:
+            return
+        line_at = self._pending[-1][1]
+        if not any(min(self.dist + end, line_at + .45) - max(self.dist + start, line_at + .02) >= .06
+                   for start, end in crosswalks):
+            return
+        pending, self._pending = self._pending, []
+        for t, at in pending:
+            self._sighting(t, at)
+
+    def _bridge(self, white):
+        """Close across-lane gaps of at most max_gap (rows only) for the line run test."""
+        if self.max_gap <= 0 or not white.size:
+            return white
+        px_per_m = float(self._per_row.max()) / (2 * self.p.band) if self._per_row.size else 0.
+        k = int(round(self.max_gap * px_per_m))
+        if k < 1:
+            return white
+        closed = cv2.morphologyEx(white.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((1, k + 1), np.uint8))
+        return closed.astype(bool) & self._band
+
     def remaining(self):
         return None if self.target is None else self.target - self.dist
 
     def image(self, now: float, bgr: np.ndarray):
         """FinishCore.image's cross line scan, in white and with an unbroken run; no left line."""
-        warped = self.bev.warp_image(bgr)[:, self._c0:self._c1]
-        hsv = cv2.cvtColor(warped, cv2.COLOR_BGR2HSV)
-        white = (hsv[..., 1] <= self.white_s_max) & (hsv[..., 2] >= self.white_v_min) & self._band
+        warped = self.bev.warp_image(self.color_pipeline.preprocess(bgr))[:, self._c0:self._c1]
+        # Mission white is independent from lane yellow; preserve this policy in all modes.
+        _, white = self.color_pipeline.masks(warped, white_h_min=self.white_h_min,
+            white_h_max=self.white_h_max, white_s_max=self.white_s_max,
+            white_v_min=self.white_v_min, exclude_yellow=False)
+        white &= self._band
         crosswalks = self._crosswalk_spans(white) if self.observe_scene or self.require_crosswalk else ()
         if self.debug:
             full = np.zeros(self.bev.valid.shape, bool)
@@ -146,11 +187,12 @@ class LineStopCore(FinishCore):
 
         # cross line: rows whose central band holds one unbroken white run over min_run of it
         per_row = self._per_row
-        runs = longest_runs(white)
+        runs = longest_runs(self._bridge(white))
         rows = np.nonzero((per_row > 10) & (runs >= self.min_run * np.maximum(per_row, 1)))[0]
         self.cross_x = None
         groups = np.split(rows, np.where(np.diff(rows) > 1)[0] + 1)
         candidates, lines = [], []
+        pending_line = None
         for group in groups:
             if len(group) < 2:
                 continue
@@ -166,6 +208,10 @@ class LineStopCore(FinishCore):
                 if (not self.require_crosswalk or self.phase == Phase.COMMIT or
                         behind):
                     candidates.append(near)
+                elif self.crosswalk_grace > 0 and self.phase == Phase.FOLLOW:
+                    pending_line = self.dist + line_x
+        if not candidates:
+            self._promote_pending(now, crosswalks)
         entry_lines = self._entry_lines(white) if self.observe_entry else ()
         self.observation = FloorObservation(tuple(lines), crosswalks, entry_lines)
         if candidates:
@@ -177,4 +223,8 @@ class LineStopCore(FinishCore):
         elif self.phase == Phase.FOLLOW:
             self._sightings.clear()                 # confirmation requires consecutive images
             self._last_sighting = None
+        if candidates or self.phase != Phase.FOLLOW:
+            self._pending.clear()
+        elif pending_line is not None:
+            self._pending.append((now, pending_line))
         self.left = None                            # lane_main steers (see the module docstring)

@@ -34,10 +34,13 @@ def test_sign_alone_or_unconfirmed_layout_does_not_slow_lane():
     assert not a.observing
 
 
-def test_registered_layout_slows_before_bay_is_selected():
+def test_registered_layout_uses_turn_braking_before_the_line_and_slow_speed_after():
     a,l,pose,p=fixture()
     assert l.selected is None
-    assert update(a,1.5,True,False,l,pose,p)==.2 and a.observing
+    before_line = update(a,1.5,True,False,l,pose,p)
+    assert before_line > a.p.speed and a.observing
+    pose.x = .40  # bumper has reached the observed entry line
+    assert update(a,1.55,True,False,l,pose,p) == a.p.speed
 
 
 def test_limit_brakes_before_turn_then_skip_is_bounded():
@@ -87,4 +90,4 @@ def test_occupied_or_unobserved_lane_envelope_holds_before_handover():
     l.last_scan=4.6
     assert update(a,4.6,True,False,l,pose,p)==0. and not a.skipped
     l.motion_clear=lambda *args:True
-    assert update(a,4.7,True,False,l,pose,p)==.2
+    assert update(a,4.7,True,False,l,pose,p)>a.p.speed

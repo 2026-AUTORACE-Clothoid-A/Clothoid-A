@@ -129,8 +129,19 @@ class ParkingEntryEvidence:
         if self._hits >= self.confirm_frames:
             self.entry_at = line
 
+    def remaining(self, distance, front):
+        return None if self.entry_at is None else self.entry_at - (distance + front)
+
+    def approach_limit(self, distance, front, target_speed, reaction_sec, deceleration):
+        remaining = self.remaining(distance, front)
+        if remaining is None or remaining < -self.max_travel:
+            return None
+        # Distance for reaction and braking to the target before the bumper crosses the line.
+        lead = deceleration * reaction_sec
+        braking_distance = max(0., remaining - self.tolerance)
+        cap = math.sqrt(lead**2 + target_speed**2 + 2 * deceleration * braking_distance) - lead
+        return max(target_speed, cap)
+
     def reached(self, distance, front):
-        if self.entry_at is None:
-            return False
-        progress = distance + front - self.entry_at
-        return -self.tolerance <= progress <= self.max_travel
+        remaining = self.remaining(distance, front)
+        return remaining is not None and -self.max_travel <= remaining <= self.tolerance

@@ -24,6 +24,7 @@ import math
 import inspect
 
 import cv2
+from clothoid_common.color import COLOR_NAMES, ColorPipeline, color_defaults, color_params, validate_hsv
 import numpy as np
 import rclpy
 from clothoid_common.qos import IMAGE_QOS
@@ -81,9 +82,15 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('odom_topic', '/odom_25hz')
         self.declare_parameter('line_debug_topic', '/mission/line_debug_image')
         self.declare_parameter('debug', False)
+        self.declare_parameter('white_h_min', 0)         # inclusive OpenCV hue range
+        self.declare_parameter('white_h_max', 179)
         self.declare_parameter('white_s_max', 60)        # stop line white: S <= and V >=
         self.declare_parameter('white_v_min', 150)
+        for name, default in color_defaults().items():
+            self.declare_parameter(name, default)
+        color_params(lambda name: self.get_parameter(name).value)
         self.declare_parameter('line_require_crosswalk', True)
+        self.declare_parameter('line_crosswalk_grace', 0.0)
         self.declare_parameter('front_axle_x', 0.10)
         self.declare_parameter('entry_reaction_sec', 0.10)
         self.declare_parameter('entry_deceleration', 2.5)
@@ -91,7 +98,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('entry_min_span', 0.26)
         self.declare_parameter('entry_rate_hz', 10.0)
         for name, value in [('line_band', 0.22), ('line_min_run', 0.7),
-                            ('line_min_thickness', 0.008), ('line_max_thickness', 0.12),
+                            ('line_min_thickness', 0.008), ('line_max_thickness', 0.12), ('line_max_gap', 0.0),
                             ('line_max_frame_gap', 0.25)]:
             self.declare_parameter(name, value)
         # warp and camera pose: clothoid_lane camera_limo*.yaml (as finish)
@@ -104,6 +111,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('direction_topic', '/direction_flag')
         self.declare_parameter('parking_topic', '/parking_flag')
         self.declare_parameter('steering_lock_topic', '/steering_lock')
+        self.declare_parameter('yaw_hold_topic', '/lane/yaw_hold')
+        self.declare_parameter('light_stopped_topic', '/mission/light_stopped')
         self.declare_parameter('bump_approach_topic', '/bump/approaching')
         # std_msgs/Bool stand-in for YOLO's sign_parking (parkgo publishes it while there is no model)
         self.declare_parameter('parking_sign_topic', '/parking_sign')
@@ -114,6 +123,11 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_scene_topic', '/parking/bay_candidate')
         self.declare_parameter('parking_scene_rate_hz', 6.0)
         self.declare_parameter('parking_entry_max_travel', 3.0)
+        self.parking_entry_reaction = self.declare_parameter('parking_entry_reaction_sec', 0.20).value
+        self.parking_entry_deceleration = self.declare_parameter('parking_entry_deceleration', 1.0).value
+        if (not math.isfinite(self.parking_entry_reaction) or self.parking_entry_reaction < 0. or
+                not math.isfinite(self.parking_entry_deceleration) or self.parking_entry_deceleration <= 0.):
+            raise ValueError('invalid parking entry braking parameters')
         self.declare_parameter('avoid_active_topic', '/avoid/active')
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
@@ -148,6 +162,11 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
         self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
         self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
+        self.declare_parameter('hill_slow_imu', d.hill_slow_imu)
+        self.declare_parameter('hill_max_sec', d.hill_max_sec)
+        self.declare_parameter('first_slow_yaw_hold', d.first_slow_yaw_hold)
+        self.declare_parameter('yaw_hold_max_sec', d.yaw_hold_max_sec)
+        self.declare_parameter('yaw_hold_after_m', d.yaw_hold_after_m)
 
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
@@ -157,11 +176,13 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('approach_speed', d.approach_speed)
         self.declare_parameter('fork_left_direction', d.fork_left_direction)
         self.declare_parameter('fork_right_direction', d.fork_right_direction)
+        self.declare_parameter('fork_lock_after_avoid', d.fork_lock_after_avoid)
         self.declare_parameter('parking_at_stopline', d.parking_at_stopline)
         self.declare_parameter('require_scene_confirmation', d.require_scene_confirmation)
         self.declare_parameter('parking_enabled', d.parking_enabled)
         self.declare_parameter('slow_arms_bump', d.slow_arms_bump)
         self.declare_parameter('slow_at_stopline', d.slow_at_stopline)
+        self.declare_parameter('slow_until_pedestrian_stop', d.slow_until_pedestrian_stop)
         self.declare_parameter('bump_at_stopline', d.bump_at_stopline)
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
@@ -189,6 +210,11 @@ class MissionNode(QuietEventsMixin, Node):
             bump_level_duration_sec=get('bump_level_duration'),
             bump_arm_timeout_sec=get('bump_arm_timeout'),
             bump_cooldown_sec=get('bump_cooldown'),
+            hill_slow_imu=get('hill_slow_imu'),
+            hill_max_sec=get('hill_max_sec'),
+            first_slow_yaw_hold=get('first_slow_yaw_hold'),
+            yaw_hold_max_sec=get('yaw_hold_max_sec'),
+            yaw_hold_after_m=get('yaw_hold_after_m'),
             pedestrian_wait_sec=get('pedestrian_wait_sec'),
             stop_on_yellow=get('stop_on_yellow'),
             arm_timeout_sec=get('arm_timeout_sec'),
@@ -197,17 +223,22 @@ class MissionNode(QuietEventsMixin, Node):
             approach_speed=get('approach_speed'),
             fork_left_direction=get('fork_left_direction'),
             fork_right_direction=get('fork_right_direction'),
+            fork_lock_after_avoid=get('fork_lock_after_avoid'),
             parking_at_stopline=get('parking_at_stopline'),
             require_scene_confirmation=get('require_scene_confirmation'),
             parking_enabled=get('parking_enabled'),
             slow_arms_bump=get('slow_arms_bump'),
             slow_at_stopline=get('slow_at_stopline'),
+            slow_until_pedestrian_stop=get('slow_until_pedestrian_stop'),
             bump_at_stopline=get('bump_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
             cone_confirm_sec=get('cone_confirm_sec'),
             avoid_release_hold=get('avoid_release_hold')))
 
+        self.fork_lock_logged = False
+        self.yaw_hold_logged = False
+        self.light_stopped_logged = False
         self.cone_active = False
         self.cone_entered_logged = False
         self.direction_logged = None
@@ -244,6 +275,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.prepare_pub = self.create_publisher(Bool, get('parking_prepare_topic'), 1)
         self.entry_distance_pub = self.create_publisher(Float32, '/parking/entry_distance', 1)
         self.steering_lock_pub = self.create_publisher(Bool, get('steering_lock_topic'), 1)
+        self.yaw_hold_pub = self.create_publisher(Bool, get('yaw_hold_topic'), 1)
+        self.light_stopped_pub = self.create_publisher(Bool, get('light_stopped_topic'), 1)
         self.bump_approach_pub = self.create_publisher(Bool, get('bump_approach_topic'), 1)
 
         self.create_subscription(DetectionArray, get('detections_topic'), self.on_detections, 1)
@@ -285,6 +318,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.bev = None               # built once camera_info gives the intrinsics
         self.core = None
         self.core_phase = Phase.IDLE
+        self.add_on_set_parameters_callback(self.on_hsv_parameters)
         self.line_speed = None        # FinishCore's speed last tick, the /speed_limit while it runs
         self.bridge = CvBridge()
         self.image_sub = None
@@ -416,11 +450,33 @@ class MissionNode(QuietEventsMixin, Node):
             self.sign_time = self.now_sec()
 
     # ---- line stop (FinishCore) ------------------------------------------------------------------
+    def on_hsv_parameters(self, params):
+        """Update the existing colour mask without resetting the mission or its stop target."""
+        from rcl_interfaces.msg import SetParametersResult
+        hsv_names = ('white_h_min', 'white_h_max', 'white_s_max', 'white_v_min')
+        names = hsv_names + COLOR_NAMES
+        proposed = {p.name: p.value for p in params if p.name in names}
+        if not proposed:
+            return SetParametersResult(successful=True)
+        values = {name: proposed.get(name, self.get_parameter(name).value) for name in names}
+        try:
+            validate_hsv((0, 0, 0), (179, 255, 255), *(values[name] for name in hsv_names))
+            pipeline = ColorPipeline(color_params(values.__getitem__))
+        except (ValueError, TypeError) as exc:
+            return SetParametersResult(successful=False, reason=str(exc))
+        if self.core is not None:
+            for name in hsv_names:
+                setattr(self.core, name, values[name])
+            self.core.color_pipeline = pipeline
+        return SetParametersResult(successful=True)
+
     def new_core(self) -> LineStopCore:
         get = lambda n: self.get_parameter(n).value  # noqa: E731
         core = LineStopCore(self.bev, self.finish_params, get('white_s_max'), get('white_v_min'),
-                            get('line_min_run'))
+                            get('line_min_run'), white_h_min=get('white_h_min'),
+                            white_h_max=get('white_h_max'), color=color_params(get))
         core.min_thickness = get('line_min_thickness')
+        core.max_gap = get('line_max_gap')
         core.max_thickness = get('line_max_thickness')
         core.max_frame_gap = get('line_max_frame_gap')
         core.require_crosswalk = get('line_require_crosswalk')
@@ -537,6 +593,9 @@ class MissionNode(QuietEventsMixin, Node):
         if arm:
             self.core.require_crosswalk = bool(
                 self.get_parameter('line_require_crosswalk').value and require_crosswalk)
+            # pedestrian and traffic light stops: the crosswalk may show in the images just after the line
+            self.core.crosswalk_grace = self.get_parameter('line_crosswalk_grace').value if (
+                self.logic.pedestrian_armed_at is not None or self.logic.light_armed_at is not None) else 0.
         if arm and self.core.phase == Phase.IDLE:
             self.core.start(now)
             self.line_reason = ('light' if self.logic.light_armed_at is not None else
@@ -590,6 +649,9 @@ class MissionNode(QuietEventsMixin, Node):
             value('entry_reaction_sec'), value('entry_deceleration'))
         entry_reached = self.mission_entry_active and self.mission_entry.reached(
             self.travel, value('front_axle_x'))
+        parking_speed_limit = self.entry_evidence.approach_limit(
+            self.travel, self.parking_front, self.logic.p.approach_speed,
+            self.parking_entry_reaction, self.parking_entry_deceleration)
         out = self.logic.step(Inputs(
             now=self.now_sec(),
             seen=seen,
@@ -598,15 +660,21 @@ class MissionNode(QuietEventsMixin, Node):
                           if self.logic.p.require_scene_confirmation else
                           self.line if self._fresh(self.line_time) else False),
             parking_scene=self._fresh(self.parking_scene_time),
+            parking_speed_limit=parking_speed_limit,
             parking_observing=self.parking_observing and self._fresh(self.parking_observing_time),
             parking_skipped=self.parking_skipped and self._fresh(self.parking_skipped_time),
             line_phase=line_phase,
             line_speed=self.line_speed,
             entry_slow=entry_slow, entry_reached=entry_reached,
+            travel=self.travel if self._fresh(self.latest_speed_time) else None,
             parking_done=self.parking_done,
             imu_pitch=self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             cone_active=self.cone_active,
             avoid_active=self.avoid_active and self._fresh(self.avoid_time)))
+        if self.logic.fork_locked and not self.fork_lock_logged:
+            self.fork_lock_logged = True
+            self.get_logger().info(f'fork: direction {self.logic.direction} kept from now on (static obstacle '
+                                   'mission ended); later left/right signs are ignored')
         if self.logic.cone_entered and not self.cone_entered_logged:
             self.cone_entered_logged = True
             self.get_logger().info('cone course entered')
@@ -664,6 +732,7 @@ class MissionNode(QuietEventsMixin, Node):
             'front': self.finish_params.front, 'entry_front': value('front_axle_x'),
             'speed_limit': out.speed_limit,
             'bump_state': self.logic.bump_state,
+            'hill_imu': self.logic.hill_active,
             'imu_pitch': self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             'steering_lock': out.steering_lock,
             'stopped_for': (round(now - self.logic.stopped_at, 2) if out.stop else None)})))
@@ -692,7 +761,11 @@ class MissionNode(QuietEventsMixin, Node):
             limit = '+'.join(name for name, on in (
                 ('slow sign', now < self.logic.slow_until),
                 ('bump', self.logic.bump_state in (BUMP_APPROACHING, BUMP_ON)),
+                ('hill imu', self.logic.hill_active),
+                ('slow to crosswalk', self.logic.slow_for_pedestrian and now >= self.logic.slow_until),
                 ('slow entry', self.logic.slow_armed_at is not None and now >= self.logic.slow_until),
+                ('parking approach', out.parking_prepare and self.logic.p.require_scene_confirmation
+                 and parking_speed_limit is not None),
                 ('line stop', out.stop_arm)) if on) or 'other'
         if limit != self.limit_logged:
             self.get_logger().info('speed limit off' if limit is None else
@@ -717,6 +790,16 @@ class MissionNode(QuietEventsMixin, Node):
 
         self._publish_changed('steering_lock', out.steering_lock,
                               lambda v: self.steering_lock_pub.publish(Bool(data=bool(v))))
+        if out.yaw_hold != self.yaw_hold_logged:
+            self.get_logger().info(f'yaw hold {"on (first slow zone)" if out.yaw_hold else "off"}')
+            self.yaw_hold_logged = out.yaw_hold
+        self._publish_changed('yaw_hold', out.yaw_hold,
+                              lambda v: self.yaw_hold_pub.publish(Bool(data=bool(v))))
+        if out.light_stopped and not self.light_stopped_logged:
+            self.get_logger().info('traffic light stop: cone course START held from now on')
+            self.light_stopped_logged = True
+        self._publish_changed('light_stopped', out.light_stopped,
+                              lambda v: self.light_stopped_pub.publish(Bool(data=bool(v))))
         self._publish_changed('bump_approaching', self.logic.bump_state == BUMP_APPROACHING,
                               lambda v: self.bump_approach_pub.publish(Bool(data=bool(v))))
 

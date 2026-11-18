@@ -41,6 +41,7 @@ class Phase(Enum):
 @dataclass
 class PlanParams:
     side: float = -1.0             # -1: bays on the right
+    entry_heading_compensation: bool = False  # account for residual approach yaw in turn position
     # Dead-reckoning point: the point with no sideways speed, `rear_offset` behind base_link. The rear
     # axle is 0.1 behind, but at full lock limo2's rear slides out: 5 parking bags (2026-11-09) checked
     # against the lidar fit 0.02 behind with odom speed x0.98 (4 mm rms, 11.6 cm with 0.1 / x1.0).
@@ -76,6 +77,18 @@ class PlanParams:
 
 def wrap(angle: float) -> float:
     return math.atan2(math.sin(angle), math.cos(angle))
+
+
+def arc_forward_span(pose, bay, plan):
+    delta = wrap(pose.yaw-bay.row_yaw) if plan.entry_heading_compensation else 0.
+    return plan.turn_radius*(1-plan.side*math.sin(delta))
+
+
+def turn_remaining(bay, pose, plan):
+    rx = pose.x-plan.rear_offset*math.cos(pose.yaw)
+    ry = pose.y-plan.rear_offset*math.sin(pose.yaw)
+    along = (bay.face_x-rx)*math.cos(bay.row_yaw)+(bay.face_y-ry)*math.sin(bay.row_yaw)
+    return along-arc_forward_span(pose, bay, plan)-plan.turn_lead
 
 
 class Planner:
@@ -118,11 +131,7 @@ class Planner:
 
     def turn_remaining(self, pose: Pose2D) -> float:
         """m the rear axle still has to go along the row before turning."""
-        b = self.bay
-        rx = pose.x - self.p.rear_offset * math.cos(pose.yaw)
-        ry = pose.y - self.p.rear_offset * math.sin(pose.yaw)
-        along = (b.face_x - rx) * math.cos(b.row_yaw) + (b.face_y - ry) * math.sin(b.row_yaw)
-        return along - self.p.turn_radius - self.p.turn_lead
+        return turn_remaining(self.bay, pose, self.p)
 
     def _hold(self, pose: Pose2D, yaw_ref: float, v: float) -> float:
         steer = self.p.heading_gain * wrap(yaw_ref - pose.yaw)

@@ -92,7 +92,7 @@ static_avoid:
     course_corner1_shift_min: 0.25
     course_corner1_shift_max: 1.3
     course_turn2_blocker: 0.8    # m past the second right turn, no start line yet: a blocker starts it
-    course_test_start: 1.0       # a LIMO in our lane this soon after the launch: an avoid test, elsewhere
+    course_test_start: 0.0       # off (always the race start); > 0: a LIMO in our lane this soon after the launch = an avoid test
     approach_speed: 0.8
     island_handover: 1.0         # handover_after_island false: m before the island front, lane_main enters A / B
     island_topic: ''             # PointStamped (base_link) island front from the lane side, if any

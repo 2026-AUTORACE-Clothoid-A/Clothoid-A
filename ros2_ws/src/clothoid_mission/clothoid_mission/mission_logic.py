@@ -128,6 +128,9 @@ class MissionParams:
     slow_speed: float = 0.2            # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0         # general slow sign hold timer
     slow_at_stopline: bool = False     # legacy key: slow before the separate mission entry line
+    # a pedestrian sign confirmed while the slow sign's hold runs keeps slow_speed until that stop is
+    # released (1118: the zigzag zone's slow sign stands at its start, the crosswalk stop ~2 m later)
+    slow_until_pedestrian_stop: bool = False
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
     bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
@@ -135,15 +138,35 @@ class MissionParams:
     bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
     bump_at_stopline: bool = False      # legacy key: slow before the separate mission entry line
+    # hill / bump from the IMU alone (no sign: the 1118 PM rules replaced the start's bump sign with a
+    # slow sign): slow_speed from |pitch| >= bump_pitch_thresh until the car is level again after the
+    # opposite tilt (as the bump exit), at most hill_max_sec after the last tilt. Speed only, no
+    # steering lock: nothing but the IMU says it is a bump.
+    hill_slow_imu: bool = False
+    hill_max_sec: float = 6.0
+    # first slow zone (the start's hill, 1118 PM): lane_main holds the IMU yaw from the first slow sign
+    # until the hill is over (hill_active rose and fell), at most yaw_hold_max_sec. The hill's yellow
+    # paint pulled lane_main's target sideways.
+    first_slow_yaw_hold: bool = False
+    yaw_hold_max_sec: float = 10.0
+    # odometry metres after the first slow sign before the hold starts: the heading is steady until
+    # just before the hill and swings 10+ deg where its paint comes into view (1118 PM: sign at
+    # 1.0~1.1 m, swing at 2.5 m, hill 2.6~2.8 m). Without odometry the hold starts at the sign.
+    yaw_hold_after_m: float = 1.0
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
     arm_timeout_sec: float = 8.0       # a sign/light seen this long ago without a stop line expires
     cooldown_sec: float = 15.0         # ignore the same trigger after a stop
     use_stop_line: bool = True         # stop with FinishCore (see the docstring)
-    approach_speed: float = 0.2        # m/s under lane_main while armed, before FinishCore drives
+    approach_speed: float = 0.2        # m/s target at the parking line; also the line stop fallback
     # fork (A/B): lane side to follow when the sign points left / right
     fork_left_direction: int = 0       # lane_main: 0 left lane, 1 right lane, 2 both
+    # keep the fork direction once static_avoid ran and ended (its release hold over): later left/right
+    # boxes are misdetections (1118 PM-5: flips past the traffic light, nothing there) and lane_main
+    # follows the direction until parking
+    fork_lock_after_avoid: bool = False
+    fork_lock_delay: float = 0.5       # s without /avoid/active before the lock (message gaps)
     fork_right_direction: int = 1
     # parking: the sign is seen from afar, the stop line before the bays is where the search starts
     parking_at_stopline: bool = True
@@ -176,6 +199,8 @@ class Inputs:
     avoid_active: bool = False                    # /avoid/active from static_avoid (fresh)
     entry_slow: bool = False       # braking point before the separate mission boundary
     entry_reached: bool = False    # front wheels reached that boundary (not a stop request)
+    travel: Optional[float] = None  # odometry metres (fresh), for distance based holds
+    parking_speed_limit: Optional[float] = None  # braking envelope from the measured entry line
 
 
 @dataclass
@@ -188,6 +213,8 @@ class Outputs:
     stop_arm: bool = False             # run the line stop (FinishCore)
     stop_require_crosswalk: bool = True
     steering_lock: bool = False        # lock steering during bump traversal
+    yaw_hold: bool = False             # lane_main keeps the IMU yaw (first slow zone, see MissionParams)
+    light_stopped: bool = False        # latched: the car stopped at the traffic light once
     parking_prepare: bool = False     # observe the parking scene, keep lane control
     entry_arm: bool = False           # observe the mission boundary, independently of the stop line
 
@@ -198,7 +225,11 @@ class MissionLogic:
         self.state = DRIVE
         self.slow_until = -1.0
         self.slow_armed_at: Optional[float] = None
+        self.slow_for_pedestrian = False
         self.direction: Optional[int] = None
+        self.avoid_ran = False
+        self.avoid_last_active = -math.inf
+        self.fork_locked = False
         self.parking_flag = False
         self.parking_armed = False
         self.parking_seen_at = None
@@ -220,6 +251,20 @@ class MissionLogic:
         self.bump_entry_sign = 0.
         self.bump_opposite_seen = False
 
+        # IMU-only hill slow (hill_slow_imu)
+        self.hill_active = False
+        self.hill_tilt_at = -math.inf
+        self.hill_entry_sign = 0.
+        self.hill_opposite_seen = False
+        self.hill_level_since: Optional[float] = None
+
+        # first slow zone yaw hold (first_slow_yaw_hold)
+        self.yaw_hold_since: Optional[float] = None
+        self.yaw_hold_travel: Optional[float] = None
+        self.yaw_hold_hill_seen = False
+        self.yaw_hold_done = False
+        self.light_stopped = False
+
     def _line_arrived(self, inputs: Inputs) -> bool:
         return inputs.line_phase == 'arrived' if self.p.use_stop_line else inputs.stopline
 
@@ -228,6 +273,10 @@ class MissionLogic:
 
         if inputs.avoid_active:
             self.avoid_until = now + p.avoid_release_hold
+            self.avoid_ran, self.avoid_last_active = True, now
+        elif (p.fork_lock_after_avoid and self.avoid_ran and now - self.avoid_last_active >= p.fork_lock_delay
+              and self.direction is not None):
+            self.fork_locked = True
         if inputs.cone_active and now >= self.avoid_until:
             if self.cone_active_since is None:
                 self.cone_active_since = now
@@ -266,13 +315,22 @@ class MissionLogic:
 
         self._update_stop(inputs)
         self._update_bump(inputs)
+        self._update_hill(inputs)
+        self._update_yaw_hold(inputs)
+        if self.pedestrian_armed_at is None or self.state != DRIVE:
+            self.slow_for_pedestrian = False      # stopped at the crosswalk (or the arm expired): done
+        elif p.slow_until_pedestrian_stop and now < self.slow_until:
+            self.slow_for_pedestrian = True
 
         limits = []
         bump_active = self.bump_state in (BUMP_APPROACHING, BUMP_ON)
-        if now < self.slow_until or bump_active:
+        if now < self.slow_until or bump_active or self.hill_active or self.slow_for_pedestrian:
             limits.append(p.slow_speed)
         if self.slow_armed_at is not None and inputs.entry_slow:
             limits.append(p.slow_speed)
+        parking_prepare = self.parking_armed and not self.parking_flag
+        if p.require_scene_confirmation and parking_prepare and inputs.parking_speed_limit is not None:
+            limits.append(inputs.parking_speed_limit)
         arm = p.use_stop_line and self.state == DRIVE and self._armed()
         parking_line_arm = p.use_stop_line and self.state == DRIVE and (
             not p.require_scene_confirmation and self.parking_armed and not self.parking_flag
@@ -291,14 +349,39 @@ class MissionLogic:
             stop_require_crosswalk=arm,
             entry_arm=p.use_stop_line and self.state == DRIVE and (
                 arm or self.slow_armed_at is not None or self.bump_line_armed_at is not None),
-            parking_prepare=self.parking_armed and not self.parking_flag,
+            parking_prepare=parking_prepare,
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
-                           math.isfinite(inputs.imu_pitch)))
+                           math.isfinite(inputs.imu_pitch)),
+            yaw_hold=self._yaw_hold_on(inputs),
+            light_stopped=self.light_stopped)
+
+    def _yaw_hold_on(self, inputs: Inputs) -> bool:
+        if self.yaw_hold_since is None or self.yaw_hold_done:
+            return False
+        if self.yaw_hold_travel is None or inputs.travel is None:
+            return True                 # no odometry: from the sign on
+        return inputs.travel - self.yaw_hold_travel >= self.p.yaw_hold_after_m
+
+    def _update_yaw_hold(self, inputs: Inputs) -> None:
+        """first_slow_yaw_hold: from the first slow sign until the hill rose and fell (or the cap)."""
+        p, now = self.p, inputs.now
+        if not p.first_slow_yaw_hold or self.yaw_hold_done:
+            return
+        if self.yaw_hold_since is None:
+            if 'sign_slow' in inputs.seen:
+                self.yaw_hold_since, self.yaw_hold_travel = now, inputs.travel
+            return
+        if self.hill_active:
+            self.yaw_hold_hill_seen = True
+        elif self.yaw_hold_hill_seen or now - self.yaw_hold_since > p.yaw_hold_max_sec:
+            self.yaw_hold_done = True
 
     def _update_fork(self, inputs: Inputs) -> None:
         seen, p = inputs.seen, self.p
+        if self.fork_locked:
+            return
         if 'sign_left' in seen and 'sign_right' not in seen:
             self.direction = p.fork_left_direction
         elif 'sign_right' in seen and 'sign_left' not in seen:
@@ -370,6 +453,39 @@ class MissionLogic:
             else:
                 self.bump_level_started_at = None
 
+    def _update_hill(self, inputs: Inputs) -> None:
+        """Slow on a tilt the IMU alone sees (hill_slow_imu); see MissionParams."""
+        p, now, pitch = self.p, inputs.now, inputs.imu_pitch
+        if not p.hill_slow_imu:
+            self.hill_active = False
+            return
+        valid = pitch is not None and math.isfinite(pitch)
+        if valid and abs(pitch) >= p.bump_pitch_thresh:
+            if not self.hill_active:
+                self.hill_active = True
+                self.hill_entry_sign = math.copysign(1., pitch)
+                self.hill_opposite_seen = False
+            elif pitch*self.hill_entry_sign < 0:
+                self.hill_opposite_seen = True
+            self.hill_tilt_at = now
+            self.hill_level_since = None
+            return
+        if not self.hill_active:
+            return
+        if valid and pitch*self.hill_entry_sign < -p.bump_level_thresh:
+            self.hill_opposite_seen = True
+        if now - self.hill_tilt_at > p.hill_max_sec:          # a ramp only, or the IMU went silent
+            self.hill_active = False
+        elif self.hill_opposite_seen and valid and abs(pitch) <= p.bump_level_thresh:
+            if self.hill_level_since is None:
+                self.hill_level_since = now
+            elif now - self.hill_level_since >= p.bump_level_duration_sec:
+                self.hill_active = False
+        else:
+            self.hill_level_since = None
+        if not self.hill_active:
+            self.hill_level_since = None
+
     def _update_stop(self, inputs: Inputs) -> None:
         now, seen, p = inputs.now, inputs.seen, self.p
 
@@ -414,10 +530,14 @@ class MissionLogic:
 
     def _enter(self, state: str, now: float) -> None:
         self.state, self.stopped_at = state, now
+        if state == STOPPED_LIGHT:
+            self.light_stopped = True
 
     def _release(self, which: str, now: float) -> None:
         self.state = DRIVE
         self.cooldown_until[which] = now + self.p.cooldown_sec
+        # the stop ends that zone's slow sign: go at lane speed after the crosswalk / on green
+        self.slow_until = min(self.slow_until, now)
         if which == 'pedestrian':
             self.pedestrian_armed_at = None
         else:
