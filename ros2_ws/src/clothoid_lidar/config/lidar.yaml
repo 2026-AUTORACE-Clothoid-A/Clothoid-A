@@ -53,6 +53,7 @@ cone_sorter:
     # lane handover (single_course)
     parking_hold_timeout: 2.0
     single_course: true
+    light_stopped_topic: /mission/light_stopped  # latched: no course START after the traffic light stop
 
 cone_follower:
   ros__parameters:

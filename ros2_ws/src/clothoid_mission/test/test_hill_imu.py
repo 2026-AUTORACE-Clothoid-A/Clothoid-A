@@ -90,3 +90,43 @@ def test_green_after_a_light_stop_ends_the_slow_zone():
     assert logic.step(Inputs(now=1., line_phase='arrived')).stop
     out = logic.step(Inputs(now=2., seen={'traffic_light_green'}))
     assert not out.stop and out.speed_limit is None          # 5 s hold would still run without the release
+
+
+# first slow zone yaw hold and the traffic light latch (1118 PM)
+
+def test_yaw_hold_from_the_first_slow_sign_until_the_hill_is_over():
+    logic = MissionLogic(MissionParams(hill_slow_imu=True, first_slow_yaw_hold=True, yaw_hold_max_sec=10.))
+    assert not logic.step(Inputs(now=0., imu_pitch=0.)).yaw_hold
+    assert logic.step(Inputs(now=1., seen={'sign_slow'}, imu_pitch=0.)).yaw_hold
+    t = 1.
+    for pitch in [-6.]*10 + [5.]*10 + [0.]*5:                # up, down, level (hill over)
+        t += .1
+        out = logic.step(Inputs(now=t, imu_pitch=pitch))
+    assert not out.yaw_hold
+    # never again: the second slow sign (crosswalk zone) does not hold the yaw
+    assert not logic.step(Inputs(now=20., seen={'sign_slow'}, imu_pitch=0.)).yaw_hold
+
+
+def test_yaw_hold_ends_by_the_cap_without_a_hill():
+    logic = MissionLogic(MissionParams(hill_slow_imu=True, first_slow_yaw_hold=True, yaw_hold_max_sec=10.))
+    logic.step(Inputs(now=0., seen={'sign_slow'}, imu_pitch=0.))
+    assert logic.step(Inputs(now=9.9, imu_pitch=0.)).yaw_hold
+    assert not logic.step(Inputs(now=10.1, imu_pitch=0.)).yaw_hold
+
+
+def test_light_stop_latches():
+    logic = MissionLogic(MissionParams(use_stop_line=True))
+    logic.step(Inputs(now=0., seen={'traffic_light_red'}))
+    assert not logic.step(Inputs(now=.5)).light_stopped
+    assert logic.step(Inputs(now=1., line_phase='arrived')).light_stopped
+    out = logic.step(Inputs(now=2., seen={'traffic_light_green'}))
+    assert not out.stop and out.light_stopped
+    assert not MissionLogic(MissionParams()).step(Inputs(now=0.)).light_stopped
+
+
+def test_yaw_hold_starts_after_the_configured_distance_past_the_sign():
+    logic = MissionLogic(MissionParams(hill_slow_imu=True, first_slow_yaw_hold=True, yaw_hold_after_m=1.0))
+    assert not logic.step(Inputs(now=0., seen={'sign_slow'}, imu_pitch=0., travel=1.0)).yaw_hold
+    assert not logic.step(Inputs(now=3., imu_pitch=0., travel=1.9)).yaw_hold
+    assert logic.step(Inputs(now=4., imu_pitch=0., travel=2.05)).yaw_hold
+    assert logic.step(Inputs(now=4.1, imu_pitch=0., travel=None)).yaw_hold      # odometry lost: keep it

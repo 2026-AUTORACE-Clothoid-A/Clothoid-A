@@ -87,6 +87,11 @@ mission:
     # after the opposite tilt, at most hill_max_sec after the last tilt
     hill_slow_imu: true
     hill_max_sec: 6.0
+    # first slow zone (start hill): lane_main holds the IMU yaw from the first slow sign until the hill is
+    # over (hill imu rose and fell), at most yaw_hold_max_sec; the hill's yellow paint pulled the target
+    first_slow_yaw_hold: true
+    yaw_hold_max_sec: 10.0
+    yaw_hold_after_m: 1.0       # m after the first slow sign: steady heading until just before the hill
     # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.
     require_cone_for_parking: true
     block_bump_after_cone: true

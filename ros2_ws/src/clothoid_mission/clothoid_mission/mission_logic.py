@@ -144,6 +144,15 @@ class MissionParams:
     # steering lock: nothing but the IMU says it is a bump.
     hill_slow_imu: bool = False
     hill_max_sec: float = 6.0
+    # first slow zone (the start's hill, 1118 PM): lane_main holds the IMU yaw from the first slow sign
+    # until the hill is over (hill_active rose and fell), at most yaw_hold_max_sec. The hill's yellow
+    # paint pulled lane_main's target sideways.
+    first_slow_yaw_hold: bool = False
+    yaw_hold_max_sec: float = 10.0
+    # odometry metres after the first slow sign before the hold starts: the heading is steady until
+    # just before the hill and swings 10+ deg where its paint comes into view (1118 PM: sign at
+    # 1.0~1.1 m, swing at 2.5 m, hill 2.6~2.8 m). Without odometry the hold starts at the sign.
+    yaw_hold_after_m: float = 1.0
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
@@ -185,6 +194,7 @@ class Inputs:
     avoid_active: bool = False                    # /avoid/active from static_avoid (fresh)
     entry_slow: bool = False       # braking point before the separate mission boundary
     entry_reached: bool = False    # front wheels reached that boundary (not a stop request)
+    travel: Optional[float] = None  # odometry metres (fresh), for distance based holds
     parking_speed_limit: Optional[float] = None  # braking envelope from the measured entry line
 
 
@@ -198,6 +208,8 @@ class Outputs:
     stop_arm: bool = False             # run the line stop (FinishCore)
     stop_require_crosswalk: bool = True
     steering_lock: bool = False        # lock steering during bump traversal
+    yaw_hold: bool = False             # lane_main keeps the IMU yaw (first slow zone, see MissionParams)
+    light_stopped: bool = False        # latched: the car stopped at the traffic light once
     parking_prepare: bool = False     # observe the parking scene, keep lane control
     entry_arm: bool = False           # observe the mission boundary, independently of the stop line
 
@@ -237,6 +249,13 @@ class MissionLogic:
         self.hill_entry_sign = 0.
         self.hill_opposite_seen = False
         self.hill_level_since: Optional[float] = None
+
+        # first slow zone yaw hold (first_slow_yaw_hold)
+        self.yaw_hold_since: Optional[float] = None
+        self.yaw_hold_travel: Optional[float] = None
+        self.yaw_hold_hill_seen = False
+        self.yaw_hold_done = False
+        self.light_stopped = False
 
     def _line_arrived(self, inputs: Inputs) -> bool:
         return inputs.line_phase == 'arrived' if self.p.use_stop_line else inputs.stopline
@@ -285,6 +304,7 @@ class MissionLogic:
         self._update_stop(inputs)
         self._update_bump(inputs)
         self._update_hill(inputs)
+        self._update_yaw_hold(inputs)
         if self.pedestrian_armed_at is None or self.state != DRIVE:
             self.slow_for_pedestrian = False      # stopped at the crosswalk (or the arm expired): done
         elif p.slow_until_pedestrian_stop and now < self.slow_until:
@@ -321,7 +341,30 @@ class MissionLogic:
             # Keep the slow limit on unknown attitude, but let lane following
             # steer again if IMU updates disappear during a crossing.
             steering_lock=(self.bump_state == BUMP_ON and inputs.imu_pitch is not None and
-                           math.isfinite(inputs.imu_pitch)))
+                           math.isfinite(inputs.imu_pitch)),
+            yaw_hold=self._yaw_hold_on(inputs),
+            light_stopped=self.light_stopped)
+
+    def _yaw_hold_on(self, inputs: Inputs) -> bool:
+        if self.yaw_hold_since is None or self.yaw_hold_done:
+            return False
+        if self.yaw_hold_travel is None or inputs.travel is None:
+            return True                 # no odometry: from the sign on
+        return inputs.travel - self.yaw_hold_travel >= self.p.yaw_hold_after_m
+
+    def _update_yaw_hold(self, inputs: Inputs) -> None:
+        """first_slow_yaw_hold: from the first slow sign until the hill rose and fell (or the cap)."""
+        p, now = self.p, inputs.now
+        if not p.first_slow_yaw_hold or self.yaw_hold_done:
+            return
+        if self.yaw_hold_since is None:
+            if 'sign_slow' in inputs.seen:
+                self.yaw_hold_since, self.yaw_hold_travel = now, inputs.travel
+            return
+        if self.hill_active:
+            self.yaw_hold_hill_seen = True
+        elif self.yaw_hold_hill_seen or now - self.yaw_hold_since > p.yaw_hold_max_sec:
+            self.yaw_hold_done = True
 
     def _update_fork(self, inputs: Inputs) -> None:
         seen, p = inputs.seen, self.p
@@ -473,6 +516,8 @@ class MissionLogic:
 
     def _enter(self, state: str, now: float) -> None:
         self.state, self.stopped_at = state, now
+        if state == STOPPED_LIGHT:
+            self.light_stopped = True
 
     def _release(self, which: str, now: float) -> None:
         self.state = DRIVE
