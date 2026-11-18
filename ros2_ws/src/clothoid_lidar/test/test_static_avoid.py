@@ -1199,6 +1199,20 @@ def test_course_map_moves_a_late_start_to_the_first_turn():
     assert _course_tracker()[1].shift == 0.0
 
 
+def test_course_map_lets_a_blocker_start_past_the_second_turn():
+    """Still 'pending' (no start line on the map: the map too far off) 0.8 m past the second right turn:
+    a blocker may start the mission there, not before (the start line comes 0.37~0.57 m past it),
+    not before the first turn, and not once the race start is confirmed."""
+    tr, course = _course_tracker()                           # 9 m, right, 4.7 m, right, 2 m
+    assert course.corner2 == pytest.approx(9.0 + 4.7, abs=0.05)
+    assert not course.turn2_blocker(course.corner2 + 0.7)
+    assert course.turn2_blocker(tr.distance)
+    course.set_origin('race', 'line')
+    assert not course.turn2_blocker(tr.distance)
+    tr, course = _course_tracker(legs=((0.0, 900), (-math.pi / 2, 470)))
+    assert course.corner2 is None and not course.turn2_blocker(tr.distance)
+
+
 def test_course_map_falls_back_after_passing_the_point_without_a_line():
     from clothoid_lidar.section_cues import EntryLineTracker
     tr, course = _course_tracker()

@@ -118,6 +118,14 @@ class AvoidParams:
     course_corner1_x: float = 8.83
     course_corner1_shift_min: float = 0.25
     course_corner1_shift_max: float = 1.3
+    # still 'pending' (no start line on the map) this far past the second right turn (heading within
+    # course_corner_tol_deg of 180 after the first right turn): a blocker starts the mission. The map
+    # more than start_line_radius off never comes near the start-line point, and the odometer fallback
+    # (start_line_odometer + course_fallback_odometer) comes ~3 m past the line, behind the first
+    # obstacle. A blocker before the first turn still starts nothing (1114 0231, the parking area).
+    # The start line is judged 0.43~0.68 m past that turn (22 runs 1115~1118, 0.68 in 1118 1626): 0.5
+    # left a blocker start in the way of the line start
+    course_turn2_blocker: float = 0.8
     course_test_start: float = 1.0        # a LIMO in our lane within this odometer: an avoid test
     # race: from the start line until the first blocker (LIMO in our lane, obstacle cost over slow_cost
     # or a lane change) at this speed (lane_main's base speed), then speed / slow_speed to the end
@@ -997,6 +1005,7 @@ class CourseMap:
         self.origin_why = ''
         self.corner1: Optional[Tuple[float, float]] = None        # (odometer, map x) of the right turn
         self.shift = 0.0                      # m, x moved at the first right turn (course_corner1_x)
+        self.corner2: Optional[float] = None  # odometer where the second right turn was made
 
     def set_origin(self, origin: str, why: str) -> None:
         if self.origin == 'pending':
@@ -1049,6 +1058,15 @@ class CourseMap:
             self.hist.append((odometer, self.x, self.y, self.h))
         self._snap(odometer)
         self._judge(odometer)
+        if (self.corner1 is not None and self.corner2 is None
+                and abs(wrap(self.h - math.pi)) <= math.radians(self.p.course_corner_tol_deg)):
+            self.corner2 = odometer
+
+    def turn2_blocker(self, odometer: float) -> bool:
+        """May a blocker start the mission although the start line was not found on the map yet
+        (see AvoidParams.course_turn2_blocker)?"""
+        return (self.origin == 'pending' and self.corner2 is not None
+                and odometer >= self.corner2 + self.p.course_turn2_blocker)
 
     def _snap(self, odometer: float) -> None:
         p = self.p
