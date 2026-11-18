@@ -153,6 +153,8 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('bump_level_duration', d.bump_level_duration_sec)
         self.declare_parameter('bump_arm_timeout', d.bump_arm_timeout_sec)
         self.declare_parameter('bump_cooldown', d.bump_cooldown_sec)
+        self.declare_parameter('hill_slow_imu', d.hill_slow_imu)
+        self.declare_parameter('hill_max_sec', d.hill_max_sec)
 
         self.declare_parameter('pedestrian_wait_sec', d.pedestrian_wait_sec)
         self.declare_parameter('stop_on_yellow', d.stop_on_yellow)
@@ -167,6 +169,7 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('parking_enabled', d.parking_enabled)
         self.declare_parameter('slow_arms_bump', d.slow_arms_bump)
         self.declare_parameter('slow_at_stopline', d.slow_at_stopline)
+        self.declare_parameter('slow_until_pedestrian_stop', d.slow_until_pedestrian_stop)
         self.declare_parameter('bump_at_stopline', d.bump_at_stopline)
         self.declare_parameter('require_cone_for_parking', d.require_cone_for_parking)
         self.declare_parameter('block_bump_after_cone', d.block_bump_after_cone)
@@ -194,6 +197,8 @@ class MissionNode(QuietEventsMixin, Node):
             bump_level_duration_sec=get('bump_level_duration'),
             bump_arm_timeout_sec=get('bump_arm_timeout'),
             bump_cooldown_sec=get('bump_cooldown'),
+            hill_slow_imu=get('hill_slow_imu'),
+            hill_max_sec=get('hill_max_sec'),
             pedestrian_wait_sec=get('pedestrian_wait_sec'),
             stop_on_yellow=get('stop_on_yellow'),
             arm_timeout_sec=get('arm_timeout_sec'),
@@ -207,6 +212,7 @@ class MissionNode(QuietEventsMixin, Node):
             parking_enabled=get('parking_enabled'),
             slow_arms_bump=get('slow_arms_bump'),
             slow_at_stopline=get('slow_at_stopline'),
+            slow_until_pedestrian_stop=get('slow_until_pedestrian_stop'),
             bump_at_stopline=get('bump_at_stopline'),
             require_cone_for_parking=get('require_cone_for_parking'),
             block_bump_after_cone=get('block_bump_after_cone'),
@@ -673,6 +679,7 @@ class MissionNode(QuietEventsMixin, Node):
             'front': self.finish_params.front, 'entry_front': value('front_axle_x'),
             'speed_limit': out.speed_limit,
             'bump_state': self.logic.bump_state,
+            'hill_imu': self.logic.hill_active,
             'imu_pitch': self.latest_pitch if self._fresh(self.latest_pitch_time) else None,
             'steering_lock': out.steering_lock,
             'stopped_for': (round(now - self.logic.stopped_at, 2) if out.stop else None)})))
@@ -701,6 +708,8 @@ class MissionNode(QuietEventsMixin, Node):
             limit = '+'.join(name for name, on in (
                 ('slow sign', now < self.logic.slow_until),
                 ('bump', self.logic.bump_state in (BUMP_APPROACHING, BUMP_ON)),
+                ('hill imu', self.logic.hill_active),
+                ('slow to crosswalk', self.logic.slow_for_pedestrian and now >= self.logic.slow_until),
                 ('slow entry', self.logic.slow_armed_at is not None and now >= self.logic.slow_until),
                 ('parking approach', out.parking_prepare and self.logic.p.require_scene_confirmation
                  and parking_speed_limit is not None),

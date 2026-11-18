@@ -74,13 +74,19 @@ mission:
     entry_min_span: 0.26       # metres across the road; partial boundary while leaving a corner
     entry_rate_hz: 10.0        # shared image/mask, entry fit at most once per 100 ms time slot
     slow_speed: 0.2             # rules: 0.2 m/s or less
-    slow_hold_sec: 4.0          # general slow sign hold timer
+    slow_hold_sec: 5.0          # s after the last confirmed slow sign (1118: 4 s ended before the hill)
+    slow_until_pedestrian_stop: true  # zigzag zone: a pedestrian sign in the slow hold keeps it to that stop
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: 3.5      # deg, absolute pitch; supports either IMU sign convention
     bump_level_thresh: 1.2      # deg, abs angle to detect vehicle leveled
     bump_level_duration: 0.3    # sec, leveling after opposite tilt (rear axle) confirms exit
     bump_arm_timeout: 12.0      # sec since last confirmed sign; 6 s expired before contact in sim
     bump_cooldown: 4.0          # sec, cooldown before re-arming bump
+    # 1118 PM: the start's bump sign became a slow sign, whose 4 s hold ended before the hill. The IMU
+    # alone now slows over any tilt >= bump_pitch_thresh (speed only, lane keeps steering) until level
+    # after the opposite tilt, at most hill_max_sec after the last tilt
+    hill_slow_imu: true
+    hill_max_sec: 6.0
     # Main route policy: sustained cone entry unlocks parking and blocks later bump signs.
     require_cone_for_parking: true
     block_bump_after_cone: true
@@ -98,7 +104,7 @@ mission:
     parking_at_stopline: true
     # Legacy parameter names: these refer to mission START lines, not crosswalk stop lines.
     # Signs prepare the entry observer; braking begins before front-wheel entry.
-    slow_at_stopline: true
+    slow_at_stopline: false     # 1118 PM: slow at once on the confirmed sign (the zone start lines were missed)
     bump_at_stopline: true
     # light / pedestrian stop line: clothoid_finish's FinishCore with the cross line in white
     # (line_stop.py), independently of mission entry. Keep FinishCore's original stop settings.

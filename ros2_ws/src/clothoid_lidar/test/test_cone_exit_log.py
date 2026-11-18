@@ -40,3 +40,20 @@ def test_same_status_repeats_every_ten_seconds_a_new_one_logs_at_once(node):
     node._exit_log('lane ready', 'cone EXIT: lane ready; observed endpoint 1.300 m ahead of rear axle')
     assert lines(node).count('cone EXIT: lane ready; observed endpoint 1.306 m ahead of rear axle') == 1
     assert len(lines(node)) == 5
+
+
+def test_real_logger_survives_warn_then_info():
+    """1118: 'waiting for lane' (warn) then 'lane ready' (info) raised ValueError and killed the node."""
+    rclpy.init()
+    n = ConeFollowerNode()
+    clock = SimpleNamespace(seconds=100.)
+    n.get_clock = lambda: SimpleNamespace(now=lambda: Time(seconds=clock.seconds))
+    try:
+        n._exit_log('wait', 'cone EXIT: no fresh clear forward path; waiting for lane', warn=True)
+        clock.seconds = 101.
+        n._exit_log('lane ready', 'cone EXIT: lane ready; observed endpoint 1.306 m ahead of rear axle')
+        clock.seconds = 102.
+        n._exit_log('wait', 'cone EXIT: no fresh clear forward path; waiting for lane', warn=True)
+    finally:
+        n.destroy_node()
+        rclpy.shutdown()

@@ -128,6 +128,9 @@ class MissionParams:
     slow_speed: float = 0.2            # rules: 0.2 m/s or less
     slow_hold_sec: float = 4.0         # general slow sign hold timer
     slow_at_stopline: bool = False     # legacy key: slow before the separate mission entry line
+    # a pedestrian sign confirmed while the slow sign's hold runs keeps slow_speed until that stop is
+    # released (1118: the zigzag zone's slow sign stands at its start, the crosswalk stop ~2 m later)
+    slow_until_pedestrian_stop: bool = False
     # speed bump (IMU Pitch + YOLO fusion)
     bump_pitch_thresh: float = 3.5      # deg, absolute pitch to detect contact
     bump_level_thresh: float = 1.2      # deg, abs angle to detect vehicle leveled
@@ -135,6 +138,12 @@ class MissionParams:
     bump_arm_timeout_sec: float = 12.0  # sec since last confirmed sign; tune to approach distance/speed
     bump_cooldown_sec: float = 4.0      # sec, cooldown before re-arming bump
     bump_at_stopline: bool = False      # legacy key: slow before the separate mission entry line
+    # hill / bump from the IMU alone (no sign: the 1118 PM rules replaced the start's bump sign with a
+    # slow sign): slow_speed from |pitch| >= bump_pitch_thresh until the car is level again after the
+    # opposite tilt (as the bump exit), at most hill_max_sec after the last tilt. Speed only, no
+    # steering lock: nothing but the IMU says it is a bump.
+    hill_slow_imu: bool = False
+    hill_max_sec: float = 6.0
     # stop, wait, go
     pedestrian_wait_sec: float = 3.5   # rules: wait 3 s or more, restart within 15 s
     stop_on_yellow: bool = True        # the rules do not say what yellow means
@@ -199,6 +208,7 @@ class MissionLogic:
         self.state = DRIVE
         self.slow_until = -1.0
         self.slow_armed_at: Optional[float] = None
+        self.slow_for_pedestrian = False
         self.direction: Optional[int] = None
         self.parking_flag = False
         self.parking_armed = False
@@ -220,6 +230,13 @@ class MissionLogic:
         self.bump_cooldown_until = -1.0
         self.bump_entry_sign = 0.
         self.bump_opposite_seen = False
+
+        # IMU-only hill slow (hill_slow_imu)
+        self.hill_active = False
+        self.hill_tilt_at = -math.inf
+        self.hill_entry_sign = 0.
+        self.hill_opposite_seen = False
+        self.hill_level_since: Optional[float] = None
 
     def _line_arrived(self, inputs: Inputs) -> bool:
         return inputs.line_phase == 'arrived' if self.p.use_stop_line else inputs.stopline
@@ -267,10 +284,15 @@ class MissionLogic:
 
         self._update_stop(inputs)
         self._update_bump(inputs)
+        self._update_hill(inputs)
+        if self.pedestrian_armed_at is None or self.state != DRIVE:
+            self.slow_for_pedestrian = False      # stopped at the crosswalk (or the arm expired): done
+        elif p.slow_until_pedestrian_stop and now < self.slow_until:
+            self.slow_for_pedestrian = True
 
         limits = []
         bump_active = self.bump_state in (BUMP_APPROACHING, BUMP_ON)
-        if now < self.slow_until or bump_active:
+        if now < self.slow_until or bump_active or self.hill_active or self.slow_for_pedestrian:
             limits.append(p.slow_speed)
         if self.slow_armed_at is not None and inputs.entry_slow:
             limits.append(p.slow_speed)
@@ -374,6 +396,39 @@ class MissionLogic:
             else:
                 self.bump_level_started_at = None
 
+    def _update_hill(self, inputs: Inputs) -> None:
+        """Slow on a tilt the IMU alone sees (hill_slow_imu); see MissionParams."""
+        p, now, pitch = self.p, inputs.now, inputs.imu_pitch
+        if not p.hill_slow_imu:
+            self.hill_active = False
+            return
+        valid = pitch is not None and math.isfinite(pitch)
+        if valid and abs(pitch) >= p.bump_pitch_thresh:
+            if not self.hill_active:
+                self.hill_active = True
+                self.hill_entry_sign = math.copysign(1., pitch)
+                self.hill_opposite_seen = False
+            elif pitch*self.hill_entry_sign < 0:
+                self.hill_opposite_seen = True
+            self.hill_tilt_at = now
+            self.hill_level_since = None
+            return
+        if not self.hill_active:
+            return
+        if valid and pitch*self.hill_entry_sign < -p.bump_level_thresh:
+            self.hill_opposite_seen = True
+        if now - self.hill_tilt_at > p.hill_max_sec:          # a ramp only, or the IMU went silent
+            self.hill_active = False
+        elif self.hill_opposite_seen and valid and abs(pitch) <= p.bump_level_thresh:
+            if self.hill_level_since is None:
+                self.hill_level_since = now
+            elif now - self.hill_level_since >= p.bump_level_duration_sec:
+                self.hill_active = False
+        else:
+            self.hill_level_since = None
+        if not self.hill_active:
+            self.hill_level_since = None
+
     def _update_stop(self, inputs: Inputs) -> None:
         now, seen, p = inputs.now, inputs.seen, self.p
 
@@ -422,6 +477,8 @@ class MissionLogic:
     def _release(self, which: str, now: float) -> None:
         self.state = DRIVE
         self.cooldown_until[which] = now + self.p.cooldown_sec
+        # the stop ends that zone's slow sign: go at lane speed after the crosswalk / on green
+        self.slow_until = min(self.slow_until, now)
         if which == 'pedestrian':
             self.pedestrian_armed_at = None
         else:
