@@ -54,6 +54,7 @@
 # The global lane HSV values also feed the raw-image static avoidance cues.
 lane_main:
   ros__parameters:
+    recover_faded_yellow: true
     blue_glare_strength: 1.0
     gamma_enabled: true
     gamma: 1.2
