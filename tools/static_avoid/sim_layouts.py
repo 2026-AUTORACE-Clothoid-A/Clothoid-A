@@ -80,6 +80,7 @@ def job(args):
     lane_speed = conf.pop('lane_speed', 0.3)      # lane_main's speed before the start (car: 0.8)
     sign_view = conf.pop('sign_view', None)       # [half_deg, range]: the sign read only in that view
     misread = conf.pop('sign_misread', None)      # [half_deg, range, secs]: first the wrong way for secs
+    sim.LIDAR_WID = conf.pop('lidar_width', sim.LIMO_WID)   # LIMO width the lidar sees (wheels: 0.22)
     p = replace(AvoidParams(), lane_width=W, **conf)
     track = []
     flag = direction if sign_at is None else (direction, sign_at)

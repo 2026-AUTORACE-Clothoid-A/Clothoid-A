@@ -37,7 +37,11 @@ class AvoidParams:
     car_half_width: float = 0.11      # LIMO 0.22 m wide
     car_half_length: float = 0.16     # LIMO 0.32 m long, base_link in the middle
     footprint_offsets: Tuple[float, float, float] = (-0.1, 0.0, 0.1)  # circle centres along the car
-    safety: float = 0.05              # extra clearance to obstacles
+    # extra clearance to obstacles, from the lidar points. 0.05 before 11-19: the lidar sees a LIMO
+    # 0.12~0.15 m wide at its height (1119 bags), its wheels are 0.22 m, so 0.05 left ~0.015 m to
+    # the wheels. Simulated so (lidar 0.15, collision 0.22): 0.05 hit LIMOs 24~32 times in the dense
+    # layouts, 0.08 none (and passed the most), 0.10 none but stuck more
+    safety: float = 0.08
     line_margin: float = 0.03         # car side to yellow outer line
     wheelbase: float = 0.2
     rear_axle_x: float = 0.1          # rear axle behind base_link

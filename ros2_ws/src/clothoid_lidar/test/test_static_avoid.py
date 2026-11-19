@@ -22,6 +22,10 @@ from clothoid_lidar.static_avoid import (ACTIVE, IDLE, AvoidParams, Costmap, Inh
 L, TRACK, SCALE, MAX_INNER = 0.2, 0.175, 1.06, 0.48869
 LIDAR_X = 0.103
 LIMO_LEN, LIMO_WID = 0.32, 0.22
+# the LIMO body at the lidar's height (1119 bags: rear faces 0.12~0.15 m wide, the wheels below 0.22 m):
+# what the ray cast sees; the collision check keeps LIMO_WID
+LIDAR_WID = LIMO_WID
+MISREAD_FROM = 2.2                         # m: a fork sign first seen further than this may be misread
 ISLAND = (4.35, 6.10)                      # section start = x 0
 LIMO_PARAMS = ExtractorParams(cluster_gap=0.08, min_points=3, max_width=0.45, min_width=0.12,
                               cone_radius=0.1)
@@ -68,7 +72,7 @@ def raycast(origin, yaw, limos, rng):
     d = np.column_stack((np.cos(world), np.sin(world)))
     r = np.full(n, np.inf)
     for x, y in limos:
-        poly = rect(x, y, 0.0, LIMO_LEN, LIMO_WID)
+        poly = rect(x, y, 0.0, LIMO_LEN, LIDAR_WID)
         for k in range(4):
             a, b = poly[k], poly[(k + 1) % 4]
             e = b - a
@@ -151,16 +155,19 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         inh = inhibit or Inhibit()
         flag = direction
         if isinstance(direction, tuple) and direction[0] == 'misread':
-            # ('misread', value, half_deg, far, secs): within far m and half_deg the sign is first read
-            # the wrong way for secs s, then right (1118: small boxes h 14~16 px, 2.5~3 m off)
+            # ('misread', value, half_deg, far, secs): within far m and half_deg the sign is read; if it
+            # first comes into view further than MISREAD_FROM m (a small box, 1118: h 14~16 px) it is
+            # read the wrong way for secs s, then right
             bearing = math.atan2(-by, ISLAND[0] - bx) - th
-            if out.get('misread_t') is None and (math.hypot(ISLAND[0] - bx, by) <= direction[3]
+            dist = math.hypot(ISLAND[0] - bx, by)
+            if out.get('misread_t') is None and (dist <= direction[3]
                                                  and abs(math.remainder(bearing, 2 * math.pi))
                                                  <= math.radians(direction[2])):
                 out['misread_t'] = t
+                out['misread_far'] = dist > MISREAD_FROM
             if out.get('misread_t') is None:
                 flag = None
-            elif t - out['misread_t'] < direction[4]:
+            elif out['misread_far'] and t - out['misread_t'] < direction[4]:
                 flag = 1 - direction[1]
             else:
                 flag = direction[1]
@@ -547,10 +554,10 @@ def test_skewed_frame_without_a_start_fit():
                 params=replace(AvoidParams(), sequence=False, escape=False, stuck_repeat_back=False))
     assert stuck['x'] < 2.0 and stuck['stops'] > 0
     # the dead end + 0.8 m back-up at the repeated stuck gets even these through
-    check(run(limos, direction=0, skew_deg=-12.0,
+    check(run(limos, direction=0, skew_deg=-12.0, t_max=60,      # safety 0.08: slower, 45 s too short
               params=replace(AvoidParams(), sequence=False, escape=False)), w, 1)
-    check(run(limos, direction=0, skew_deg=-12.0), w, 1)
-    check(run(limos, direction=0, skew_deg=-12.0,
+    check(run(limos, direction=0, skew_deg=-12.0, t_max=60), w, 1)
+    check(run(limos, direction=0, skew_deg=-12.0, t_max=60,
               params=replace(AvoidParams(), sequence=False, route=True)), w, 1)
 
 
@@ -785,11 +792,31 @@ def test_a_dead_end_and_a_longer_back_up_at_a_repeated_stuck():
               (3.80, -0.44)]
     # the sign read on the way (as in 1616); with lane 1 known from the start and the island at 4.32
     # the escape after the back-up aims at the island tip and is blocked half way again (open)
+    # safety 0.05 as it was then: these clusters put the lane 1 LIMOs at d 0.66 (0.55 from the other
+    # 11-18 runs of the same layout), too narrow a way for 0.08 (see the venue layout test below)
     sign = ('view', 0, 20.0, 2.3)
-    out = run(layout, direction=sign, seed=1, t_max=90)
+    p = replace(AvoidParams(), safety=0.05)
+    out = run(layout, direction=sign, seed=1, t_max=90, params=p)
     check(out, 0.50, 1)
-    old = run(layout, direction=sign, seed=1, t_max=40, params=replace(AvoidParams(), stuck_repeat_back=False))
+    old = run(layout, direction=sign, seed=1, t_max=40, params=replace(p, stuck_repeat_back=False))
     assert old['x'] < 6.0
+
+
+def test_venue_layout_clear_of_the_limo_wheels():
+    # 11-18 venue layout (LIMO clusters of 1600 / 1603 / 1606 / 1628) with the lidar seeing the LIMO
+    # 0.15 m wide (its wheels 0.22 m, 11-19 bags): safety 0.05 touched LIMOs (2 of 12) and passed
+    # 0-2 cm off most others; 0.08 went through 12 / 12, at least 4.2 cm off
+    global LIDAR_WID
+    venue = [(1.19, 0.05), (1.62, 0.02), (2.26, 0.56), (2.47, -0.58), (2.97, -0.01), (3.71, 0.55),
+             (3.82, -0.57)]
+    old = LIDAR_WID
+    LIDAR_WID = 0.15
+    try:
+        out = run(venue, direction=('view', 1, 20.0, 2.3), seed=3)
+    finally:
+        LIDAR_WID = old
+    check(out, 0.50, 3)
+    assert out['min_gap'] > 0.04, out
 
 
 def _active_at_origin(p=None):
