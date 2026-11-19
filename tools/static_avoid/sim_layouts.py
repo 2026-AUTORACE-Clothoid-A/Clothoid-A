@@ -79,11 +79,14 @@ def job(args):
     line_start = conf.pop('line_start', False)    # race start: the entry line starts it (course map)
     lane_speed = conf.pop('lane_speed', 0.3)      # lane_main's speed before the start (car: 0.8)
     sign_view = conf.pop('sign_view', None)       # [half_deg, range]: the sign read only in that view
+    misread = conf.pop('sign_misread', None)      # [half_deg, range, secs]: first the wrong way for secs
     p = replace(AvoidParams(), lane_width=W, **conf)
     track = []
     flag = direction if sign_at is None else (direction, sign_at)
     if sign_view is not None:
         flag = ('view', direction, float(sign_view[0]), float(sign_view[1]))
+    if misread is not None:
+        flag = ('misread', direction, float(misread[0]), float(misread[1]), float(misread[2]))
     o = sim.run([(rear + HALF, y) for y, rear in layout], direction=flag, lane_width=W,
                 params=p, seed=seed, track=track, steer_gain=steer_gain,
                 control_every=control_every, line_start=line_start,

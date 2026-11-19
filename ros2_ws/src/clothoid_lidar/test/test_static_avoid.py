@@ -150,7 +150,21 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         entry_back = tracker.distance - entry_odo if entry_odo is not None else None
         inh = inhibit or Inhibit()
         flag = direction
-        if isinstance(direction, tuple) and direction[0] == 'view':
+        if isinstance(direction, tuple) and direction[0] == 'misread':
+            # ('misread', value, half_deg, far, secs): within far m and half_deg the sign is first read
+            # the wrong way for secs s, then right (1118: small boxes h 14~16 px, 2.5~3 m off)
+            bearing = math.atan2(-by, ISLAND[0] - bx) - th
+            if out.get('misread_t') is None and (math.hypot(ISLAND[0] - bx, by) <= direction[3]
+                                                 and abs(math.remainder(bearing, 2 * math.pi))
+                                                 <= math.radians(direction[2])):
+                out['misread_t'] = t
+            if out.get('misread_t') is None:
+                flag = None
+            elif t - out['misread_t'] < direction[4]:
+                flag = 1 - direction[1]
+            else:
+                flag = direction[1]
+        elif isinstance(direction, tuple) and direction[0] == 'view':
             if not sign_read:
                 bearing = math.atan2(-by, ISLAND[0] - bx) - th
                 sign_read = (math.hypot(ISLAND[0] - bx, by) <= direction[3]
@@ -769,9 +783,12 @@ def test_a_dead_end_and_a_longer_back_up_at_a_repeated_stuck():
     # through in 90 s). Stuck there again: that spot is a dead end, the back-up 0.8 m
     layout = [(1.07, 0.09), (1.68, 0.09), (2.13, 0.66), (2.36, -0.49), (3.11, 0.10), (3.57, 0.67),
               (3.80, -0.44)]
-    out = run(layout, direction=0, seed=1, t_max=90)
+    # the sign read on the way (as in 1616); with lane 1 known from the start and the island at 4.32
+    # the escape after the back-up aims at the island tip and is blocked half way again (open)
+    sign = ('view', 0, 20.0, 2.3)
+    out = run(layout, direction=sign, seed=1, t_max=90)
     check(out, 0.50, 1)
-    old = run(layout, direction=0, seed=1, t_max=40, params=replace(AvoidParams(), stuck_repeat_back=False))
+    old = run(layout, direction=sign, seed=1, t_max=40, params=replace(AvoidParams(), stuck_repeat_back=False))
     assert old['x'] < 6.0
 
 

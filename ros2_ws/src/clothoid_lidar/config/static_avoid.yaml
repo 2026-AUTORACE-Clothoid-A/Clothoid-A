@@ -63,8 +63,8 @@ static_avoid:
     fork_commit: 2.0
     # the island from the white entry line (rule book p.4 drawing at scale); the camera sees the
     # line, the base crosses it, a start within entry_max_back of that anchors the section
-    island_from_entry_min: 4.40
-    island_from_entry_max: 6.15
+    island_from_entry_min: 4.32  # venue 11-18 bags, camera on the yellow tip: 4.28~4.32 (was 4.40)
+    island_from_entry_max: 6.07  # min + 1.75
     entry_max_back: 3.0
     # course_map (launch argument course_map / full.launch avoid_course_map): the section start line by
     # its place on the /imu + /odom course map from the race start
