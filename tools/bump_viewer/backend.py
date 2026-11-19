@@ -57,6 +57,8 @@ def modules():
     names = (
         'clothoid_common.image_utils', 'clothoid_common.color', 'clothoid_lane.lane_detector',
         'clothoid_lane.lane_tracker', 'clothoid_lane.steering', 'clothoid_lane.bump_gap',
+        'clothoid_lane.cone_handover', 'clothoid_common.parking_geometry',
+        'clothoid_lane.parking_landmark', 'clothoid_lane.parking_landmark_publisher',
         'clothoid_mission.scene_evidence', 'clothoid_mission.sign_tracker',
         'clothoid_parking.tracker', 'clothoid_finish.bev', 'clothoid_finish.finish_core',
         'clothoid_mission.line_stop', 'clothoid_mission.mission_logic',
@@ -181,10 +183,9 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
 
     files, topics, start, end, counts = inventory(path)
     cameras = [n for n, t in topics.items() if t in ('sensor_msgs/msg/Image', 'sensor_msgs/msg/CompressedImage')
-               and not any(word in n for word in ('debug', 'depth', 'warp', 'viz/'))]
+               and counts.get(n, 0) and not any(word in n for word in ('debug', 'depth', 'warp', 'viz/'))]
     if not cameras:
         raise ValueError('원본 카메라 토픽이 없는 백입니다.')
-    image_topic = min(cameras, key=lambda n: ('CompressedImage' not in topics[n], 'color' not in n, n))
     loaded = modules()
     mission_module = loaded['clothoid_mission.mission_node']
     lane_module = loaded['clothoid_lane.lane_main']
@@ -206,6 +207,10 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         mission = mission_module.MissionNode(); nodes.append(mission)
         lane = lane_module.LaneMainNode(); nodes.append(lane)
         mp, lp = capture_publishers(mission), capture_publishers(lane)
+        preferred_image = lane.get_parameter('image_topic').value
+        image_topic = min(cameras, key=lambda n: (
+            n != preferred_image, n != '/camera/color/image_10hz',
+            'CompressedImage' not in topics[n], 'color' not in n, n))
         hsv_nodes = {'lane': lane, 'mission': mission}
         def hsv_settings():
             result = {group: {name: hsv_nodes[group].get_parameter(name).value for name in names}
@@ -281,6 +286,8 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
             (value('cone_active_topic'), mission.on_cone_active),
             (lane.get_parameter('cone_active_topic').value, lane.on_cone_active),
             ('/parking/approach_speed_limit', lane.on_parking_approach),
+            ('/cone/exiting', lambda msg: lane.cone_handover.request_exit(msg.data)),
+            ('/cone/connecting', lane.on_cone_connecting),
         ]
         wanted = {image_topic, info, mi, li, mo, lo, '/mission/state',
                   '/cmd_vel', '/cmd_vel_lane', '/speed_limit', '/steering_lock',
@@ -297,6 +304,7 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         lane.detector.detect = detect
         last_state = None; last_lane = None; last_confirmed = None; last_recorded = None
         last_replay_state = None
+        last_parking_entry_distance = None
         next_tick = start
         period = round(1e9/mission.get_parameter('rate_hz').value)
         def tick(stamp):
@@ -391,6 +399,13 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
                 events.append(((stamp-start)*1e-9, '현재 · 차선 검출' if found else '현재 · 차선 유실'))
                 last_lane = found
             state = json.loads(mp['mission_state_pub'].last.data) if mp['mission_state_pub'].last else {}
+            entry_message = mp['entry_distance_pub'].last
+            parking_entry_distance = (entry_message.data
+                                      if entry_message is not None and np.isfinite(entry_message.data)
+                                      else None)
+            if parking_entry_distance is not None and last_parking_entry_distance is None:
+                events.append(((stamp-start)*1e-9, '현재 · 주차 진입선 확정'))
+            last_parking_entry_distance = parking_entry_distance
             command = lp['cmd_pub'].last
             age = None if det_stamp is None else (stamp-det_stamp)*1e-9
             def recorded_value(key):
@@ -398,6 +413,7 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
                 return item[1] if item and 0 <= (stamp-item[0])*1e-9 <= value('input_timeout') else None
             frames.append(dict(t=(stamp-start)*1e-9, reference=(file, row, kind),
                 state=state, recorded_state=recorded_value('state'),
+                parking_entry_distance=parking_entry_distance,
                 recorded_command=recorded_value('/cmd_vel'), recorded_limit=recorded_value('/speed_limit'),
                 detections=dets, detection_age=age, lane_found=bool(found), lane_jpeg=lane_jpeg,
                 command=None if command is None else (command.linear.x, command.angular.z),

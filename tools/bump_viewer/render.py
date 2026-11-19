@@ -148,6 +148,13 @@ def panels(data, frame, hsv_settings=None, white_source='mission', color_source=
             line_view[pixels] = (0, 180, 255)
             white_view[pixels] = (0, 180, 255)
             text(line_view, f'entry: {entry:.3f} m to front axle', (8, 40), (0, 180, 255))
+        parking_entry = frame.get('parking_entry_distance')
+        if not preview and parking_entry is not None:
+            color = (95, 242, 100)
+            pixels = (np.abs(bev.gx-parking_entry) < .004) & bev.valid
+            line_view[pixels] = color
+            white_view[pixels] = color
+            text(line_view, f'parking entry: {parking_entry:+.3f} m from base_link', (8, 60), color)
     else:
         text(line_view, 'No CameraInfo: metric stop-line unavailable')
         text(white_view, 'No CameraInfo: production mask unavailable')
