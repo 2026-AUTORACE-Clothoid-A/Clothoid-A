@@ -615,7 +615,8 @@ class Viewer(QMainWindow):
         speed = None if f['command'] is None else f['command'][0]
         actual = None if f['recorded_command'] is None else f['recorded_command'][0]
         self.cards[3].setText(f'현재 {number(speed)} / 기록 {number(actual)} m/s\n'
-                            f'시작선 {state.get("entry_phase") or "비활성"} · {number(state.get("entry_remaining"))} m\n'
+                            f'미션 시작선 {state.get("entry_phase") or "비활성"} · {number(state.get("entry_remaining"))} m\n'
+                            f'주차 진입선 {number(f.get("parking_entry_distance"))} m (차체 기준)\n'
                             f'정지선 {state.get("line_phase") or "비활성"} · {number(state.get("remaining"))} m')
         if preview:
             for card in self.cards:
@@ -625,7 +626,8 @@ class Viewer(QMainWindow):
         rows = ''.join('<tr><td>'+html.escape(d['name'])+'</td><td>'+f'{d["confidence"]:.2f}'+'</td><td>'+
                        html.escape(d['status'])+'</td></tr>' for d in f['detections'])
         settings = ''.join(f'<tr><td>{html.escape(k)}</td><td>{html.escape(str(v))}</td></tr>' for k, v in p.items())
-        self.details.setHtml('<b>실제 코드에 적용된 설정</b><br>하늘색: 검사 영역 / 주황색: 미션 시작선 / 자홍색: 정지선 후보<br>'
+        self.details.setHtml('<b>실제 코드에 적용된 설정</b><br>하늘색: 검사 영역 / 주황색: 미션 시작선 / '
+            '초록색: 확정된 주차 진입선 / 자홍색: 정지선 후보<br>'
             '흰색 마스크는 상시 미리보기입니다. 범프의 높이나 모양을 영상으로 확정하는 기능은 현재 코드에 없습니다.<br><br>'
             '<b>YOLO 기록 → 현재 필터</b><table>'+rows+'</table><br><b>YAML / 기본값</b><table>'+settings+'</table>')
         self.timeline.at = f['t']; self.timeline.update()
