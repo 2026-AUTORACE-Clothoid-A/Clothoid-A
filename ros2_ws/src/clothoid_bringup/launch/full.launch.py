@@ -56,7 +56,7 @@ def generate_launch_description():
     def enabled(name):
         return IfCondition(LaunchConfiguration(name))
 
-    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_avoid', 'use_parking', 'use_finish',
+    switches = ['use_lane', 'use_yolo', 'use_lidar_missions', 'use_avoid', 'use_parking',
                 'use_mission']
     platform_args = ['camera_pitch', 'use_camera', 'use_lidar', 'use_ekf', 'use_joint_states',
                      'use_image_10hz', 'steering_scale', 'max_inner_angle', 'camera_exposure',
@@ -71,6 +71,7 @@ def generate_launch_description():
         SetEnvironmentVariable('OMP_NUM_THREADS', '1'),
         SetEnvironmentVariable('OPENBLAS_NUM_THREADS', '1'),
         *[DeclareLaunchArgument(name, default_value='true') for name in switches],
+        DeclareLaunchArgument('use_finish', default_value='false'),
         DeclareLaunchArgument('debug', default_value='false'),
         DeclareLaunchArgument('viz', default_value='false',
                               description='start decision_viz (clothoid_debug)'),
