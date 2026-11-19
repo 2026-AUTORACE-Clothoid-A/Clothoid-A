@@ -57,8 +57,8 @@ parking:
     plan.turn_lead: 0.03       # m earlier: wheels take ~0.2 s to reach lock (retune on the floor)
     plan.turn_early_deg: 6.0   # 3.0 ended 3-4 deg over-rotated on limo2 (2026-11-09)
     plan.max_search: 3.0       # m without a bay -> stop (ABORT)
-    plan.park_hold_sec: 3.0    # s standing in the bay, then back out the way it came in
-    plan.exit_enabled: true    # false: stay parked, /parking_done right after park_hold_sec
+    plan.park_hold_sec: 3.0    # s standing in the bay, before reporting completion
+    plan.exit_enabled: false    # false: stay parked, /parking_done right after park_hold_sec
     plan.exit_speed: 0.15
     plan.exit_early_deg: 2.0
 

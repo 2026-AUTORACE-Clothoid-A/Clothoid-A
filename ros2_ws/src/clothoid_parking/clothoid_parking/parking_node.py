@@ -373,10 +373,10 @@ class ParkingNode(QuietEventsMixin, Node):
                 text += f' (bay gap {bay.width:.2f} m)'
             self.get_logger().info(text)
         if self.phase == Phase.DONE:
-            # out of the bay: stop publishing so twist_mux hands the car back to lane after its
-            # timeout (0.3 s); one zero first so the reverse does not carry on until then
-            if not self.sent_final_stop:
+            # Keep the parking mux input active when the course ends inside the bay.
+            if not self.sent_final_stop or not self.core.planner.p.exit_enabled:
                 self.send(0.0, 0.0)
+            if not self.sent_final_stop:
                 self.sent_final_stop = True
                 self._sensors_on(False)
             if now - self.t_done_sent >= 1.0:

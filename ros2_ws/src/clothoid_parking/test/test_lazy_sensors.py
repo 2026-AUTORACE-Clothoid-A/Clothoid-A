@@ -210,3 +210,14 @@ def test_completed_exit_publishes_done_only_after_lane_heading(node, monkeypatch
     assert node.core.phase == Phase.DONE
     assert sent[-1] == (0., 0.)
     assert len(done) == 1 and done[0].data
+
+
+@pytest.mark.parametrize('exit_enabled, expected_stops', [(False, 3), (True, 1)])
+def test_done_holds_mux_only_when_staying_parked(node, monkeypatch, exit_enabled, expected_stops):
+    node.core.planner.p.exit_enabled = exit_enabled
+    node.core.planner.phase = Phase.DONE
+    sent = []
+    monkeypatch.setattr(node, 'send', lambda v, steer: sent.append((v, steer)))
+    for _ in range(3):
+        node.on_timer()
+    assert sent == [(0., 0.)] * expected_stops
