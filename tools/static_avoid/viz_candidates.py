@@ -26,7 +26,7 @@ import test_static_avoid as sim  # noqa: E402
 
 W = 0.5
 HALF = sim.LIMO_LEN / 2
-PLANNED_ISLAND = (AvoidParams().island_from_entry_min, AvoidParams().island_from_entry_max)
+ISLAND = (4.4, 6.15)
 LAYOUTS = {'1108 run 1-2 (L2 1.00, L3 1.82)': [(1.00 + HALF, 0.0), (1.82 + HALF, -W)],
            '1108 run 6-9 (L2 3.00, L3 2.50)': [(3.00 + HALF, 0.0), (2.50 + HALF, -W)],
            'random (L2 1.27, L3 2.54)': [(1.27 + HALF, 0.0), (2.54 + HALF, -W)]}
@@ -39,8 +39,8 @@ def road(ax, limos, title):
         ax.axhline(y, color='0.6', lw=1, ls=(0, (6, 6)))
     ax.axvline(0, color='0.3', lw=2)
     tip = 0.25
-    ax.add_patch(Polygon([(sim.ISLAND[0], 0), (sim.ISLAND[0] + tip, W / 2), (sim.ISLAND[1], W / 2),
-                          (sim.ISLAND[1], -W / 2), (sim.ISLAND[0] + tip, -W / 2)],
+    ax.add_patch(Polygon([(ISLAND[0], 0), (ISLAND[0] + tip, W / 2), (ISLAND[1], W / 2),
+                          (ISLAND[1], -W / 2), (ISLAND[0] + tip, -W / 2)],
                          fc='0.85', ec='goldenrod', hatch='//'))
     for x, y in limos:
         ax.add_patch(Rectangle((x - HALF, y - sim.LIMO_WID / 2), sim.LIMO_LEN, sim.LIMO_WID,
@@ -74,12 +74,12 @@ def snapshot(ax, limos, car, title):
     ax.imshow(np.where(cm.cost.T >= LETHAL, 1.0, np.nan), origin='lower', extent=ext, cmap='Reds',
               vmin=0, vmax=1.3, alpha=0.45, aspect='auto')
     one = plan_paths((car[0], car[1], 0.0), 0.0, cm, 1, None, replace(AvoidParams(), sequence=False),
-                     keep_candidates=True, island=PLANNED_ISLAND, forbid_island=True)
+                     keep_candidates=True, island=ISLAND, forbid_island=True)
     for c, cost in one.candidates:
         ax.plot(c[:, 0], c[:, 1], color='tab:orange' if np.isfinite(cost) else '0.8', lw=0.4,
                 alpha=0.4)
     ax.plot(one.path[:, 0], one.path[:, 1], color='tab:orange', lw=2.5, label='one-stage: chosen')
-    seq = plan_paths((car[0], car[1], 0.0), 0.0, cm, 1, None, AvoidParams(), island=PLANNED_ISLAND,
+    seq = plan_paths((car[0], car[1], 0.0), 0.0, cm, 1, None, AvoidParams(), island=ISLAND,
                      forbid_island=True)
     if seq.sequence is not None:
         lanes = '-'.join(map(str, [2] + seq.sequence.lanes))
