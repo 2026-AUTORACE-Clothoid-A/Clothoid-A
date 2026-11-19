@@ -132,6 +132,9 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('cmd_topic', '/cmd_vel_state')
         self.declare_parameter('rate_hz', 20.0)
         self.declare_parameter('input_timeout', 0.5)   # detections / stop line / imu older than this are dropped
+        # sign verdict lines: 'all' (every stage, throttled), 'armed' (confirmations only), 'off'.
+        # 1119: up to tens of IGNORED lines a second; less disk writing on the race car
+        self.declare_parameter('sign_log', 'all')
         self.declare_parameter('refresh_sec', 1.0)
         for name, value in [('detection_confirm_hits', 3), ('detection_window', 5),
                             ('detection_max_age', 0.5), ('detection_confidence', 0.6),
@@ -413,6 +416,9 @@ class MissionNode(QuietEventsMixin, Node):
                 verdict = 'IGNORED: association/overlap'
             else:
                 verdict = 'ARMED' if track.confirmed else 'IGNORED: hits'
+        mode = self.get_parameter('sign_log').value
+        if mode == 'off' or (mode == 'armed' and not verdict.startswith('ARMED')):
+            return
         key, interval = sign_log_key(verdict)
         last = self.sign_logged.get(name)
         if last is not None and now-last[0] < interval and last[1] == key:
@@ -778,8 +784,11 @@ class MissionNode(QuietEventsMixin, Node):
 
         if out.stop:
             self.cmd_pub.publish(Twist())   # zero command
-        if out.speed_limit is not None:
-            self.limit_pub.publish(Float32(data=float(out.speed_limit)))
+        # an explicit release (NaN) every tick: lane_main holds the last limit while nothing arrives
+        # (1119 1050: mission stalled 1.5 s in the light approach, the 0.2 limit expired after 0.5 s and
+        # the car ran over the stop line at 0.8 m/s)
+        self.limit_pub.publish(Float32(data=float(out.speed_limit) if out.speed_limit is not None
+                                       else math.nan))
         if out.direction is not None and out.direction != self.direction_logged:
             sign = next((n for n in FORK_SIGNS if n in self.seen), 'earlier sign')
             self.get_logger().info(f'fork: direction {out.direction} '

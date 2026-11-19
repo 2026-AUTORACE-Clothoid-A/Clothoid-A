@@ -2,6 +2,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import math
 import pytest
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
@@ -20,7 +21,8 @@ def mission():
     node = MissionNode()
     probe = Node('bump_policy_probe')
     limits = []
-    probe.create_subscription(Float32, '/speed_limit', lambda m: limits.append(m.data), 10)
+    probe.create_subscription(Float32, '/speed_limit',
+                             lambda m: math.isnan(m.data) or limits.append(m.data), 10)
     ex = SingleThreadedExecutor()
     ex.add_node(node)
     ex.add_node(probe)

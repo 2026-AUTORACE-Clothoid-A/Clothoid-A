@@ -1,3 +1,4 @@
+import math
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -154,7 +155,7 @@ def test_delayed_source_data_and_duplicates_do_not_refresh_evidence(node):
 def test_parking_handover_requires_fresh_bay_and_reached_separate_entry(node):
     n, clock = node
     limits = []
-    n.limit_pub = SimpleNamespace(publish=lambda msg: limits.append(msg.data))
+    n.limit_pub = SimpleNamespace(publish=lambda msg: math.isnan(msg.data) or limits.append(msg.data))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, 'sign_parking')
     n.on_timer()
@@ -224,7 +225,7 @@ def test_mission_start_brakes_before_front_wheel_entry_without_committing_a_stop
     n.on_info(CameraInfo(width=640, height=480,
                          k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
     limits = []
-    n.limit_pub = SimpleNamespace(publish=lambda msg: limits.append(msg.data))
+    n.limit_pub = SimpleNamespace(publish=lambda msg: math.isnan(msg.data) or limits.append(msg.data))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, sign)
     n.on_timer()
@@ -300,7 +301,7 @@ def test_entry_observation_prepares_before_sign_confirmation_without_sending_spe
     n.on_info(CameraInfo(width=640, height=480,
                          k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
     limits = []
-    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    n.limit_pub = SimpleNamespace(publish=lambda m: math.isnan(m.data) or limits.append(m.data))
     detections(n, clock, 1000., 'sign_pedestrian')  # only one candidate frame
     n.on_timer()
     assert n.mission_entry_active and not n.logic._armed() and not limits
@@ -323,7 +324,7 @@ def test_entry_slowing_does_not_move_or_complete_the_existing_bumper_stop_target
     n.on_info(CameraInfo(width=640, height=480,
                          k=[cam.fx, 0., cam.cx, 0., cam.fy, cam.cy, 0., 0., 1.]))
     limits, states = [], []
-    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    n.limit_pub = SimpleNamespace(publish=lambda m: math.isnan(m.data) or limits.append(m.data))
     n.mission_state_pub = SimpleNamespace(publish=lambda m: states.append(json.loads(m.data)))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, sign)
@@ -351,7 +352,7 @@ def test_start_line_slows_near_entry_instead_of_starting_a_long_crawl(node, sign
     n, clock = node
     n.logic.p.slow_at_stopline = True    # the start-line path (mission.yaml: at once since 1118 PM)
     limits = []
-    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    n.limit_pub = SimpleNamespace(publish=lambda m: math.isnan(m.data) or limits.append(m.data))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, sign)
         n.on_timer()
@@ -449,8 +450,28 @@ def test_configured_slow_sign_slows_at_once(node):
     """mission.yaml (1118 PM): slow_speed on the confirmed slow sign, no start line needed."""
     n, clock = node
     limits = []
-    n.limit_pub = SimpleNamespace(publish=lambda m: limits.append(m.data))
+    n.limit_pub = SimpleNamespace(publish=lambda m: math.isnan(m.data) or limits.append(m.data))
     for now in (1000., 1000.1, 1000.2):
         detections(n, clock, now, 'sign_slow')
         n.on_timer()
     assert limits and limits[-1] == pytest.approx(.2)
+
+
+def test_limit_is_released_explicitly_every_tick(node):
+    """1119 1050: silence meant release, so a mission stall let lane_main jump to base_speed."""
+    n, clock = node
+    sent = []
+    n.limit_pub = SimpleNamespace(publish=lambda m: sent.append(m.data))
+    n.on_timer()
+    assert sent and math.isnan(sent[-1])
+
+
+def test_sign_log_armed_only_drops_the_ignored_lines(node):
+    from rclpy.parameter import Parameter
+    n, clock = node
+    n.set_parameters([Parameter('sign_log', value='armed')])
+    lines = []
+    n.get_logger = lambda: SimpleNamespace(info=lines.append, warn=lines.append)
+    for now in (1000., 1000.1, 1000.2):
+        detections(n, clock, now, 'sign_slow')
+    assert lines and all('ARMED' in line for line in lines if '[SLOW]' in line)
