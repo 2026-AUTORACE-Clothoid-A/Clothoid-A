@@ -802,6 +802,14 @@ def test_a_dead_end_and_a_longer_back_up_at_a_repeated_stuck():
     assert old['x'] < 6.0
 
 
+def test_a_corrected_fork_sign_makes_the_plans_again():
+    # 1118 1615 / 1616 / 1953: the far sign read the wrong way for 0.8~2.5 s. The kept lane sequence
+    # to the wrong lane stayed in use after the correction: the car handed over in lane 1 (sim, 1108
+    # run 1-2, sign right). The plans are now dropped when the sign changes sides
+    out = run([(1.16, 0.0), (1.98, -0.5)], direction=('misread', 1, 20.0, 2.8, 1.0), seed=1)
+    check(out, 0.50, 3)
+
+
 def test_venue_layout_clear_of_the_limo_wheels():
     # 11-18 venue layout (LIMO clusters of 1600 / 1603 / 1606 / 1628) with the lidar seeing the LIMO
     # 0.15 m wide (its wheels 0.22 m, 11-19 bags): safety 0.05 touched LIMOs (2 of 12) and passed

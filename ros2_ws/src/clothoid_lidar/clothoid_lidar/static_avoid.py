@@ -1667,6 +1667,8 @@ class StaticAvoid:
         free_dirs_base: base_link unit directions of beams that returned nothing."""
         if self.state != ACTIVE:
             return
+        if direction in (0, 1) and self.direction in (0, 1) and direction != self.direction:
+            self.on_direction_change(direction)
         self.direction = direction if direction in (0, 1) else self.direction
         at_scan = self.section_pose(pose_world)
         hits = base_to_section(hits_base, at_scan) if len(hits_base) else np.zeros((0, 2))
@@ -1820,6 +1822,17 @@ class StaticAvoid:
         v = p.look_speed if sign > 0 else -p.look_reverse_speed
         delta = p.max_steer * turn * sign            # back: the other way, same heading change
         return v, v * math.tan(delta) / p.wheelbase
+
+    def on_direction_change(self, direction: int) -> None:
+        """The fork sign changed sides (a far misread corrected, 1118 1615 / 1616 / 1953): the plans
+        made for the other lane are dropped. The kept lane sequence is reused while it stays free
+        (_sequence_plan keep) and the end offset pulls by hysteresis, so the car stayed in the old
+        lane 2.6 m before the island (sim, 1 s misread)."""
+        self.sequence = None
+        self.last_end = None
+        self.handed_until = None
+        self.fork_mode, self.fork_arc, self.fork_turn_off = False, None, False
+        self.event = 'fork sign changed to lane %d: plans made again' % {0: 1, 1: 3}[direction]
 
     def reset_recovery(self) -> None:
         self.escape_plan: Optional[Plan] = None
