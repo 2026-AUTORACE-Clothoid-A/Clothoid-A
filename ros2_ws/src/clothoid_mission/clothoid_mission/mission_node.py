@@ -148,6 +148,9 @@ class MissionNode(QuietEventsMixin, Node):
         self.declare_parameter('light_max_offset_height_ratio', 3.5)
         self.declare_parameter('sign_max_offset_height_ratio', 5.0)
         self.declare_parameter('fork_max_offset_height_ratio', 13.0)
+        # fork signs (sign_left / sign_right) smaller than this are not counted: 11-17 / 11-18, 21
+        # avoidance runs, every wrong fork read was a box 14~16 px high (~2.5 m off), none from 17 px
+        self.declare_parameter('fork_min_height', 17.0)
         self.declare_parameter('bump_max_offset_height_ratio', 0.0)
         for kind, area, height in [('bump', 0.0, 28.0), ('slow', 2500.0, 40.0),
                                    ('parking', 0.0, 28.0), ('pedestrian', 0.0, 28.0)]:
@@ -353,8 +356,9 @@ class MissionNode(QuietEventsMixin, Node):
             sign_max_offset_height_ratio=get('sign_max_offset_height_ratio'),
             fork_max_offset_height_ratio=get('fork_max_offset_height_ratio'),
             bump_max_offset_height_ratio=get('bump_max_offset_height_ratio'),
-            min_sizes={'sign_' + kind: (get(kind + '_min_area'), get(kind + '_min_height'))
-                       for kind in ('bump', 'slow', 'parking', 'pedestrian')})
+            min_sizes={**{'sign_' + kind: (get(kind + '_min_area'), get(kind + '_min_height'))
+                          for kind in ('bump', 'slow', 'parking', 'pedestrian')},
+                       **{name: (0.0, get('fork_min_height')) for name in ('sign_left', 'sign_right')}})
         # Apply proximity gates to each box before collecting confirmation hits.
         # A valid box of one class must not admit a second distant box of that class.
         # With scene confirmation, parking/pedestrian tracks are observation
