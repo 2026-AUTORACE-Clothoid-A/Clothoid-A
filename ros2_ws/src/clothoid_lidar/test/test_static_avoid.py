@@ -150,7 +150,21 @@ def run(limos, direction=0, lane_width=0.50, heading0_deg=0.0, inhibit=None, rem
         entry_back = tracker.distance - entry_odo if entry_odo is not None else None
         inh = inhibit or Inhibit()
         flag = direction
-        if isinstance(direction, tuple) and direction[0] == 'view':
+        if isinstance(direction, tuple) and direction[0] == 'misread':
+            # ('misread', value, half_deg, far, secs): within far m and half_deg the sign is first read
+            # the wrong way for secs s, then right (1118: small boxes h 14~16 px, 2.5~3 m off)
+            bearing = math.atan2(-by, ISLAND[0] - bx) - th
+            if out.get('misread_t') is None and (math.hypot(ISLAND[0] - bx, by) <= direction[3]
+                                                 and abs(math.remainder(bearing, 2 * math.pi))
+                                                 <= math.radians(direction[2])):
+                out['misread_t'] = t
+            if out.get('misread_t') is None:
+                flag = None
+            elif t - out['misread_t'] < direction[4]:
+                flag = 1 - direction[1]
+            else:
+                flag = direction[1]
+        elif isinstance(direction, tuple) and direction[0] == 'view':
             if not sign_read:
                 bearing = math.atan2(-by, ISLAND[0] - bx) - th
                 sign_read = (math.hypot(ISLAND[0] - bx, by) <= direction[3]
