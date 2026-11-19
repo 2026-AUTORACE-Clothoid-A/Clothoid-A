@@ -70,7 +70,8 @@ class TriggerTimeline(QWidget):
             top = 20 + row * ROW
             if row % 2:
                 p.fillRect(QRectF(0, top, self.width(), ROW), QColor('#152536'))
-            p.setPen(QColor('#b8cddd')); p.drawText(QRectF(2, top, LEFT - 4, ROW), Qt.AlignVCenter | Qt.AlignRight, label)
+            # the label takes the row's bar colour, so a bar is matched to its trigger at a glance
+            p.setPen(QColor(colour)); p.drawText(QRectF(2, top, LEFT - 4, ROW), Qt.AlignVCenter | Qt.AlignRight, label)
             for half, (source, _) in enumerate(SOURCES):
                 y = top + 1 + half * (ROW - 2) / 2
                 for t0, t1, level in self.lanes[source].get(key, []):
@@ -83,9 +84,10 @@ class TriggerTimeline(QWidget):
         p.drawLine(QPointF(x, 18), QPointF(x, self.height() - 2))
 
 
-# point events drawn on the map: (lane, level 2 start) -> marker colour, name
-MARKERS = (('stop', '#ff4d4d', '정지'), ('parking', '#4dd0c4', '주차'), ('line', '#ff6f91', '정지선 확정'),
-           ('entry', '#ffa25c', '서행 시작선'), ('rc', '#b0b0b0', 'RC 조종'))
+# point events drawn on the map (start of each acting segment), in the same colour as the timeline row
+_COLOUR = {key: colour for key, _, colour in triggers.LANES}
+MARKERS = tuple((key, _COLOUR[key], name) for key, name in
+                (('stop', '정지'), ('parking', '주차'), ('line', '정지선 확정'), ('entry', '시작선'), ('rc', 'RC 조종')))
 
 
 class MiniMap(QWidget):

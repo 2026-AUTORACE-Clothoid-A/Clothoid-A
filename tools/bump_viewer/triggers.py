@@ -24,7 +24,7 @@ LANES = (
     ('stop', '정지', '#ff4d4d'),
     ('limit', '미션 감속', '#6fd3ff'),
     ('fork', '갈림길', '#9be37b'),
-    ('cone', '라바콘', '#ff9f43'),
+    ('cone', '라바콘', '#c8a27a'),
     ('avoid', '장애물', '#7aa7ff'),
     ('parking', '주차', '#4dd0c4'),
     ('rc', 'RC 조종', '#b0b0b0'),
