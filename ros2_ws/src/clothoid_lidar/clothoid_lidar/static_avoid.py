@@ -72,8 +72,11 @@ class AvoidParams:
     # painted island in lane 2. Measured from the white entry line when the camera saw it
     # (rule book p.4 drawing at scale), else guessed from the activation point (~1.5 m before the
     # first LIMO; the 11-05 bags put the true island at 3.6~5.5 m from activation)
-    island_from_entry_min: float = 4.40
-    island_from_entry_max: float = 6.15
+    # 4.40 / 6.15 before 11-19: the venue island measured in the 11-18 bags (camera, its yellow
+    # outline's pointed tip from the entry line) at 4.28~4.32 m, the lidar sign stand ~4.37~4.48 m;
+    # 4.40 left the 0.05 m island_margin at about 0 (1620 touched the tip, 1953 1.8 cm off)
+    island_from_entry_min: float = 4.32
+    island_from_entry_max: float = 6.07
     entry_max_back: float = 3.0       # m, an entry-line crossing this recent anchors the section
     # ... unless the car turned more than this since: that line was before the corner (the crosswalk;
     # the simulator's --corner runs anchored on it, 90 deg off the lanes, and stuck)
