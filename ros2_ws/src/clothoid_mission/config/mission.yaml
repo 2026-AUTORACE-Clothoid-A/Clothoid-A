@@ -14,6 +14,9 @@ mission:
     light_max_offset_height_ratio: 3.5
     sign_max_offset_height_ratio: 5.0
     fork_max_offset_height_ratio: 13.0
+    # fork signs below this box height are not counted: every wrong left/right read in 21 avoid runs
+    # (11-17 / 11-18) was 14~16 px (~2.5 m off); none from 17 px. The direction comes ~0.5 m later
+    fork_min_height: 17.0
     # The valid roadside bump warning is far off centre in this camera.
     bump_max_offset_height_ratio: 0.0 # <=0 disables only the bump lateral gate
     bump_min_area: 0.0
