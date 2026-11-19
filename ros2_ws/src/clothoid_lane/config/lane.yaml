@@ -12,6 +12,9 @@ lane_main:
     # line crossing outside the A/B fork. The rule book recommends 0.3~0.4 m/s: check it before the
     # competition. With another speed, scale steer_gain inversely (see below).
     base_speed: 0.8
+    # /speed_limit is held this long without a message; mission releases it explicitly (NaN). 0.5 s let
+    # a 1.5 s mission stall (1119 1050) jump to base_speed in a stop-line approach
+    speed_limit_timeout: 3.0
     # mission 6 slow guide lines (zigzag, track2026 only): rules say pass slowly holding the heading
     zigzag_speed: 0.2          # m/s while the zigzag is seen; 0 = no change
     zigzag_hold_sec: 0.5       # bags: the zone state drops for 0.2 s at most inside the zone

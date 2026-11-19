@@ -7,6 +7,7 @@ mission:
     # once per 20 Hz tick, the line stop only the odom distance. Old bags: back to /imu, /odom
     imu_topic: /imu_25hz
     odom_topic: /odom_25hz
+    sign_log: armed             # all | armed | off: IGNORED lines wrote tens of lines a second (1119)
     input_timeout: 0.5          # detections / stop line / imu older than this count as "not seen"
     refresh_sec: 1.0            # direction / parking / steering_lock flag re-sent this often
     # Per-class proximity gates run before object tracking and frame confirmation.

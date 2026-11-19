@@ -141,7 +141,8 @@ class DecisionViz(QuietEventsMixin, Node):
         self.cone_active = msg.data
 
     def on_limit(self, msg):
-        self.limit_time = self.now()
+        if math.isfinite(msg.data) and msg.data > 0:       # NaN / <= 0: mission's explicit release
+            self.limit_time = self.now()
 
     def on_imu(self, msg):
         t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
