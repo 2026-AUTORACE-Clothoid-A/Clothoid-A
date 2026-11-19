@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBox,
 
 from tools.bump_viewer import backend, render
 from tools.bump_viewer.log_panel import LogPanel
+from tools.bump_viewer.trigger_panel import MapTab, TriggerTimeline
 from tools.bump_viewer.color_settings import PRESETS, load_settings, preset_settings, settings_yaml, validate_detector
 
 BUMP_NAMES = {'idle': '대기', 'approaching': '접근·서행', 'on_bump': '턱 통과 중', 'cooldown': '통과 후 대기'}
@@ -191,12 +192,16 @@ class Viewer(QMainWindow):
         self.hsv_tab = self.make_hsv_tab(); side.addTab(self.hsv_tab, '색상 / 보정')
         self.log_tab = LogPanel(); side.addTab(self.log_tab, '미션 / 로그')
         self.log_tab.seek.connect(self.seek_time)
+        self.map_tab = MapTab(); side.addTab(self.map_tab, '경로 / 트리거')
+        self.map_tab.seek.connect(self.seek_time)
         side.setCurrentWidget(self.hsv_tab)
         self.details = QTextBrowser(); side.addTab(self.details, '설정 / 검출 상세')
         side.setMinimumWidth(330); splitter.addWidget(side); splitter.setSizes([1150, 380])
         layout.addWidget(splitter, 1)
         self.pixel = QLabel('영상 위에 마우스를 올리면 RGB · HSV · Lab · 색차를 볼 수 있어요.')
         self.pixel.setStyleSheet('color:#a8bdcf'); layout.addWidget(self.pixel)
+        self.trigger_line = TriggerTimeline(); self.trigger_line.selected.connect(self.seek_time)
+        layout.addWidget(self.trigger_line)
         self.timeline = Timeline(); self.timeline.selected.connect(self.seek_time); layout.addWidget(self.timeline)
         controls = QHBoxLayout(); self.time_label = QLabel('0.00 s'); self.time_label.setMinimumWidth(150)
         controls.addWidget(self.time_label); self.slider = QSlider(Qt.Horizontal)
@@ -207,7 +212,10 @@ class Viewer(QMainWindow):
                               ('방지턱 표지판', self.seek_bump), ('최대 기울기', self.seek_pitch)]:
             button = QPushButton(label); button.clicked.connect(action); row.addWidget(button)
         self.speed = QComboBox(); self.speed.addItems(['0.25×', '0.5×', '1×', '2×']); self.speed.setCurrentIndex(2)
-        row.addWidget(self.speed); row.addStretch()
+        row.addWidget(self.speed)
+        self.trigger_toggle = QCheckBox('트리거 줄'); self.trigger_toggle.setChecked(True)
+        self.trigger_toggle.toggled.connect(self.trigger_line.setVisible); row.addWidget(self.trigger_toggle)
+        row.addStretch()
         row.addWidget(QLabel('흰색 마스크')); row.addWidget(self.white_mode)
         self.color_source = QComboBox(); self.color_source.addItems(['차선 보정 보기', '미션 보정 보기'])
         self.color_source.currentIndexChanged.connect(self.refresh_hsv_preview); row.addWidget(self.color_source)
@@ -504,6 +512,8 @@ class Viewer(QMainWindow):
         self.source.setText(f'{Path(data["path"]).name} | {data["camera"]} | 현재 소스 {data["digest"]} | '
                             f'{len(self.times):,} 프레임'+(' | ⚠ '+warnings if warnings else ''))
         self.timeline.data = data
+        self.trigger_line.set_data(data)
+        self.map_tab.set_data(data, self.trigger_line.lanes)
         if self.requested_time is None:
             self.seek_bump()
         else:
@@ -629,6 +639,8 @@ class Viewer(QMainWindow):
             '흰색 마스크는 상시 미리보기입니다. 범프의 높이나 모양을 영상으로 확정하는 기능은 현재 코드에 없습니다.<br><br>'
             '<b>YOLO 기록 → 현재 필터</b><table>'+rows+'</table><br><b>YAML / 기본값</b><table>'+settings+'</table>')
         self.timeline.at = f['t']; self.timeline.update()
+        self.trigger_line.at = f['t']; self.trigger_line.update()
+        self.map_tab.update_time(f['t'])
 
     def open_bag(self):
         path = QFileDialog.getExistingDirectory(self, 'ROS 백 폴더', str(ROOT/'bag'))

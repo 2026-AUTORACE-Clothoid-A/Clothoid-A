@@ -297,6 +297,10 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         lane.detector.detect = detect
         last_state = None; last_lane = None; last_confirmed = None; last_recorded = None
         last_replay_state = None
+        # trigger timeline / minimap: replayed signals that /mission/state does not carry, and the path
+        from .triggers import Path2D
+        replay_signals = []; last_signal = {}
+        path2d = Path2D()
         next_tick = start
         period = round(1e9/mission.get_parameter('rate_hz').value)
         def tick(stamp):
@@ -310,6 +314,10 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
                 replay_logs.append(entry((stamp-start)*1e-9, '현재 재계산', 'mission/state',
                     'STATE', json.dumps(evidence, ensure_ascii=False), json.dumps(state, ensure_ascii=False)))
                 last_replay_state = evidence
+            for topic, current in (('/parking_flag', bool(mission.logic.parking_flag)),
+                                   ('/direction_flag', mission.logic.direction)):
+                if last_signal.get(topic, '∅') != current:
+                    replay_signals.append(((stamp-start)*1e-9, topic, current)); last_signal[topic] = current
             key = (state.get('bump_state'), state.get('line_phase'), state.get('steering_lock'),
                    state.get('entry_phase'))
             if key != last_state:
@@ -334,10 +342,12 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
                 mission.on_info(message)
             if name == mi:
                 mission.on_imu(message)
+                path2d.imu(stamp*1e-9, message.angular_velocity.z)
             if name == li:
                 lane.on_imu(message)
             if name == mo:
                 mission.on_odom(message)
+                path2d.odom(stamp*1e-9, message.twist.twist.linear.x)
             if name == lo:
                 lane.on_odom(message)
             if name == detections_topic:
@@ -402,7 +412,8 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
                 detections=dets, detection_age=age, lane_found=bool(found), lane_jpeg=lane_jpeg,
                 command=None if command is None else (command.linear.x, command.angular.z),
                 steering_deg=float(np.degrees(lane.last_steer)), bump_gap=lane.bump_gap.active,
-                raw_pitch=mission.latest_pitch if mission._fresh(mission.latest_pitch_time) else None))
+                raw_pitch=mission.latest_pitch if mission._fresh(mission.latest_pitch_time) else None,
+                pose=path2d.pose()))
             images += 1
             if images % 10 == 0:
                 progress(min(99, round(images/max(1, counts[image_topic])*100)))
@@ -435,6 +446,7 @@ def analyse(path, camera='limo2', progress=lambda value: None, hsv_overrides=Non
         from .logs import load
         result.update(load(files, start, path))
         result['replay_logs'] = replay_logs
+        result['replay_signals'] = replay_signals
         return result
     finally:
         for node in nodes:
